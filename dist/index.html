@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Masterstone CRM — Mac App</title>
+  <title>Masterstone CRM — Loading</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -13,9 +13,9 @@
       --border-soft: #232832;
       --accent-cyan: #4fd1c5;
       --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
       --text-bright: #f0f3f8;
       --text-dim: #8a93a3;
-      --success: #10b981;
     }
 
     html, body {
@@ -27,7 +27,6 @@
       font-size: 14px;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-      overflow-y: auto;
     }
 
     .wrap {
@@ -44,137 +43,256 @@
       letter-spacing: 0.18em;
       color: var(--text-dim);
       text-transform: uppercase;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     h1 {
-      font-size: 38px;
+      font-size: 32px;
       font-weight: 600;
-      margin-bottom: 6px;
+      margin-bottom: 28px;
       background: linear-gradient(135deg, var(--accent-cyan) 0%, #5eead4 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
 
-    .subtitle {
-      font-size: 16px;
+    /* Spinner */
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(79, 209, 197, 0.18);
+      border-top-color: var(--accent-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 18px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status {
+      font-size: 14px;
       color: var(--text-dim);
-      margin-bottom: 36px;
+      margin-bottom: 8px;
+      min-height: 22px;
     }
 
-    .card {
+    /* Error card */
+    .error-card {
+      display: none;
       background: var(--bg-card);
       border: 1px solid var(--border-soft);
-      border-radius: 12px;
-      padding: 28px 32px;
-      max-width: 620px;
+      border-left: 3px solid var(--accent-red);
+      border-radius: 8px;
+      padding: 20px 24px;
+      max-width: 640px;
       width: 100%;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+      margin-top: 20px;
     }
-
-    .status-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--border-soft);
+    .error-card.visible { display: block; }
+    .error-card h3 {
+      font-size: 15px;
+      color: var(--accent-red);
+      margin-bottom: 10px;
     }
-    .status-row:last-child { border-bottom: none; }
-
-    .check {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--success);
-      font-size: 13px;
-      font-weight: 700;
-      flex-shrink: 0;
-    }
-
-    .status-row .label {
-      flex: 1;
-      color: var(--text-bright);
-    }
-
-    .meta-block {
-      margin-top: 24px;
-      padding-top: 20px;
-      border-top: 1px dashed var(--border-soft);
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 6px 16px;
-      font-size: 13px;
-    }
-
-    .meta-block .key { color: var(--text-dim); }
-    .meta-block .val { color: var(--text-bright); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-
-    .next-step {
-      margin-top: 32px;
-      padding: 16px 20px;
-      background: rgba(245, 158, 11, 0.08);
-      border-left: 3px solid var(--accent-amber);
+    .error-card p { color: var(--text-bright); margin-bottom: 12px; font-size: 13px; }
+    .error-card .path {
+      display: block;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 12.5px;
+      color: var(--accent-cyan);
+      background: rgba(79, 209, 197, 0.08);
+      padding: 10px 12px;
       border-radius: 4px;
-      color: var(--text-bright);
-      font-size: 13.5px;
+      word-break: break-all;
+      margin-bottom: 12px;
     }
-    .next-step strong { color: var(--accent-amber); }
+    .error-card .hint {
+      color: var(--text-dim);
+      font-size: 12.5px;
+      margin-bottom: 0;
+    }
+    .error-card details {
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .error-card details summary { cursor: pointer; }
+    .error-card details pre {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11.5px;
+      white-space: pre-wrap;
+      margin-top: 8px;
+      padding: 10px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 4px;
+    }
 
-    .footer {
-      margin-top: 28px;
+    /* Counts card (success preview before nav) */
+    .counts {
+      display: none;
+      margin-top: 14px;
       font-size: 12px;
       color: var(--text-dim);
       text-align: center;
     }
+    .counts.visible { display: block; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="logo">Masterstone LLP</div>
-    <h1>Mac App — Hello World</h1>
-    <p class="subtitle">Session 1 of the migration is live.</p>
+    <h1>Masterstone CRM</h1>
 
-    <div class="card">
-      <div class="status-row">
-        <span class="check">✓</span>
-        <span class="label">GitHub repository created</span>
-      </div>
-      <div class="status-row">
-        <span class="check">✓</span>
-        <span class="label">GitHub Actions build pipeline active</span>
-      </div>
-      <div class="status-row">
-        <span class="check">✓</span>
-        <span class="label">Tauri shell compiled — universal macOS binary</span>
-      </div>
-      <div class="status-row">
-        <span class="check">✓</span>
-        <span class="label">Native window rendered via WebKit</span>
-      </div>
+    <div id="spinner" class="spinner"></div>
+    <div id="status" class="status">Connecting to database…</div>
+    <div id="counts" class="counts"></div>
 
-      <div class="meta-block">
-        <span class="key">Phase</span>      <span class="val">Session 1 — scaffold + pipeline</span>
-        <span class="key">Stack</span>      <span class="val">Tauri 2 + Rust + WebKit</span>
-        <span class="key">Build</span>      <span class="val">universal-apple-darwin</span>
-        <span class="key">Today</span>      <span class="val" id="today">—</span>
-      </div>
-
-      <div class="next-step">
-        <strong>Next:</strong> Session 2 — design the SQLite schema and wire up the storage adapter that replaces <code>localStorage</code>. The existing CRM HTML stays untouched on your usual workflow throughout.
-      </div>
+    <div id="errorCard" class="error-card">
+      <h3 id="errorTitle">Setup needed</h3>
+      <p id="errorMessage">Database file not found.</p>
+      <code class="path" id="errorPath"></code>
+      <p class="hint" id="errorHint"></p>
+      <details id="errorDetailsWrap" style="display:none;">
+        <summary>Technical details</summary>
+        <pre id="errorDetail"></pre>
+      </details>
     </div>
-
-    <div class="footer">If you can read this, the build pipeline is verified end-to-end.</div>
   </div>
 
   <script>
-    document.getElementById('today').textContent =
-      new Date().toLocaleDateString('en-IN', { year:'numeric', month:'short', day:'numeric' });
+    // -------------------------------------------------------------------------
+    // Boot shim — Session 3 of the migration.
+    //
+    // Sequence:
+    //   1. Detect Tauri runtime. Bail loudly if missing (means someone opened
+    //      this file in a regular browser).
+    //   2. Invoke Rust command `storage_load_all`. Get back a dict of
+    //      localStorage-shaped data + record counts + status.
+    //   3. Populate localStorage with the returned values.
+    //   4. Set a flag that crm.html can read to know it's running in Mac app
+    //      mode (used to show the "read-only preview" banner).
+    //   5. Navigate to crm.html. The CRM's normal init runs against fully-
+    //      populated localStorage.
+    //
+    // Errors are shown inline with a clear message and the expected DB path.
+    // -------------------------------------------------------------------------
+
+    (async function boot() {
+      const $status   = document.getElementById('status');
+      const $spinner  = document.getElementById('spinner');
+      const $counts   = document.getElementById('counts');
+      const $errCard  = document.getElementById('errorCard');
+      const $errTitle = document.getElementById('errorTitle');
+      const $errMsg   = document.getElementById('errorMessage');
+      const $errPath  = document.getElementById('errorPath');
+      const $errHint  = document.getElementById('errorHint');
+      const $errDetW  = document.getElementById('errorDetailsWrap');
+      const $errDet   = document.getElementById('errorDetail');
+
+      function fail(title, message, path, hint, technical) {
+        $spinner.style.display = 'none';
+        $status.textContent = '';
+        $errTitle.textContent = title;
+        $errMsg.textContent = message;
+        if (path) { $errPath.textContent = path; $errPath.style.display = 'block'; }
+        else      { $errPath.style.display = 'none'; }
+        if (hint) { $errHint.textContent = hint; }
+        if (technical) {
+          $errDetW.style.display = 'block';
+          $errDet.textContent = technical;
+        }
+        $errCard.classList.add('visible');
+      }
+
+      // 1. Detect Tauri.
+      const tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+      if (!tauri || !tauri.invoke) {
+        fail(
+          'Not running in Tauri',
+          'This page expects to be loaded inside the Masterstone Mac app, not a regular browser.',
+          null,
+          'If you double-clicked this file in Finder, close it. Open the Masterstone app from /Applications instead.'
+        );
+        return;
+      }
+
+      // 2. Invoke storage_load_all.
+      $status.textContent = 'Loading data from database…';
+      let result;
+      try {
+        result = await tauri.invoke('storage_load_all');
+      } catch (e) {
+        fail(
+          'Could not communicate with Rust backend',
+          'The Tauri command storage_load_all threw an unexpected error.',
+          null,
+          'This is unusual — please report. Technical details below.',
+          String(e)
+        );
+        return;
+      }
+
+      // Result shape: { ok, error_kind, error_detail, db_path, record_counts, data }
+      if (!result || !result.ok) {
+        const kind = result && result.error_kind ? result.error_kind : 'UNKNOWN';
+        const detail = result && result.error_detail ? result.error_detail : '';
+        const path = result && result.db_path ? result.db_path : null;
+
+        if (kind === 'DB_NOT_FOUND') {
+          fail(
+            'Database file missing',
+            'The Mac app needs your masterstone.db file before it can show your data.',
+            path,
+            'Place masterstone.db at the path above (Finder → Go → Go to Folder, paste the path), then quit and reopen the app.',
+            detail
+          );
+        } else {
+          fail(
+            'Database read error (' + kind + ')',
+            detail || 'Unknown SQLite error.',
+            path,
+            'Check that the file at the path above is the masterstone.db produced by Session 2.',
+            detail
+          );
+        }
+        return;
+      }
+
+      // 3. Populate localStorage.
+      $status.textContent = 'Populating local cache…';
+      try {
+        for (const [k, v] of Object.entries(result.data)) {
+          window.localStorage.setItem(k, v);
+        }
+      } catch (e) {
+        fail(
+          'localStorage error',
+          'Failed to write loaded data into localStorage.',
+          null,
+          'This usually indicates the WebView is in private/restricted mode.',
+          String(e)
+        );
+        return;
+      }
+
+      // 4. Flag Mac-app mode for the CRM to detect (banner + read-only mode).
+      window.localStorage.setItem('__ms_mac_app_mode__', '1');
+      window.localStorage.setItem('__ms_db_path__', result.db_path || '');
+
+      // Show success preview of counts (briefly, then nav).
+      const counts = result.record_counts || {};
+      const order = ['clients','resellers','contracts','invoices','prospects','oems','products','commission_accruals','commission_payouts','proposals','purchase_orders','attachments','company_profile'];
+      const summary = order
+        .filter(k => counts[k] !== undefined)
+        .map(k => `${counts[k]} ${k.replace(/_/g, ' ')}`)
+        .join(' · ');
+      $counts.textContent = summary;
+      $counts.classList.add('visible');
+      $status.textContent = 'Loaded successfully. Opening CRM…';
+
+      // 5. Navigate to the actual CRM. Brief delay so users see the success state.
+      setTimeout(() => {
+        window.location.href = 'crm.html';
+      }, 400);
+    })();
   </script>
 </body>
 </html>
