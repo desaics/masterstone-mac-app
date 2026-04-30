@@ -3501,6 +3501,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     user-select: none;
     -webkit-user-select: none;
 }
+.mac-app-banner.dismissed { display: none; }
 .mac-app-banner strong { font-weight: 600; }
 .mac-app-banner button {
     background: rgba(26, 18, 6, 0.18);
@@ -3515,7 +3516,21 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     transition: background 0.15s ease;
 }
 .mac-app-banner button:hover { background: rgba(26, 18, 6, 0.30); }
-body.mac-app-mode { padding-top: 30px !important; }
+.mac-app-banner .banner-close {
+    margin-left: 8px;
+    padding: 0 8px;
+    font-size: 14px;
+    line-height: 1;
+    font-weight: 600;
+}
+/* Bug fix #43 (Session 3 hotfix) — DO NOT add padding-top to body. Body has
+   `display: flex` with a position:fixed nav child plus `.main-content` using
+   `margin-left + width: calc(100% - var(--sidebar-w))`. Adding body.padding-top
+   breaks horizontal width calculations in WebKit on pages with nested grid
+   layouts (Client Master, forms). Push only the sidebar and main-content top
+   padding — leave the body's flex container untouched. */
+body.mac-app-mode nav { top: 30px !important; }
+body.mac-app-mode .main-content { padding-top: 56px !important; }
 .ms-readonly-blocked-toast {
     position: fixed;
     bottom: 24px;
@@ -3560,11 +3575,13 @@ body.mac-app-mode { padding-top: 30px !important; }
         // Banner injection
         var banner = document.createElement('div');
         banner.className = 'mac-app-banner';
+        banner.id = 'macAppBanner';
         banner.innerHTML =
             '<strong>Mac app preview · Session 3</strong> &nbsp;·&nbsp; ' +
             'Read-only mode — edits won\u2019t save back to your data. ' +
             'Use the HTML version for any changes. ' +
-            '<button onclick="window.__msShowDbInfo()">DB info</button>';
+            '<button onclick="window.__msShowDbInfo()">DB info</button>' +
+            '<button class="banner-close" onclick="window.__msDismissBanner()" title="Dismiss banner (until next launch)">×</button>';
         document.body.appendChild(banner);
     });
 
@@ -3639,6 +3656,16 @@ body.mac-app-mode { padding-top: 30px !important; }
             'Read paths: SQLite (this preview)\n' +
             'Write paths: HTML version (until Session 4 wires them back)'
         );
+    };
+
+    // Dismiss the banner — also removes the mac-app-mode class so the targeted
+    // top-padding rules drop, letting the sidebar and main-content spring back
+    // to their natural top positions. Read-only shim (setItem interception) is
+    // installed via JS above and is unaffected by the class change.
+    window.__msDismissBanner = function () {
+        var b = document.getElementById('macAppBanner');
+        if (b) b.classList.add('dismissed');
+        document.body.classList.remove('mac-app-mode');
     };
 })();
 </script>
