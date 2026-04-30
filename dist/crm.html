@@ -3553,6 +3553,19 @@ body.tauri-runtime.mac-app-mode .main-content {
     padding-top: 30px !important;
 }
 
+/* Bug fix #46 (Session 3 hotfix v4) — force-hide the vestigial #loadingOverlay
+   element. Original CSS uses `display: none` declared inline with flex
+   properties — WebKit appears to mis-parse this and render the overlay as a
+   normal block at top-left of body, eating ~150px of vertical space. The JS
+   shim removes it from DOM entirely; this rule is belt-and-suspenders in case
+   the script runs slightly after first paint. */
+body.tauri-runtime #loadingOverlay {
+    display: none !important;
+    visibility: hidden !important;
+    position: fixed !important;
+    pointer-events: none !important;
+}
+
 /* Bug fix #44 (Session 3 hotfix v2) — `body { display: flex }` interacts badly
    with WebKit's handling of position:fixed children. The CRM's nav is fixed
    AND .main-content uses margin-left + width: calc(100% - sidebar-w). On
@@ -3621,11 +3634,27 @@ body.tauri-runtime .main-content {
     // layout-fix CSS (Bug fix #44). Persists across banner dismissal.
     if (document.body) document.body.classList.add('tauri-runtime');
 
+    // Bug fix #46 (Session 3 hotfix v4) — Tauri's WebKit ignores the original
+    // #loadingOverlay's `display: none; position: fixed; inset: 0` rules when
+    // they're declared on the same selector with flex properties. Result: the
+    // overlay (which is never shown by any CRM JS — confirmed via grep, zero
+    // references) renders as a normal block at the top-left of body, taking
+    // ~150px of vertical space. That's what was pushing all page headers down
+    // and creating the persistent gap. Solution: rip it out of the DOM. Nothing
+    // ever needs it. Done both immediately AND on DOMContentLoaded since the
+    // shim might run before the element exists.
+    function removeLoadingOverlay() {
+        var ovl = document.getElementById('loadingOverlay');
+        if (ovl && ovl.parentNode) ovl.parentNode.removeChild(ovl);
+    }
+    removeLoadingOverlay();
+
     document.body && document.body.classList.add('mac-app-mode');
     // If body isn't ready yet (script runs before close), set on DOM ready too.
     document.addEventListener('DOMContentLoaded', function () {
         document.body.classList.add('tauri-runtime');
         document.body.classList.add('mac-app-mode');
+        removeLoadingOverlay();
 
         // Banner injection
         var banner = document.createElement('div');
