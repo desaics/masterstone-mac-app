@@ -3531,6 +3531,35 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
    padding — leave the body's flex container untouched. */
 body.mac-app-mode nav { top: 30px !important; }
 body.mac-app-mode .main-content { padding-top: 56px !important; }
+
+/* Bug fix #44 (Session 3 hotfix v2) — `body { display: flex }` interacts badly
+   with WebKit's handling of position:fixed children. The CRM's nav is fixed
+   AND .main-content uses margin-left + width: calc(100% - sidebar-w). On
+   Chromium this works because position:fixed children are removed cleanly
+   from the flex layout; on WebKit (Tauri) they're double-counted, leaving a
+   ~248px gap between nav and content.
+
+   Fix: override body to display: block when running inside Tauri. Block
+   layout makes the fixed-sidebar + margin-offset-main pattern fully
+   deterministic. tauri-runtime class is added by the boot script and is
+   NEVER removed (unlike mac-app-mode which toggles with banner dismissal),
+   so this fix persists even after the user dismisses the banner. */
+body.tauri-runtime {
+    display: block !important;
+}
+body.tauri-runtime nav {
+    top: 0 !important;
+    left: 0 !important;
+}
+body.tauri-runtime.mac-app-mode nav {
+    /* Banner clearance still applies when banner is visible. */
+    top: 30px !important;
+}
+body.tauri-runtime .main-content {
+    margin-left: var(--sidebar-w) !important;
+    width: calc(100% - var(--sidebar-w)) !important;
+    box-sizing: border-box !important;
+}
 .ms-readonly-blocked-toast {
     position: fixed;
     bottom: 24px;
@@ -3567,9 +3596,14 @@ body.mac-app-mode .main-content { padding-top: 56px !important; }
 (function macAppShim() {
     if (window.localStorage.getItem('__ms_mac_app_mode__') !== '1') return;
 
+    // tauri-runtime — applied immediately, never removed. Used by the WebKit
+    // layout-fix CSS (Bug fix #44). Persists across banner dismissal.
+    if (document.body) document.body.classList.add('tauri-runtime');
+
     document.body && document.body.classList.add('mac-app-mode');
     // If body isn't ready yet (script runs before close), set on DOM ready too.
     document.addEventListener('DOMContentLoaded', function () {
+        document.body.classList.add('tauri-runtime');
         document.body.classList.add('mac-app-mode');
 
         // Banner injection
