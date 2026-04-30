@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for the main window. Session 1 scope: just open the window. More permissions added when SQLite + filesystem access land in later sessions.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
