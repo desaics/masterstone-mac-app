@@ -3530,7 +3530,16 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
    layouts (Client Master, forms). Push only the sidebar and main-content top
    padding — leave the body's flex container untouched. */
 body.mac-app-mode nav { top: 30px !important; }
-body.mac-app-mode .main-content { padding-top: 56px !important; }
+/* Bug fix #45 (Session 3 hotfix v3) — tighten the gap above page headers.
+   v1/v2 set padding-top: 56px which combined with .dashboard-sticky-top's
+   negative margin-top: -28px and its own padding-top: 18px to produce a
+   visible 100+px gap above the title on all pages. The CRM's stacking math
+   was designed for the original 28px main-content padding, so we override
+   to a slim 12px (just enough breathing room above sticky-top) and zero out
+   the sticky-top's negative pull-up since the banner already occupies the
+   30px above. Net visible gap: ~12px between banner-bottom and title-top. */
+body.mac-app-mode .main-content { padding-top: 12px !important; }
+body.mac-app-mode .dashboard-sticky-top { margin-top: 0 !important; }
 
 /* Bug fix #44 (Session 3 hotfix v2) — `body { display: flex }` interacts badly
    with WebKit's handling of position:fixed children. The CRM's nav is fixed
