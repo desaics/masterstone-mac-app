@@ -3616,6 +3616,78 @@ body.tauri-runtime .main-content {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Bug fix #47 (Session 4) — live-mode banner uses indigo instead of amber.
+   Visually distinguishes live mode from Session 3's read-only state. */
+.mac-app-banner.mac-app-banner-live {
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.92) 0%, rgba(99, 102, 241, 0.78) 100%);
+    color: #f0f0ff;
+}
+.mac-app-banner.mac-app-banner-live button {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #f0f0ff;
+}
+.mac-app-banner.mac-app-banner-live button:hover { background: rgba(255, 255, 255, 0.30); }
+
+/* Sync indicator inside the banner. Pill with a colored dot + label. */
+.sync-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    margin-left: 12px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    font-size: 11.5px;
+    font-weight: 500;
+    transition: background 0.2s ease;
+}
+.sync-indicator .sync-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #cbd5e1;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+.sync-indicator.sync-idle .sync-dot { background: #94a3b8; }
+.sync-indicator.sync-saving .sync-dot {
+    background: #fbbf24;
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.25);
+    animation: msSyncPulse 1.2s ease-in-out infinite;
+}
+.sync-indicator.sync-saved .sync-dot {
+    background: #34d399;
+    box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.25);
+}
+.sync-indicator.sync-error .sync-dot {
+    background: #f87171;
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.30);
+}
+@keyframes msSyncPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+/* Floating sync widget — shown in bottom-right after banner is dismissed,
+   so the user keeps a small visual confirmation that writes are happening. */
+.ms-floating-sync {
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    z-index: 100000;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 4px 10px 4px 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    color: #f0f3f8;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.ms-floating-sync .sync-indicator { margin-left: 0; background: transparent; border: none; }
 </style>
 </head>
 <body>
@@ -3631,18 +3703,15 @@ body.tauri-runtime .main-content {
     if (window.localStorage.getItem('__ms_mac_app_mode__') !== '1') return;
 
     // tauri-runtime — applied immediately, never removed. Used by the WebKit
-    // layout-fix CSS (Bug fix #44). Persists across banner dismissal.
+    // layout-fix CSS (Bug fix #44). Persists across banner-state changes.
     if (document.body) document.body.classList.add('tauri-runtime');
 
-    // Bug fix #46 (Session 3 hotfix v4) — Tauri's WebKit ignores the original
-    // #loadingOverlay's `display: none; position: fixed; inset: 0` rules when
-    // they're declared on the same selector with flex properties. Result: the
-    // overlay (which is never shown by any CRM JS — confirmed via grep, zero
-    // references) renders as a normal block at the top-left of body, taking
-    // ~150px of vertical space. That's what was pushing all page headers down
-    // and creating the persistent gap. Solution: rip it out of the DOM. Nothing
-    // ever needs it. Done both immediately AND on DOMContentLoaded since the
-    // shim might run before the element exists.
+    // Bug fix #46 (Session 3 hotfix v5) — Original injection (Session 3 v0.2.0)
+    // accidentally removed the opening `<div id="loadingOverlay">` tag, leaving
+    // its three child divs (spinner, "Processing...", "Please wait...") as
+    // loose siblings of <body> rendering at the top of the page. Hotfix v5
+    // restored the opening tag in the HTML; this JS removal stays as
+    // belt-and-suspenders against any future regression.
     function removeLoadingOverlay() {
         var ovl = document.getElementById('loadingOverlay');
         if (ovl && ovl.parentNode) ovl.parentNode.removeChild(ovl);
@@ -3650,108 +3719,275 @@ body.tauri-runtime .main-content {
     removeLoadingOverlay();
 
     document.body && document.body.classList.add('mac-app-mode');
-    // If body isn't ready yet (script runs before close), set on DOM ready too.
     document.addEventListener('DOMContentLoaded', function () {
         document.body.classList.add('tauri-runtime');
         document.body.classList.add('mac-app-mode');
         removeLoadingOverlay();
 
-        // Banner injection
+        // Banner — now reads "Live mode" instead of "Read-only".
         var banner = document.createElement('div');
-        banner.className = 'mac-app-banner';
+        banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app preview · Session 3</strong> &nbsp;·&nbsp; ' +
-            'Read-only mode — edits won\u2019t save back to your data. ' +
-            'Use the HTML version for any changes. ' +
+            '<strong>Mac app · Session 4 · Live mode</strong> &nbsp;·&nbsp; ' +
+            'Edits save to your local database. ' +
+            '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
+            '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
+            '</span>' +
             '<button onclick="window.__msShowDbInfo()">DB info</button>' +
-            '<button class="banner-close" onclick="window.__msDismissBanner()" title="Dismiss banner (until next launch)">×</button>';
+            '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
         document.body.appendChild(banner);
     });
 
-    // Show a brief toast when a write action is attempted.
-    var toastTimer = null;
-    function showReadOnlyToast(label) {
-        var existing = document.querySelector('.ms-readonly-blocked-toast');
-        if (existing) existing.remove();
-        if (toastTimer) clearTimeout(toastTimer);
+    // ------------------------------------------------------------------------
+    // Bucket configuration — maps each localStorage key the CRM writes to a
+    // Rust write command. Adding a new bucket = adding a row here.
+    //
+    // Buckets are debounced independently. If the CRM writes to ms_pro_v210
+    // five times in quick succession (typical for a contract save flow that
+    // touches multiple keys), only one Rust write is fired per bucket.
+    //
+    // App settings (theme, view prefs) use a different command shape: they
+    // pass both the localStorage key and the value, since one Rust command
+    // (storage_save_setting) handles all of them.
+    // ------------------------------------------------------------------------
+    var BUCKET_COMMANDS = {
+        'ms_pro_v210':              { cmd: 'storage_save_contracts',         label: 'Contracts' },
+        'ms_client_master_v1':      { cmd: 'storage_save_clients',           label: 'Clients' },
+        'ms_reseller_master_v1':    { cmd: 'storage_save_resellers',         label: 'Resellers' },
+        'ms_oem_master_v1':         { cmd: 'storage_save_oems',              label: 'OEMs' },
+        'ms_invoices_v1':           { cmd: 'storage_save_invoices',          label: 'Invoices' },
+        'ms_prospects_v1':          { cmd: 'storage_save_prospects',         label: 'Prospects' },
+        'ms_proposals_v1':          { cmd: 'storage_save_proposals',         label: 'Proposals' },
+        'ms_purchase_orders_v1':    { cmd: 'storage_save_purchase_orders',   label: 'Purchase Orders' },
+        'ms_commissions_v1':        { cmd: 'storage_save_commissions',       label: 'Commissions' },
+        'ms_company_profile_v1':    { cmd: 'storage_save_company_profile',   label: 'Company Profile' },
+        'ms_attachments_v1':        { cmd: 'storage_save_attachments',       label: 'Attachments' }
+    };
+    // Settings keys go through a single command with the key as a parameter.
+    var SETTING_KEYS = {
+        'ms_theme': true,
+        'ms_fy_basis_v1': true,
+        'ms_invoices_view_v1': true,
+        'ms_pipeline_view_v1': true,
+        'ms_proposals_view_v1': true,
+        'ms_schema_meta_v1': true,
+        'ms_migration_4A_state_v1': true
+    };
 
-        var t = document.createElement('div');
-        t.className = 'ms-readonly-blocked-toast';
-        t.innerHTML = '<strong>Read-only.</strong> "' + label +
-            '" was blocked. To make changes, use the HTML version of the CRM.';
-        document.body.appendChild(t);
-        toastTimer = setTimeout(function () {
-            if (t.parentNode) t.parentNode.removeChild(t);
-        }, 4000);
+    // ------------------------------------------------------------------------
+    // Sync indicator — visual feedback for write state.
+    //
+    // States: idle (synced) → saving → saved (briefly) → idle, OR error.
+    // Each state is reflected in CSS classes on #msSyncIndicator. The sync
+    // queue has a state machine and the indicator follows the queue's status.
+    // ------------------------------------------------------------------------
+    var pendingByBucket  = {};   // bucket → most recent value (last-write-wins per bucket)
+    var pendingSettings  = {};   // setting key → most recent value
+    var debounceTimers   = {};   // bucket → timeout id
+    var inflightCount    = 0;    // number of active Rust writes
+    var lastErrorByBucket = {};  // bucket → last error string (cleared on success)
+    var savedTimeout     = null;
+    var DEBOUNCE_MS      = 500;
+
+    function setIndicator(state, label, title) {
+        var el = document.getElementById('msSyncIndicator');
+        var lbl = document.getElementById('msSyncLabel');
+        if (!el || !lbl) return;
+        el.classList.remove('sync-idle', 'sync-saving', 'sync-saved', 'sync-error');
+        el.classList.add('sync-' + state);
+        lbl.textContent = label;
+        if (title) el.title = title;
     }
 
-    // Soft-disable Storage.prototype.setItem/removeItem/clear so writes don't
-    // persist beyond the in-memory cache. The CRM's existing code keeps working
-    // in-session — user edits show up live — but they get wiped on next launch
-    // and a toast confirms why.
-    //
-    // We do NOT block reads. We do NOT block updates to the __ms_* internal
-    // flags (used by this shim itself).
-    var realSet    = Storage.prototype.setItem;
-    var realRemove = Storage.prototype.removeItem;
-    var realClear  = Storage.prototype.clear;
-    var lastToastedAt = 0;
+    function refreshIndicator() {
+        var hasErrors = Object.keys(lastErrorByBucket).length > 0;
+        var anyPending = Object.keys(pendingByBucket).length > 0
+                      || Object.keys(pendingSettings).length > 0;
+        if (hasErrors) {
+            var firstErrKey = Object.keys(lastErrorByBucket)[0];
+            setIndicator('error', 'Save failed',
+                'Last error: ' + lastErrorByBucket[firstErrKey] + ' (click for details)');
+        } else if (inflightCount > 0 || anyPending) {
+            setIndicator('saving', 'Saving…', 'Writes in progress');
+        } else {
+            setIndicator('idle', 'Synced', 'All changes saved to local database');
+        }
+    }
 
+    function flashSaved() {
+        if (Object.keys(lastErrorByBucket).length > 0) return;
+        if (inflightCount > 0) return;
+        if (Object.keys(pendingByBucket).length > 0) return;
+        if (Object.keys(pendingSettings).length > 0) return;
+        setIndicator('saved', 'Saved ✓', 'All changes saved to local database');
+        if (savedTimeout) clearTimeout(savedTimeout);
+        savedTimeout = setTimeout(function () { refreshIndicator(); }, 1800);
+    }
+
+    // ------------------------------------------------------------------------
+    // Write dispatch — called after debounce.
+    // ------------------------------------------------------------------------
+    async function flushBucket(bucket) {
+        if (!(bucket in pendingByBucket)) return;
+        var value = pendingByBucket[bucket];
+        delete pendingByBucket[bucket];
+
+        var spec = BUCKET_COMMANDS[bucket];
+        if (!spec) return; // shouldn't happen, but be safe
+
+        var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!tauri || !tauri.invoke) {
+            lastErrorByBucket[bucket] = 'Tauri runtime unavailable';
+            refreshIndicator();
+            return;
+        }
+
+        inflightCount++;
+        refreshIndicator();
+        try {
+            var result = await tauri.invoke(spec.cmd, { payload: value });
+            if (result && result.ok) {
+                delete lastErrorByBucket[bucket];
+            } else {
+                lastErrorByBucket[bucket] = (result && result.error) || 'Unknown error';
+            }
+        } catch (e) {
+            lastErrorByBucket[bucket] = String(e);
+        } finally {
+            inflightCount--;
+            refreshIndicator();
+            flashSaved();
+        }
+    }
+
+    async function flushSetting(lsKey) {
+        if (!(lsKey in pendingSettings)) return;
+        var value = pendingSettings[lsKey];
+        delete pendingSettings[lsKey];
+
+        var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!tauri || !tauri.invoke) {
+            lastErrorByBucket['__settings__'] = 'Tauri runtime unavailable';
+            refreshIndicator();
+            return;
+        }
+        inflightCount++;
+        refreshIndicator();
+        try {
+            var result = await tauri.invoke('storage_save_setting', {
+                lsKey: lsKey, value: value
+            });
+            if (result && result.ok) {
+                delete lastErrorByBucket['__settings__'];
+            } else {
+                lastErrorByBucket['__settings__'] = (result && result.error) || 'Unknown error';
+            }
+        } catch (e) {
+            lastErrorByBucket['__settings__'] = String(e);
+        } finally {
+            inflightCount--;
+            refreshIndicator();
+            flashSaved();
+        }
+    }
+
+    function scheduleWrite(key, value) {
+        if (BUCKET_COMMANDS[key]) {
+            pendingByBucket[key] = value;
+            if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
+            debounceTimers[key] = setTimeout(function () { flushBucket(key); }, DEBOUNCE_MS);
+            refreshIndicator();
+            return true;
+        }
+        if (SETTING_KEYS[key]) {
+            pendingSettings[key] = value;
+            if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
+            debounceTimers[key] = setTimeout(function () { flushSetting(key); }, DEBOUNCE_MS);
+            refreshIndicator();
+            return true;
+        }
+        return false; // not a tracked key
+    }
+
+    // ------------------------------------------------------------------------
+    // Storage interception — wraps localStorage.setItem so the CRM's existing
+    // synchronous writes also fire async writes to SQLite.
+    //
+    // Reads (getItem) pass through untouched — the CRM reads from localStorage
+    // which was populated by storage_load_all on boot.
+    //
+    // removeItem and clear: we do NOT propagate these to SQLite. The CRM uses
+    // them rarely, mostly for debug / dev console workflows. If you ever need
+    // to wipe, do it via the migration script.
+    //
+    // Startup grace period: the CRM writes various computed values to
+    // localStorage during its initial render (theme application, view state
+    // restoration, etc.). Those writes would re-save data we just loaded,
+    // creating noise in the sync indicator. We swallow them for the first
+    // 2 seconds — safe because anything within that window is part of init.
+    // ------------------------------------------------------------------------
+    var startupGraceUntil = Date.now() + 2000;
+    var realSet = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-        // Allow internal Mac-app keys, view prefs (harmless cosmetic), and theme.
-        var allow = (typeof key === 'string') && (
-            key.indexOf('__ms_') === 0 ||
-            key === 'ms_theme' ||
-            key === 'ms_fy_basis_v1' ||
-            key.endsWith('_view_v1')
-        );
-        if (!allow) {
-            // Throttle toasts (some flows write many keys back to back).
-            var now = Date.now();
-            if (now - lastToastedAt > 1500) {
-                lastToastedAt = now;
-                try { showReadOnlyToast('Save'); } catch (e) {}
+        // Always update the in-page localStorage first (sync) so reads see
+        // the new value immediately.
+        var ret = realSet.apply(this, arguments);
+        // Internal flags (start with __ms_) never touch SQLite.
+        if (typeof key === 'string' && key.indexOf('__ms_') !== 0) {
+            // Skip during startup grace window.
+            if (Date.now() >= startupGraceUntil) {
+                try { scheduleWrite(key, value); } catch (e) {
+                    // Don't propagate errors — UI flow shouldn't break on sync issues.
+                    console.error('Mac app sync error:', e);
+                }
             }
         }
-        return realSet.apply(this, arguments);
-    };
-    Storage.prototype.removeItem = function (key) {
-        var now = Date.now();
-        if (now - lastToastedAt > 1500) {
-            lastToastedAt = now;
-            try { showReadOnlyToast('Delete'); } catch (e) {}
-        }
-        return realRemove.apply(this, arguments);
-    };
-    Storage.prototype.clear = function () {
-        // No-op in Mac-app mode — clearing localStorage would wipe the loaded
-        // snapshot and brick the session.
-        try { showReadOnlyToast('Clear all data'); } catch (e) {}
-        return undefined;
+        return ret;
     };
 
-    // Helper accessible from the banner button.
+    // Flush pending writes when the window is about to close. beforeunload
+    // doesn't allow async, but we can fire the invokes synchronously and they
+    // queue in Tauri's runtime even if the page goes away.
+    window.addEventListener('beforeunload', function () {
+        Object.keys(pendingByBucket).forEach(function (b) { flushBucket(b); });
+        Object.keys(pendingSettings).forEach(function (k) { flushSetting(k); });
+    });
+
+    // ------------------------------------------------------------------------
+    // Banner / DB info / dismiss handlers.
+    // ------------------------------------------------------------------------
     window.__msShowDbInfo = function () {
         var dbPath = window.localStorage.getItem('__ms_db_path__') || '(unknown)';
+        var errs = Object.keys(lastErrorByBucket);
+        var errStr = errs.length === 0 ? 'None' :
+            errs.map(function (k) { return '• ' + k + ': ' + lastErrorByBucket[k]; }).join('\n');
         alert(
-            'Masterstone Mac App — Session 3\n\n' +
+            'Masterstone Mac App — Session 4 (Live mode)\n\n' +
             'Database: ' + dbPath + '\n\n' +
-            'Read paths: SQLite (this preview)\n' +
-            'Write paths: HTML version (until Session 4 wires them back)'
+            'Pending writes: ' + (Object.keys(pendingByBucket).length + Object.keys(pendingSettings).length) + '\n' +
+            'In-flight writes: ' + inflightCount + '\n\n' +
+            'Recent errors:\n' + errStr
         );
     };
 
-    // Dismiss the banner — fully removes the banner element from DOM (not just
-    // display:none, in case Tauri's WebKit treats fixed-position display-none
-    // elements weirdly) and removes the mac-app-mode class so the banner-clearance
-    // rules drop, letting the layout collapse to its tight tauri-runtime baseline.
-    // Read-only shim (setItem interception) is installed via JS above and is
-    // unaffected by either change.
     window.__msDismissBanner = function () {
         var b = document.getElementById('macAppBanner');
         if (b && b.parentNode) b.parentNode.removeChild(b);
         document.body.classList.remove('mac-app-mode');
+        // Re-show a minimal sync indicator floating in the corner so the user
+        // still has feedback that writes are happening.
+        if (!document.getElementById('msFloatingSync')) {
+            var f = document.createElement('div');
+            f.id = 'msFloatingSync';
+            f.className = 'ms-floating-sync';
+            f.innerHTML =
+                '<span id="msSyncIndicator" class="sync-indicator sync-idle">' +
+                '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
+                '</span>';
+            document.body.appendChild(f);
+            refreshIndicator();
+        }
     };
 })();
 </script>

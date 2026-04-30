@@ -17,9 +17,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Session 3 additions:
-# - rusqlite with `bundled` feature compiles SQLite from source so we don't depend
-#   on the macOS system SQLite version. Adds ~30s to first build, then cached.
-# - dirs gives us cross-platform App Support folder resolution.
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
+
+# Session 4 additions:
+# - chrono: timestamp generation for modified_at columns
+# - tauri-plugin-dialog: native file/save dialogs (first-launch wizard)
+chrono = "0.4"
+tauri-plugin-dialog = "2"

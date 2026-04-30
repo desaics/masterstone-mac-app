@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Masterstone",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.masterstone.crm",
   "build": {
     "frontendDist": "../dist"
@@ -40,6 +40,6 @@
     },
     "category": "Business",
     "shortDescription": "Masterstone CRM",
-    "longDescription": "Native macOS desktop app for Masterstone CRM — Phase 2 (Session 3): SQLite-backed read-only preview of your live data."
+    "longDescription": "Native macOS desktop app for Masterstone CRM — Phase 2 (Session 4): SQLite-backed live editing with write-back to local database."
   }
 }
