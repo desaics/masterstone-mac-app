@@ -3530,16 +3530,28 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
    layouts (Client Master, forms). Push only the sidebar and main-content top
    padding — leave the body's flex container untouched. */
 body.mac-app-mode nav { top: 30px !important; }
-/* Bug fix #45 (Session 3 hotfix v3) — tighten the gap above page headers.
-   v1/v2 set padding-top: 56px which combined with .dashboard-sticky-top's
-   negative margin-top: -28px and its own padding-top: 18px to produce a
-   visible 100+px gap above the title on all pages. The CRM's stacking math
-   was designed for the original 28px main-content padding, so we override
-   to a slim 12px (just enough breathing room above sticky-top) and zero out
-   the sticky-top's negative pull-up since the banner already occupies the
-   30px above. Net visible gap: ~12px between banner-bottom and title-top. */
-body.mac-app-mode .main-content { padding-top: 12px !important; }
-body.mac-app-mode .dashboard-sticky-top { margin-top: 0 !important; }
+
+/* Bug fix #45 (Session 3 hotfix v3) — vertical spacing was breaking in both
+   banner-shown AND banner-dismissed states. Tauri's WebKit appears to handle
+   the .dashboard-sticky-top's `margin-top: -28px` (designed to pull the header
+   up against main-content's natural 28px padding-top) inconsistently when the
+   parent body is in our overridden display:block mode. Result: ~120px of gap
+   above page titles regardless of banner visibility.
+
+   Fix: in tauri-runtime, override the spacing chain entirely. Zero out the
+   sticky-top's negative margin-top and use a small explicit padding-top.
+   When banner is shown, add 30px to main-content's padding-top so the title
+   clears the banner. When banner is dismissed, main-content padding-top
+   collapses to 0 — title sits flush near the top with just sticky-top's own
+   12px breathing room. */
+body.tauri-runtime .main-content { padding-top: 0 !important; }
+body.tauri-runtime .dashboard-sticky-top {
+    margin-top: 0 !important;
+    padding-top: 12px !important;
+}
+body.tauri-runtime.mac-app-mode .main-content {
+    padding-top: 30px !important;
+}
 
 /* Bug fix #44 (Session 3 hotfix v2) — `body { display: flex }` interacts badly
    with WebKit's handling of position:fixed children. The CRM's nav is fixed
@@ -3701,13 +3713,15 @@ body.tauri-runtime .main-content {
         );
     };
 
-    // Dismiss the banner — also removes the mac-app-mode class so the targeted
-    // top-padding rules drop, letting the sidebar and main-content spring back
-    // to their natural top positions. Read-only shim (setItem interception) is
-    // installed via JS above and is unaffected by the class change.
+    // Dismiss the banner — fully removes the banner element from DOM (not just
+    // display:none, in case Tauri's WebKit treats fixed-position display-none
+    // elements weirdly) and removes the mac-app-mode class so the banner-clearance
+    // rules drop, letting the layout collapse to its tight tauri-runtime baseline.
+    // Read-only shim (setItem interception) is installed via JS above and is
+    // unaffected by either change.
     window.__msDismissBanner = function () {
         var b = document.getElementById('macAppBanner');
-        if (b) b.classList.add('dismissed');
+        if (b && b.parentNode) b.parentNode.removeChild(b);
         document.body.classList.remove('mac-app-mode');
     };
 })();
