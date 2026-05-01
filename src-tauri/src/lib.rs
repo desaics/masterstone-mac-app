@@ -1185,24 +1185,296 @@ fn purge_old_snapshots(dir: &PathBuf, keep: usize) -> usize {
 // ============================================================================
 // HTML snapshot rendering
 //
-// Strategy: produce a self-contained HTML file with all data embedded as a
-// JSON blob in a <script> tag, plus inline JS that renders simple read-only
-// views. iOS Safari handles ~5MB HTML files comfortably.
+// Bug fix #50 (Session 5 hotfix v2) — original template embedded data as a
+// JSON blob and rendered it client-side with JavaScript. iOS Quick Look
+// (which is what iOS Files and the OneDrive iOS app use to preview HTML
+// files) does NOT execute JavaScript, so users on iPhone saw only the
+// header and empty sections.
 //
-// Per Decision 3C: includes dashboards, client list, reseller list,
-// contracts, latest 50 invoices, active prospects. No edit forms, no PDF gen.
+// New strategy: render everything server-side in Rust at generation time.
+// Output is fully static HTML with no <script> tags. All sections are
+// always visible in a single scrollable page; the tab nav at top provides
+// quick-jump anchor links to each section. This avoids any CSS dependency
+// on :target or :has() which could behave inconsistently across WebKit
+// versions (especially the stripped-down WebKit used by iOS Quick Look).
+// File is ~2-3x bigger than the JSON-blob version but renders identically
+// everywhere — Quick Look, mobile Safari, desktop browsers.
+//
+// Per Decision 3C: dashboards, client list, reseller list, contracts,
+// latest 50 invoices, active prospects. No edit forms, no PDF generators.
 // ============================================================================
 
+/// HTML-escape a value for safe insertion into HTML body or attributes.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&'  => out.push_str("&amp;"),
+            '<'  => out.push_str("&lt;"),
+            '>'  => out.push_str("&gt;"),
+            '"'  => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _    => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render an INR amount with the same fmtINR semantics as the previous JS:
+/// Crore for ≥1e7, Lakh for ≥1e5, plain rupees otherwise. Returns "—" for
+/// non-finite values.
+fn fmt_inr(n: f64) -> String {
+    if !n.is_finite() {
+        return "—".to_string();
+    }
+    if n.abs() >= 1e7 {
+        return format!("₹{:.2} Cr", n / 1e7);
+    }
+    if n.abs() >= 1e5 {
+        return format!("₹{:.2} L", n / 1e5);
+    }
+    // Indian-grouped integer rendering for amounts under 1 Lakh.
+    let rounded = n.round() as i64;
+    let s = rounded.abs().to_string();
+    let mut out = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    if len <= 3 {
+        out.push_str(&s);
+    } else {
+        let last3 = &s[len - 3..];
+        let rest = &s[..len - 3];
+        let rest_chars: Vec<char> = rest.chars().rev().collect();
+        let mut grouped = String::new();
+        for (i, c) in rest_chars.iter().enumerate() {
+            if i > 0 && i % 2 == 0 { grouped.push(','); }
+            grouped.push(*c);
+        }
+        let rest_grouped: String = grouped.chars().rev().collect();
+        out.push_str(&rest_grouped);
+        out.push(',');
+        out.push_str(last3);
+    }
+    if rounded < 0 { format!("-₹{out}") } else { format!("₹{out}") }
+}
+
+/// Read a string field from a JSON value, returning empty string if missing.
+fn jss(v: &serde_json::Value, key: &str) -> String {
+    v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string()
+}
+
+/// Read a numeric field, accepting numbers or numeric strings.
+fn jsn(v: &serde_json::Value, key: &str) -> f64 {
+    let val = match v.get(key) { Some(x) => x, None => return 0.0 };
+    if let Some(n) = val.as_f64() { return n; }
+    if let Some(s) = val.as_str() { return s.parse::<f64>().unwrap_or(0.0); }
+    0.0
+}
+
 fn render_snapshot_html(data: &LoadAllResult) -> String {
-    // Bundle data as JSON for embedding. We use the localStorage-shaped data
-    // from the read path so the snapshot's JS can use the same access patterns.
-    let payload = serde_json::json!({
-        "generated_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        "record_counts": data.record_counts,
-        "data": data.data,
-    });
-    // Escape </script> just in case any data contains it
-    let payload_str = payload.to_string().replace("</", "<\\/");
+    // Parse the localStorage-shaped strings back into structured JSON so we
+    // can iterate. (The values inside data.data are JSON-string-encoded.)
+    fn parse_or_null(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
+    }
+    let contracts = data.data.get("ms_pro_v210")
+        .map(|s| parse_or_null(s))
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    let clients = data.data.get("ms_client_master_v1")
+        .map(|s| parse_or_null(s))
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let resellers = data.data.get("ms_reseller_master_v1")
+        .map(|s| parse_or_null(s))
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let invoices = data.data.get("ms_invoices_v1")
+        .map(|s| parse_or_null(s))
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    let prospects = data.data.get("ms_prospects_v1")
+        .map(|s| parse_or_null(s))
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let generated_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // ---- Dashboard summary ----
+    let total_clients = clients.len();
+    let total_contracts = contracts.len();
+    let active_contracts = contracts.iter().filter(|c| {
+        let s = jss(c, "renewalStatus");
+        s != "Expired" && s != "Lost"
+    }).count();
+    let total_invoices = invoices.len();
+    let outstanding: f64 = invoices.iter().filter_map(|inv| {
+        let status = jss(inv, "status").to_lowercase();
+        if status == "paid" || status == "cancelled" { return None; }
+        let out_amt = jsn(inv, "amountOutstanding");
+        let grand = jsn(inv, "grandTotal");
+        Some(if out_amt > 0.0 { out_amt } else { grand })
+    }).sum();
+
+    // ---- Build sections ----
+
+    // Clients section
+    let mut clients_html = String::new();
+    let mut client_names: Vec<&String> = clients.keys().collect();
+    client_names.sort();
+    for name in &client_names {
+        let c = &clients[*name];
+        let industry = jss(c, "industry");
+        let industry_disp = if industry.is_empty() { "—".to_string() } else { industry.clone() };
+        let status = jss(c, "status");
+        let badge = if status == "Active" {
+            "<span class=\"badge badge-active\">Active</span>".to_string()
+        } else if status.is_empty() {
+            "".to_string()
+        } else {
+            format!("<span class=\"badge badge-default\">{}</span>", esc(&status))
+        };
+        let n_contracts = contracts.iter().filter(|x| {
+            let cn = jss(x, "client");
+            let cn2 = jss(x, "clientName");
+            cn == **name || cn2 == **name
+        }).count();
+        clients_html.push_str(&format!(
+            "<div class=\"card\"><div class=\"top-row\"><div><div class=\"name\">{name}</div><div class=\"meta\">{industry} · {n} contracts</div></div>{badge}</div></div>",
+            name = esc(name),
+            industry = esc(&industry_disp),
+            n = n_contracts,
+            badge = badge,
+        ));
+    }
+    if clients_html.is_empty() {
+        clients_html = "<div class=\"empty\">No clients.</div>".to_string();
+    }
+
+    // Contracts section — sorted by endDate descending
+    let mut contracts_sorted: Vec<&serde_json::Value> = contracts.iter().collect();
+    contracts_sorted.sort_by(|a, b| jss(b, "endDate").cmp(&jss(a, "endDate")));
+    let mut contracts_html = String::new();
+    for c in &contracts_sorted {
+        let client = if !jss(c, "client").is_empty() { jss(c, "client") } else { jss(c, "clientName") };
+        let product = jss(c, "product");
+        let sell = jsn(c, "sellINR");
+        let status = jss(c, "renewalStatus");
+        let badge_class = match status.as_str() {
+            "Active" => "badge-active",
+            "Renewing" | "Up for Renewal" => "badge-renewing",
+            "Expired" | "Lost" => "badge-expired",
+            _ => "badge-default",
+        };
+        let badge = if status.is_empty() {
+            "".to_string()
+        } else {
+            format!("<span class=\"badge {}\">{}</span>", badge_class, esc(&status))
+        };
+        contracts_html.push_str(&format!(
+            "<div class=\"card\"><div class=\"top-row\"><div><div class=\"name\">{prod}</div><div class=\"meta\">{client}</div></div>{badge}</div><div class=\"meta\">{start} → {end} · <span class=\"amt\">{amt}</span></div></div>",
+            prod = esc(&product),
+            client = esc(&client),
+            start = esc(&jss(c, "startDate")),
+            end = esc(&jss(c, "endDate")),
+            amt = fmt_inr(sell),
+            badge = badge,
+        ));
+    }
+    if contracts_html.is_empty() {
+        contracts_html = "<div class=\"empty\">No contracts.</div>".to_string();
+    }
+
+    // Invoices section — latest 50, sorted by invoiceDate descending
+    let mut invoices_sorted: Vec<&serde_json::Value> = invoices.iter().collect();
+    invoices_sorted.sort_by(|a, b| jss(b, "invoiceDate").cmp(&jss(a, "invoiceDate")));
+    let mut invoices_html = String::new();
+    for inv in invoices_sorted.iter().take(50) {
+        let num = if !jss(inv, "invoiceNumber").is_empty() { jss(inv, "invoiceNumber") } else { jss(inv, "id") };
+        let client = jss(inv, "clientName");
+        let amt = jsn(inv, "grandTotal");
+        let status = jss(inv, "status");
+        let s_lower = status.to_lowercase();
+        let badge_class = match s_lower.as_str() {
+            "paid" => "badge-paid",
+            "overdue" => "badge-overdue",
+            "due" | "sent" | "issued" => "badge-due",
+            _ => "badge-default",
+        };
+        let badge = if status.is_empty() {
+            "".to_string()
+        } else {
+            format!("<span class=\"badge {}\">{}</span>", badge_class, esc(&status))
+        };
+        invoices_html.push_str(&format!(
+            "<div class=\"card\"><div class=\"top-row\"><div><div class=\"name\">{num}</div><div class=\"meta\">{client}</div></div>{badge}</div><div class=\"meta\">{date} · <span class=\"amt\">{amt}</span></div></div>",
+            num = esc(&num),
+            client = esc(&client),
+            date = esc(&jss(inv, "invoiceDate")),
+            amt = fmt_inr(amt),
+            badge = badge,
+        ));
+    }
+    if invoices_html.is_empty() {
+        invoices_html = "<div class=\"empty\">No invoices.</div>".to_string();
+    }
+
+    // Prospects section — active only
+    let mut prospects_html = String::new();
+    for p in &prospects {
+        let archived = p.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+        if archived { continue; }
+        let stage_lower = jss(p, "stage").to_lowercase();
+        if stage_lower == "closed lost" || stage_lower == "closed-lost" || stage_lower == "lost" { continue; }
+
+        let company = jss(p, "company");
+        let opp = jss(p, "oppName");
+        let title = if !opp.is_empty() { opp.clone() } else { company.clone() };
+        let stage = jss(p, "stage");
+        let acv = jsn(p, "acv");
+        let badge = if stage.is_empty() {
+            "".to_string()
+        } else {
+            format!("<span class=\"badge badge-default\">{}</span>", esc(&stage))
+        };
+        prospects_html.push_str(&format!(
+            "<div class=\"card\"><div class=\"top-row\"><div><div class=\"name\">{title}</div><div class=\"meta\">{company}</div></div>{badge}</div><div class=\"meta\">{date} · <span class=\"amt\">{amt}</span></div></div>",
+            title = esc(&title),
+            company = esc(&company),
+            date = esc(&jss(p, "closeDate")),
+            amt = fmt_inr(acv),
+            badge = badge,
+        ));
+    }
+    if prospects_html.is_empty() {
+        prospects_html = "<div class=\"empty\">No active prospects.</div>".to_string();
+    }
+
+    // Resellers section
+    let mut resellers_html = String::new();
+    let mut reseller_names: Vec<&String> = resellers.keys().collect();
+    reseller_names.sort();
+    for name in &reseller_names {
+        let r = &resellers[*name];
+        let short = jss(r, "shortName");
+        let status = jss(r, "status");
+        let badge = if status == "Active" {
+            "<span class=\"badge badge-active\">Active</span>".to_string()
+        } else if status.is_empty() {
+            "".to_string()
+        } else {
+            format!("<span class=\"badge badge-default\">{}</span>", esc(&status))
+        };
+        resellers_html.push_str(&format!(
+            "<div class=\"card\"><div class=\"top-row\"><div><div class=\"name\">{name}</div><div class=\"meta\">{short}</div></div>{badge}</div></div>",
+            name = esc(name),
+            short = esc(&short),
+            badge = badge,
+        ));
+    }
+    if resellers_html.is_empty() {
+        resellers_html = "<div class=\"empty\">No resellers.</div>".to_string();
+    }
 
     format!(r###"<!DOCTYPE html>
 <html lang="en">
@@ -1214,26 +1486,32 @@ fn render_snapshot_html(data: &LoadAllResult) -> String {
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;-webkit-text-size-adjust:100%;}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;background:#f6f7fa;color:#1a1f2e;font-size:15px;line-height:1.45;padding:0 0 80px 0;}}
-header{{background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;padding:20px 18px 16px;position:sticky;top:0;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,.12);}}
+header{{background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;padding:20px 18px 16px;}}
 header h1{{font-size:18px;font-weight:600;letter-spacing:.01em;}}
 header .subtitle{{font-size:12px;opacity:.85;margin-top:3px;}}
-nav.tabs{{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:64px;z-index:49;}}
-nav.tabs button{{flex:0 0 auto;padding:14px 16px;background:none;border:none;font-size:14px;font-weight:500;color:#6b7280;cursor:pointer;font-family:inherit;border-bottom:2px solid transparent;}}
-nav.tabs button.active{{color:#4f46e5;border-bottom-color:#4f46e5;}}
+
+nav.tabs{{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10;}}
+nav.tabs a{{flex:0 0 auto;padding:14px 16px;text-decoration:none;font-size:14px;font-weight:500;color:#6b7280;border-bottom:2px solid transparent;}}
+nav.tabs a:hover{{color:#4f46e5;}}
+
 main{{padding:14px;}}
 .summary-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;}}
 .summary-card{{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.05);border:1px solid #eef0f4;}}
 .summary-card .label{{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;font-weight:500;}}
 .summary-card .value{{font-size:22px;font-weight:600;color:#1a1f2e;margin-top:4px;}}
 .summary-card .sublabel{{font-size:11px;color:#9ca3af;margin-top:2px;}}
-section{{display:none;}}
-section.active{{display:block;}}
-section h2{{font-size:16px;font-weight:600;margin-bottom:12px;color:#1a1f2e;}}
+
+/* All sections always visible — tabs are quick-jump anchors via fragment IDs.
+   Avoids :target / :has() CSS quirks across different WebKit versions
+   (especially iOS Quick Look which uses a stripped-down WebKit). */
+section{{margin-bottom:32px;scroll-margin-top:60px;}}
+section h2{{font-size:18px;font-weight:600;margin-bottom:12px;color:#1a1f2e;padding-top:8px;border-top:2px solid #e5e7eb;}}
+section#sec-dashboard h2{{display:none;}}
 .card{{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.04);border:1px solid #eef0f4;}}
 .card .top-row{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}}
 .card .name{{font-size:15px;font-weight:600;color:#1a1f2e;}}
 .card .meta{{font-size:12px;color:#6b7280;margin-top:2px;}}
-.card .badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;}}
+.card .badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;flex-shrink:0;margin-left:8px;}}
 .badge-active{{background:#dcfce7;color:#166534;}}
 .badge-renewing{{background:#fef3c7;color:#92400e;}}
 .badge-expired{{background:#fee2e2;color:#991b1b;}}
@@ -1243,9 +1521,7 @@ section h2{{font-size:16px;font-weight:600;margin-bottom:12px;color:#1a1f2e;}}
 .badge-default{{background:#e5e7eb;color:#374151;}}
 .amt{{font-variant-numeric:tabular-nums;font-weight:600;color:#1a1f2e;}}
 .empty{{text-align:center;color:#9ca3af;font-size:13px;padding:36px 12px;background:#fff;border-radius:10px;border:1px dashed #d1d5db;}}
-.search-box{{width:100%;padding:11px 14px;font-size:15px;border:1px solid #d1d5db;border-radius:9px;margin-bottom:12px;font-family:inherit;background:#fff;-webkit-appearance:none;}}
-.search-box:focus{{outline:none;border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.12);}}
-footer{{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:8px;background:rgba(255,255,255,.95);font-size:11px;color:#6b7280;border-top:1px solid #e5e7eb;backdrop-filter:blur(8px);}}
+footer{{text-align:center;padding:16px 8px;font-size:11px;color:#6b7280;border-top:1px solid #e5e7eb;margin-top:24px;}}
 @media (min-width: 600px){{
 .summary-grid{{grid-template-columns:repeat(4,1fr);}}
 main{{padding:20px 28px;max-width:900px;margin:0 auto;}}
@@ -1255,186 +1531,68 @@ main{{padding:20px 28px;max-width:900px;margin:0 auto;}}
 <body>
 <header>
 <h1>📊 Masterstone CRM Snapshot</h1>
-<div class="subtitle">Generated <span id="genTime"></span> · Read-only mobile view</div>
+<div class="subtitle">Generated {generated_at} · Read-only mobile view</div>
 </header>
 <nav class="tabs">
-<button class="active" data-section="dashboard">Overview</button>
-<button data-section="clients">Clients</button>
-<button data-section="contracts">Contracts</button>
-<button data-section="invoices">Invoices</button>
-<button data-section="prospects">Prospects</button>
-<button data-section="resellers">Resellers</button>
+<a href="#sec-dashboard">Overview</a>
+<a href="#sec-clients">Clients ({total_clients})</a>
+<a href="#sec-contracts">Contracts ({total_contracts})</a>
+<a href="#sec-invoices">Invoices ({total_invoices})</a>
+<a href="#sec-prospects">Prospects</a>
+<a href="#sec-resellers">Resellers</a>
 </nav>
 <main>
-<section id="sec-dashboard" class="active"><div class="summary-grid" id="dashGrid"></div><div id="dashExtras"></div></section>
-<section id="sec-clients"><h2>Clients</h2><input class="search-box" placeholder="Search clients…" oninput="filterCards('clients',this.value)"><div id="clientsList"></div></section>
-<section id="sec-contracts"><h2>Contracts</h2><input class="search-box" placeholder="Search contracts…" oninput="filterCards('contracts',this.value)"><div id="contractsList"></div></section>
-<section id="sec-invoices"><h2>Recent Invoices</h2><input class="search-box" placeholder="Search invoices…" oninput="filterCards('invoices',this.value)"><div id="invoicesList"></div></section>
-<section id="sec-prospects"><h2>Active Prospects</h2><input class="search-box" placeholder="Search prospects…" oninput="filterCards('prospects',this.value)"><div id="prospectsList"></div></section>
-<section id="sec-resellers"><h2>Resellers / Partners</h2><input class="search-box" placeholder="Search resellers…" oninput="filterCards('resellers',this.value)"><div id="resellersList"></div></section>
+
+<section id="sec-dashboard">
+<div class="summary-grid">
+<div class="summary-card"><div class="label">Clients</div><div class="value">{total_clients}</div></div>
+<div class="summary-card"><div class="label">Contracts</div><div class="value">{total_contracts}</div><div class="sublabel">{active_contracts} active</div></div>
+<div class="summary-card"><div class="label">Invoices</div><div class="value">{total_invoices}</div></div>
+<div class="summary-card"><div class="label">Outstanding</div><div class="value">{outstanding}</div></div>
+</div>
+</section>
+
+<section id="sec-clients">
+<h2>Clients ({total_clients})</h2>
+{clients_html}
+</section>
+
+<section id="sec-contracts">
+<h2>Contracts ({total_contracts})</h2>
+{contracts_html}
+</section>
+
+<section id="sec-invoices">
+<h2>Recent Invoices (latest 50)</h2>
+{invoices_html}
+</section>
+
+<section id="sec-prospects">
+<h2>Active Prospects</h2>
+{prospects_html}
+</section>
+
+<section id="sec-resellers">
+<h2>Resellers / Partners</h2>
+{resellers_html}
+</section>
+
 </main>
-<footer>Self-contained snapshot · No live data · Use Mac app for edits</footer>
-
-<script id="ms-data" type="application/json">{payload}</script>
-<script>
-(function(){{
-var raw = document.getElementById('ms-data').textContent;
-var pkg = JSON.parse(raw);
-var data = {{}};
-Object.keys(pkg.data).forEach(function(k){{
-  try {{ data[k] = JSON.parse(pkg.data[k]); }}
-  catch (e) {{ data[k] = pkg.data[k]; }}
-}});
-
-document.getElementById('genTime').textContent = pkg.generated_at;
-
-var contracts = data.ms_pro_v210 || [];
-var clients   = data.ms_client_master_v1 || {{}};
-var resellers = data.ms_reseller_master_v1 || {{}};
-var invoices  = data.ms_invoices_v1 || [];
-var prospects = data.ms_prospects_v1 || [];
-
-// Tabs
-document.querySelectorAll('nav.tabs button').forEach(function(btn){{
-  btn.addEventListener('click', function(){{
-    document.querySelectorAll('nav.tabs button').forEach(function(b){{b.classList.remove('active');}});
-    document.querySelectorAll('section').forEach(function(s){{s.classList.remove('active');}});
-    btn.classList.add('active');
-    var sec = document.getElementById('sec-' + btn.dataset.section);
-    if (sec) sec.classList.add('active');
-    window.scrollTo(0, 0);
-  }});
-}});
-
-// Dashboard
-var totalClients = Object.keys(clients).length;
-var totalContracts = contracts.length;
-var activeContracts = contracts.filter(function(c){{ return c.renewalStatus !== 'Expired' && c.renewalStatus !== 'Lost'; }}).length;
-var totalInvoices = invoices.length;
-var totalRevenue = invoices.reduce(function(sum, i){{ return sum + (parseFloat(i.grandTotal) || 0); }}, 0);
-var outstandingAmount = invoices.reduce(function(sum, i){{
-  var status = (i.status || '').toLowerCase();
-  if (status === 'paid' || status === 'cancelled') return sum;
-  return sum + (parseFloat(i.amountOutstanding) || parseFloat(i.grandTotal) || 0);
-}}, 0);
-
-function fmtINR(n){{
-  if (!isFinite(n)) return '—';
-  if (n >= 1e7) return '₹' + (n/1e7).toFixed(2) + ' Cr';
-  if (n >= 1e5) return '₹' + (n/1e5).toFixed(2) + ' L';
-  return '₹' + Math.round(n).toLocaleString('en-IN');
-}}
-
-document.getElementById('dashGrid').innerHTML =
-  '<div class="summary-card"><div class="label">Clients</div><div class="value">'+ totalClients +'</div></div>' +
-  '<div class="summary-card"><div class="label">Contracts</div><div class="value">'+ totalContracts +'</div><div class="sublabel">'+ activeContracts +' active</div></div>' +
-  '<div class="summary-card"><div class="label">Invoices</div><div class="value">'+ totalInvoices +'</div></div>' +
-  '<div class="summary-card"><div class="label">Outstanding</div><div class="value">'+ fmtINR(outstandingAmount) +'</div></div>';
-
-// Clients list
-function clientCard(name, c){{
-  var contracts_count = contracts.filter(function(x){{ return (x.client || x.clientName) === name; }}).length;
-  var industry = c.industry || '—';
-  var status = c.status || '';
-  var sBadge = status === 'Active' ? '<span class="badge badge-active">Active</span>' : (status ? '<span class="badge badge-default">'+ esc(status) +'</span>' : '');
-  return '<div class="card" data-search="'+ esc((name + ' ' + industry).toLowerCase()) +'">' +
-    '<div class="top-row"><div><div class="name">'+ esc(name) +'</div><div class="meta">'+ esc(industry) +' · '+ contracts_count +' contracts</div></div>' +
-    sBadge + '</div></div>';
-}}
-function esc(s){{ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){{ return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c]; }}); }}
-
-var clientCards = Object.keys(clients).sort().map(function(n){{ return clientCard(n, clients[n]); }}).join('');
-document.getElementById('clientsList').innerHTML = clientCards || '<div class="empty">No clients.</div>';
-
-// Contracts
-function contractCard(c){{
-  var client = c.client || c.clientName || '';
-  var product = c.product || '';
-  var sell = parseFloat(c.sellINR) || 0;
-  var status = c.renewalStatus || '';
-  var bClass = 'badge-default';
-  if (status === 'Active') bClass = 'badge-active';
-  else if (status === 'Renewing' || status === 'Up for Renewal') bClass = 'badge-renewing';
-  else if (status === 'Expired' || status === 'Lost') bClass = 'badge-expired';
-  return '<div class="card" data-search="'+ esc((client + ' ' + product).toLowerCase()) +'">' +
-    '<div class="top-row"><div><div class="name">'+ esc(product) +'</div><div class="meta">'+ esc(client) +'</div></div>' +
-    (status ? '<span class="badge '+ bClass +'">'+ esc(status) +'</span>' : '') + '</div>' +
-    '<div class="meta">'+ (c.startDate || '') +' → '+ (c.endDate || '') +' · <span class="amt">'+ fmtINR(sell) +'</span></div></div>';
-}}
-var contractCards = contracts.slice().sort(function(a,b){{
-  return (b.endDate || '').localeCompare(a.endDate || '');
-}}).map(contractCard).join('');
-document.getElementById('contractsList').innerHTML = contractCards || '<div class="empty">No contracts.</div>';
-
-// Invoices (latest 50)
-function invoiceCard(i){{
-  var num = i.invoiceNumber || i.id || '';
-  var client = i.clientName || '';
-  var amt = parseFloat(i.grandTotal) || 0;
-  var status = i.status || '';
-  var bClass = 'badge-default';
-  var s = status.toLowerCase();
-  if (s === 'paid') bClass = 'badge-paid';
-  else if (s === 'overdue') bClass = 'badge-overdue';
-  else if (s === 'due' || s === 'sent' || s === 'issued') bClass = 'badge-due';
-  return '<div class="card" data-search="'+ esc((num + ' ' + client).toLowerCase()) +'">' +
-    '<div class="top-row"><div><div class="name">'+ esc(num) +'</div><div class="meta">'+ esc(client) +'</div></div>' +
-    (status ? '<span class="badge '+ bClass +'">'+ esc(status) +'</span>' : '') + '</div>' +
-    '<div class="meta">'+ (i.invoiceDate || '') +' · <span class="amt">'+ fmtINR(amt) +'</span></div></div>';
-}}
-var sortedInv = invoices.slice().sort(function(a,b){{
-  return (b.invoiceDate || '').localeCompare(a.invoiceDate || '');
-}}).slice(0, 50);
-var invoiceCards = sortedInv.map(invoiceCard).join('');
-document.getElementById('invoicesList').innerHTML = invoiceCards || '<div class="empty">No invoices.</div>';
-
-// Prospects (active only — not archived, stage not Closed-Lost)
-function prospectCard(p){{
-  var company = p.company || '';
-  var opp = p.oppName || '';
-  var stage = p.stage || '';
-  var acv = parseFloat(p.acv) || 0;
-  return '<div class="card" data-search="'+ esc((company + ' ' + opp).toLowerCase()) +'">' +
-    '<div class="top-row"><div><div class="name">'+ esc(opp || company) +'</div><div class="meta">'+ esc(company) +'</div></div>' +
-    (stage ? '<span class="badge badge-default">'+ esc(stage) +'</span>' : '') + '</div>' +
-    '<div class="meta">'+ (p.closeDate || '') +' · <span class="amt">'+ fmtINR(acv) +'</span></div></div>';
-}}
-var activeProspects = prospects.filter(function(p){{
-  if (p.archived) return false;
-  var stage = (p.stage || '').toLowerCase();
-  return stage !== 'closed lost' && stage !== 'closed-lost' && stage !== 'lost';
-}});
-var prospectCards = activeProspects.map(prospectCard).join('');
-document.getElementById('prospectsList').innerHTML = prospectCards || '<div class="empty">No active prospects.</div>';
-
-// Resellers
-function resellerCard(name, r){{
-  var status = r.status || '';
-  return '<div class="card" data-search="'+ esc(name.toLowerCase()) +'">' +
-    '<div class="top-row"><div><div class="name">'+ esc(name) +'</div><div class="meta">'+ esc(r.shortName || '') +'</div></div>' +
-    (status === 'Active' ? '<span class="badge badge-active">Active</span>' : (status ? '<span class="badge badge-default">'+ esc(status) +'</span>' : '')) + '</div></div>';
-}}
-var resellerCards = Object.keys(resellers).sort().map(function(n){{ return resellerCard(n, resellers[n]); }}).join('');
-document.getElementById('resellersList').innerHTML = resellerCards || '<div class="empty">No resellers.</div>';
-
-// Search filter
-window.filterCards = function(section, query){{
-  var q = (query || '').trim().toLowerCase();
-  var listIds = {{
-    clients: 'clientsList', contracts: 'contractsList', invoices: 'invoicesList',
-    prospects: 'prospectsList', resellers: 'resellersList'
-  }};
-  var container = document.getElementById(listIds[section]);
-  if (!container) return;
-  Array.prototype.forEach.call(container.children, function(card){{
-    if (!card.dataset.search) return;
-    card.style.display = card.dataset.search.indexOf(q) !== -1 ? '' : 'none';
-  }});
-}};
-}})();
-</script>
+<footer>Self-contained snapshot · No live data · Use Mac app for edits<br>📱 Tap a tab above to jump to a section, or scroll through</footer>
 </body>
-</html>"###, payload = payload_str)
+</html>"###,
+        generated_at = esc(&generated_at),
+        total_clients = total_clients,
+        total_contracts = total_contracts,
+        active_contracts = active_contracts,
+        total_invoices = total_invoices,
+        outstanding = fmt_inr(outstanding),
+        clients_html = clients_html,
+        contracts_html = contracts_html,
+        invoices_html = invoices_html,
+        prospects_html = prospects_html,
+        resellers_html = resellers_html,
+    )
 }
 
 // ============================================================================
