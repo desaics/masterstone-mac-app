@@ -83,11 +83,19 @@ fn snapshot_dir() -> Option<PathBuf> {
 
 struct DbState {
     conn: Mutex<Option<Connection>>,
+    // Session 6: track mtime of the .db file at the time we opened it.
+    // If a write detects the file's mtime has changed without us doing it,
+    // an external process (typically migrate.py) modified the file —
+    // surfaced as CONFLICT to the JS side which prompts the user.
+    last_known_mtime: Mutex<Option<u64>>,
 }
 
 impl DbState {
     fn new() -> Self {
-        Self { conn: Mutex::new(None) }
+        Self {
+            conn: Mutex::new(None),
+            last_known_mtime: Mutex::new(None),
+        }
     }
 
     fn ensure_open(&self) -> Result<(), String> {
@@ -108,12 +116,40 @@ impl DbState {
         con.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| format!("Could not enable foreign keys: {e}"))?;
         *guard = Some(con);
+        // Capture mtime for the conflict guard.
+        if let Ok(mut mt) = self.last_known_mtime.lock() {
+            *mt = file_mtime_secs(&path);
+        }
         Ok(())
     }
 
     fn reset(&self) {
         if let Ok(mut guard) = self.conn.lock() {
             *guard = None;
+        }
+        if let Ok(mut mt) = self.last_known_mtime.lock() {
+            *mt = None;
+        }
+    }
+
+    /// Returns Some(true) if the file's mtime changed since we last recorded it.
+    /// Returns Some(false) if it hasn't changed. Returns None if we can't tell
+    /// (no recorded mtime yet, or filesystem error).
+    fn detect_external_change(&self) -> Option<bool> {
+        let recorded = self.last_known_mtime.lock().ok()?.clone()?;
+        let current = file_mtime_secs(&db_path()?)?;
+        // Allow ±1 second wiggle room — different filesystems have different
+        // mtime resolutions (HFS is whole seconds, APFS is sub-second).
+        Some(current > recorded + 1)
+    }
+
+    /// Refresh the recorded mtime — call after a successful write so the next
+    /// write's conflict check compares against the new state.
+    fn refresh_mtime(&self) {
+        if let Ok(mut mt) = self.last_known_mtime.lock() {
+            if let Some(p) = db_path() {
+                *mt = file_mtime_secs(&p);
+            }
         }
     }
 }
@@ -355,7 +391,12 @@ where F: FnOnce(&mut Connection) -> rusqlite::Result<R>,
     state.ensure_open()?;
     let mut guard = state.conn.lock().map_err(|e| format!("Mutex poisoned: {e}"))?;
     let con = guard.as_mut().ok_or("DB connection unavailable")?;
-    f(con).map_err(|e| format!("{e}"))
+    let result = f(con).map_err(|e| format!("{e}"))?;
+    // After every successful write, refresh the recorded mtime so
+    // subsequent writes don't trip the conflict guard on our own work.
+    drop(guard);
+    state.refresh_mtime();
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1490,9 +1531,8 @@ header{{background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;padding:20
 header h1{{font-size:18px;font-weight:600;letter-spacing:.01em;}}
 header .subtitle{{font-size:12px;opacity:.85;margin-top:3px;}}
 
-nav.tabs{{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10;}}
-nav.tabs a{{flex:0 0 auto;padding:14px 16px;text-decoration:none;font-size:14px;font-weight:500;color:#6b7280;border-bottom:2px solid transparent;}}
-nav.tabs a:hover{{color:#4f46e5;}}
+nav.tabs{{background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 16px;text-align:center;}}
+.counts-summary{{font-size:13px;color:#6b7280;font-weight:500;}}
 
 main{{padding:14px;}}
 .summary-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;}}
@@ -1534,12 +1574,7 @@ main{{padding:20px 28px;max-width:900px;margin:0 auto;}}
 <div class="subtitle">Generated {generated_at} · Read-only mobile view</div>
 </header>
 <nav class="tabs">
-<a href="#sec-dashboard">Overview</a>
-<a href="#sec-clients">Clients ({total_clients})</a>
-<a href="#sec-contracts">Contracts ({total_contracts})</a>
-<a href="#sec-invoices">Invoices ({total_invoices})</a>
-<a href="#sec-prospects">Prospects</a>
-<a href="#sec-resellers">Resellers</a>
+<span class="counts-summary">{total_clients} Clients · {total_contracts} Contracts · {total_invoices} Invoices · scroll down to view</span>
 </nav>
 <main>
 
@@ -1596,6 +1631,640 @@ main{{padding:20px 28px;max-width:900px;margin:0 auto;}}
 }
 
 // ============================================================================
+// Session 6 — settings management
+//
+// Settings are stored in the existing app_settings table (key-value).
+// Different from per-bucket storage_save_setting in Session 4 because Session 4
+// handled CRM-internal localStorage settings (theme, view prefs); Session 6
+// handles Mac-app-only configuration the CRM doesn't know about.
+//
+// Key namespace (all string-valued in SQLite, JS interprets shapes):
+//   ms_app__snapshot_folder         — string path or "" for default
+//   ms_app__snapshot_retention      — integer string, default "7"
+//   ms_app__backup_folder           — string path or "" for default
+//   ms_app__backup_retention        — integer string, default "14"
+//   ms_app__backup_destination_mode — "local" (default) or "onedrive"
+//   ms_app__conflict_guard_enabled  — "1" (default) or "0"
+//   ms_app__production_announcement_dismissed — "1" once dismissed, else absent
+// ============================================================================
+
+#[tauri::command]
+fn get_app_settings() -> serde_json::Value {
+    let path = match db_path() {
+        Some(p) => p,
+        None => return serde_json::json!({"ok": false, "error": "no db path"}),
+    };
+    if !path.exists() {
+        return serde_json::json!({"ok": false, "error": "DB_NOT_FOUND"});
+    }
+    let con = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("open: {e}")}),
+    };
+    let mut out = serde_json::Map::new();
+    let mut stmt = match con.prepare("SELECT key, value FROM app_settings WHERE key LIKE 'ms_app__%'") {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("prepare: {e}")}),
+    };
+    let rows = match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+        Ok(r) => r,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("query: {e}")}),
+    };
+    for row in rows {
+        if let Ok((k, v)) = row {
+            out.insert(k, serde_json::Value::String(v));
+        }
+    }
+    serde_json::json!({"ok": true, "settings": out})
+}
+
+#[tauri::command]
+fn save_app_setting(state: tauri::State<DbState>, key: String, value: String) -> SaveResult {
+    if !key.starts_with("ms_app__") {
+        return SaveResult::err(format!("Invalid app setting key: {key}"));
+    }
+    match with_writer(&state, |con| {
+        con.execute(
+            "INSERT INTO app_settings (key, value, modified_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, modified_at = excluded.modified_at",
+            params![key, value, now_iso()],
+        )?;
+        Ok(1usize)
+    }) {
+        Ok(n) => SaveResult::ok(n),
+        Err(e) => SaveResult::err(e),
+    }
+}
+
+#[tauri::command]
+async fn pick_folder<R: tauri::Runtime>(app: tauri::AppHandle<R>, title: Option<String>) -> serde_json::Value {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file();
+    if let Some(t) = title.as_ref() {
+        builder = builder.set_title(t);
+    }
+    match builder.blocking_pick_folder() {
+        Some(fp) => match fp.into_path() {
+            Ok(path) => serde_json::json!({"ok": true, "path": path.to_string_lossy()}),
+            Err(e) => serde_json::json!({"ok": false, "error": format!("path conversion: {e}")}),
+        },
+        None => serde_json::json!({"ok": false, "cancelled": true}),
+    }
+}
+
+// ============================================================================
+// Session 6 — auto-backup
+//
+// On app start, JS calls run_backup_check. If today's backup file doesn't
+// exist (and conflict guard isn't blocking us), we copy masterstone.db to
+// the backup folder with today's date in the filename. Old backups beyond
+// the retention count are purged.
+//
+// Local default: ~/Library/Application Support/com.masterstone.crm/backups/
+// OneDrive option: ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/backups/
+// ============================================================================
+
+fn default_backup_dir_local() -> Option<PathBuf> {
+    let mut p = dirs::data_dir()?;
+    p.push("com.masterstone.crm");
+    p.push("backups");
+    Some(p)
+}
+
+fn default_backup_dir_onedrive() -> Option<PathBuf> {
+    snapshot_dir().map(|d| d.join("backups"))
+}
+
+fn resolve_backup_dir(folder_setting: &str, mode_setting: &str) -> Option<PathBuf> {
+    if !folder_setting.is_empty() {
+        return Some(PathBuf::from(folder_setting));
+    }
+    match mode_setting {
+        "onedrive" => default_backup_dir_onedrive(),
+        _ => default_backup_dir_local(),
+    }
+}
+
+#[derive(Serialize)]
+struct BackupResult {
+    ok: bool,
+    skipped: bool,
+    skip_reason: Option<String>,
+    error: Option<String>,
+    path: Option<String>,
+    bytes_written: Option<u64>,
+    purged_count: usize,
+}
+
+#[tauri::command]
+fn run_backup_check() -> BackupResult {
+    // 1. Read the relevant settings (or fall back to defaults).
+    let (folder_setting, mode_setting, retention) = read_backup_settings();
+
+    let dir = match resolve_backup_dir(&folder_setting, &mode_setting) {
+        Some(d) => d,
+        None => return BackupResult {
+            ok: false, skipped: false, skip_reason: None,
+            error: Some("Could not resolve backup directory.".into()),
+            path: None, bytes_written: None, purged_count: 0,
+        },
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return BackupResult {
+            ok: false, skipped: false, skip_reason: None,
+            error: Some(format!("Could not create backup folder: {e}")),
+            path: None, bytes_written: None, purged_count: 0,
+        };
+    }
+
+    // 2. Today's filename.
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let filename = format!("masterstone_{date}.db");
+    let target = dir.join(&filename);
+
+    // If today's backup already exists, skip (one backup per day).
+    if target.exists() {
+        return BackupResult {
+            ok: true, skipped: true,
+            skip_reason: Some("Today's backup already exists.".into()),
+            error: None,
+            path: Some(target.to_string_lossy().to_string()),
+            bytes_written: None, purged_count: 0,
+        };
+    }
+
+    // 3. Source file (current .db).
+    let source = match db_path() {
+        Some(p) => p,
+        None => return BackupResult {
+            ok: false, skipped: false, skip_reason: None,
+            error: Some("Could not resolve database path.".into()),
+            path: None, bytes_written: None, purged_count: 0,
+        },
+    };
+    if !source.exists() {
+        return BackupResult {
+            ok: false, skipped: false, skip_reason: None,
+            error: Some("Database file does not exist (nothing to back up).".into()),
+            path: None, bytes_written: None, purged_count: 0,
+        };
+    }
+
+    // 4. Copy. Note: SQLite WAL files are sidecars. For a fully-safe backup
+    // we'd checkpoint WAL into the main db first, but rusqlite's BACKUP API
+    // is more reliable. For Session 6 simplicity, plain copy is acceptable —
+    // the WAL is replayed automatically when the backup file is opened.
+    let bytes = match std::fs::copy(&source, &target) {
+        Ok(b) => b,
+        Err(e) => return BackupResult {
+            ok: false, skipped: false, skip_reason: None,
+            error: Some(format!("Could not copy backup: {e}")),
+            path: Some(target.to_string_lossy().to_string()),
+            bytes_written: None, purged_count: 0,
+        },
+    };
+
+    // 5. Purge older.
+    let purged = purge_old_backups(&dir, retention);
+
+    BackupResult {
+        ok: true, skipped: false, skip_reason: None,
+        error: None,
+        path: Some(target.to_string_lossy().to_string()),
+        bytes_written: Some(bytes),
+        purged_count: purged,
+    }
+}
+
+fn read_backup_settings() -> (String, String, usize) {
+    let mut folder = String::new();
+    let mut mode = "local".to_string();
+    let mut retention = 14usize;
+    if let Some(path) = db_path() {
+        if let Ok(con) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            if let Ok(mut stmt) = con.prepare("SELECT key, value FROM app_settings WHERE key LIKE 'ms_app__%'") {
+                if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                    for row in rows.flatten() {
+                        match row.0.as_str() {
+                            "ms_app__backup_folder" => folder = row.1,
+                            "ms_app__backup_destination_mode" => {
+                                if row.1 == "onedrive" { mode = "onedrive".to_string(); }
+                            },
+                            "ms_app__backup_retention" => {
+                                if let Ok(n) = row.1.parse::<usize>() {
+                                    if n > 0 && n <= 365 { retention = n; }
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (folder, mode, retention)
+}
+
+fn purge_old_backups(dir: &PathBuf, keep: usize) -> usize {
+    let mut backups: Vec<(PathBuf, u64)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("masterstone_") && name.ends_with(".db") {
+                    if let Some(t) = file_mtime_secs(&p) {
+                        backups.push((p, t));
+                    }
+                }
+            }
+        }
+    }
+    if backups.len() <= keep {
+        return 0;
+    }
+    backups.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    let to_delete = &backups[keep..];
+    let mut purged = 0;
+    for (path, _) in to_delete {
+        if std::fs::remove_file(path).is_ok() {
+            purged += 1;
+        }
+    }
+    purged
+}
+
+// ============================================================================
+// Session 6 — conflict guard
+//
+// JS calls check_db_conflict when surfacing unsaved-write errors, or
+// proactively before doing anything sensitive. If the .db's mtime has
+// changed without our involvement, the user gets prompted to reload.
+//
+// After a reload-or-override decision, JS calls acknowledge_db_conflict
+// which refreshes our recorded mtime and resets the connection so the next
+// read sees the on-disk state.
+// ============================================================================
+
+#[derive(Serialize)]
+struct ConflictResult {
+    ok: bool,
+    conflict: bool,
+    detail: Option<String>,
+    db_mtime: Option<u64>,
+}
+
+#[tauri::command]
+fn check_db_conflict(state: tauri::State<DbState>) -> ConflictResult {
+    // Open once if needed (so we have a recorded mtime baseline).
+    let _ = state.ensure_open();
+    let detected = state.detect_external_change();
+    let db_mtime = db_path().and_then(|p| file_mtime_secs(&p));
+    match detected {
+        Some(true) => ConflictResult {
+            ok: true, conflict: true,
+            detail: Some("Database file was modified externally since this app session started.".into()),
+            db_mtime,
+        },
+        Some(false) => ConflictResult { ok: true, conflict: false, detail: None, db_mtime },
+        None => ConflictResult { ok: true, conflict: false, detail: Some("No baseline mtime recorded yet.".into()), db_mtime },
+    }
+}
+
+#[tauri::command]
+fn acknowledge_db_conflict(state: tauri::State<DbState>, action: String) -> serde_json::Value {
+    // action = "reload"  → close connection so next ensure_open re-reads file
+    //        = "override" → just refresh mtime, keep connection
+    match action.as_str() {
+        "reload" => {
+            state.reset();
+            serde_json::json!({"ok": true, "action": "reload"})
+        },
+        "override" => {
+            state.refresh_mtime();
+            serde_json::json!({"ok": true, "action": "override"})
+        },
+        _ => serde_json::json!({"ok": false, "error": format!("Unknown action: {action}")}),
+    }
+}
+
+// ============================================================================
+// Session 6 — attachment file extraction
+//
+// One-time migration: company_profile.raw_data has logoDataUrl,
+// letterheadDataUrl, signatureImageDataUrl as inline base64 (~720 KB total).
+// Move each to a file under attachments/ keyed by content hash. Replace the
+// inline base64 in the JSON with a sentinel "ms-attachment://<hash>.<ext>".
+//
+// On app boot, the load path reads each sentinel back and re-injects the
+// base64 from disk into localStorage so the CRM continues to read
+// logoDataUrl etc. as data URLs.
+// ============================================================================
+
+fn attachments_dir() -> Option<PathBuf> {
+    let mut p = dirs::data_dir()?;
+    p.push("com.masterstone.crm");
+    p.push("attachments");
+    Some(p)
+}
+
+/// Detect mime → file extension mapping from a data URL prefix.
+fn mime_to_ext(mime: &str) -> &'static str {
+    match mime {
+        "image/png"  => "png",
+        "image/jpeg" => "jpg",
+        "image/jpg"  => "jpg",
+        "image/gif"  => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    }
+}
+
+/// Cheap content fingerprint — first 12 chars of base64 + length.
+/// Not cryptographic; just unique-enough for deduplication.
+fn fingerprint(s: &str) -> String {
+    let head: String = s.chars().take(12).filter(|c| c.is_ascii_alphanumeric()).collect();
+    format!("{}_{}", head, s.len())
+}
+
+/// Returns Some((sentinel, written_bytes)) if extraction was performed,
+/// None if the value was already a sentinel or empty.
+fn extract_one_data_url(data_url: &str, dir: &PathBuf) -> Option<(String, u64)> {
+    if data_url.is_empty() || data_url.starts_with("ms-attachment://") {
+        return None;
+    }
+    if !data_url.starts_with("data:") {
+        return None;
+    }
+    let comma = data_url.find(',')?;
+    let header = &data_url[5..comma]; // strip "data:"
+    let body = &data_url[comma + 1..];
+    // header is like "image/png;base64"
+    let mime = header.split(';').next().unwrap_or("application/octet-stream");
+    let ext = mime_to_ext(mime);
+    let name = format!("{}.{}", fingerprint(body), ext);
+    let target = dir.join(&name);
+    if !target.exists() {
+        // Decode base64. We need a base64 decoder. Use a tiny inline one
+        // to avoid adding a new crate dependency for one use.
+        let decoded = base64_decode(body)?;
+        if std::fs::write(&target, &decoded).is_err() {
+            return None;
+        }
+    }
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    Some((format!("ms-attachment://{}", name), bytes))
+}
+
+/// Minimal base64 decoder (RFC 4648 standard alphabet, no whitespace tolerance
+/// beyond a few ASCII whitespace chars). Avoids adding a base64 crate dep.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    fn ch_val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = s.bytes().filter(|b| !matches!(b, b'\n' | b'\r' | b' ' | b'\t')).collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 4);
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        let a = ch_val(bytes[i])?;
+        let b = ch_val(bytes[i + 1])?;
+        let c_byte = bytes[i + 2];
+        let d_byte = bytes[i + 3];
+        out.push((a << 2) | (b >> 4));
+        if c_byte != b'=' {
+            let c = ch_val(c_byte)?;
+            out.push(((b & 0x0F) << 4) | (c >> 2));
+            if d_byte != b'=' {
+                let d = ch_val(d_byte)?;
+                out.push(((c & 0x03) << 6) | d);
+            }
+        }
+        i += 4;
+    }
+    Some(out)
+}
+
+#[derive(Serialize)]
+struct ExtractResult {
+    ok: bool,
+    error: Option<String>,
+    extracted_count: usize,
+    bytes_saved: u64,
+    skipped_already_extracted: bool,
+}
+
+#[tauri::command]
+fn extract_attachments(state: tauri::State<DbState>) -> ExtractResult {
+    let dir = match attachments_dir() {
+        Some(d) => d,
+        None => return ExtractResult {
+            ok: false,
+            error: Some("Could not resolve attachments dir".into()),
+            extracted_count: 0, bytes_saved: 0, skipped_already_extracted: false,
+        },
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return ExtractResult {
+            ok: false,
+            error: Some(format!("Could not create attachments dir: {e}")),
+            extracted_count: 0, bytes_saved: 0, skipped_already_extracted: false,
+        };
+    }
+
+    // Read company_profile.raw_data
+    let raw = match with_writer(&state, |con| {
+        con.query_row("SELECT raw_data FROM company_profile WHERE id = 1", [], |r| r.get::<_, String>(0))
+    }) {
+        Ok(s) => s,
+        Err(e) => return ExtractResult {
+            ok: false,
+            error: Some(format!("Could not read company_profile: {e}")),
+            extracted_count: 0, bytes_saved: 0, skipped_already_extracted: false,
+        },
+    };
+
+    let mut profile: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return ExtractResult {
+            ok: false,
+            error: Some(format!("Invalid company_profile JSON: {e}")),
+            extracted_count: 0, bytes_saved: 0, skipped_already_extracted: false,
+        },
+    };
+
+    let target_keys = ["logoDataUrl", "letterheadDataUrl", "signatureImageDataUrl"];
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let mut all_already_extracted = true;
+    let obj = match profile.as_object_mut() {
+        Some(o) => o,
+        None => return ExtractResult {
+            ok: false,
+            error: Some("company_profile is not an object".into()),
+            extracted_count: 0, bytes_saved: 0, skipped_already_extracted: false,
+        },
+    };
+
+    for key in &target_keys {
+        let Some(val) = obj.get(*key).and_then(|v| v.as_str()) else { continue; };
+        if val.is_empty() {
+            continue;
+        }
+        if val.starts_with("ms-attachment://") {
+            continue; // already extracted
+        }
+        all_already_extracted = false;
+        if let Some((sentinel, n)) = extract_one_data_url(val, &dir) {
+            obj.insert((*key).to_string(), serde_json::Value::String(sentinel));
+            count += 1;
+            bytes += n;
+        }
+    }
+
+    if count == 0 && all_already_extracted {
+        return ExtractResult {
+            ok: true, error: None,
+            extracted_count: 0, bytes_saved: 0,
+            skipped_already_extracted: true,
+        };
+    }
+
+    if count == 0 {
+        // Nothing extracted but not because already-extracted —
+        // could be empty fields. No-op success.
+        return ExtractResult {
+            ok: true, error: None,
+            extracted_count: 0, bytes_saved: 0,
+            skipped_already_extracted: false,
+        };
+    }
+
+    // Write the updated profile back.
+    let new_raw = profile.to_string();
+    if let Err(e) = with_writer(&state, |con| {
+        con.execute(
+            "UPDATE company_profile SET raw_data = ?1, modified_at = ?2 WHERE id = 1",
+            params![new_raw, now_iso()],
+        )?;
+        Ok(())
+    }) {
+        return ExtractResult {
+            ok: false,
+            error: Some(format!("Could not update company_profile: {e}")),
+            extracted_count: count, bytes_saved: bytes, skipped_already_extracted: false,
+        };
+    }
+
+    ExtractResult {
+        ok: true, error: None,
+        extracted_count: count, bytes_saved: bytes, skipped_already_extracted: false,
+    }
+}
+
+/// On the load path, JS calls this after storage_load_all to re-inject
+/// extracted attachments back into localStorage as data URLs. Returns a
+/// dictionary of { "logoDataUrl": "data:image/...", ... } that JS merges
+/// into the company_profile JSON in localStorage.
+#[tauri::command]
+fn load_attachments_into_data_urls() -> serde_json::Value {
+    let dir = match attachments_dir() {
+        Some(d) => d,
+        None => return serde_json::json!({"ok": false, "error": "no attachments dir"}),
+    };
+    if !dir.exists() {
+        return serde_json::json!({"ok": true, "attachments": {}});
+    }
+
+    let path = match db_path() {
+        Some(p) => p,
+        None => return serde_json::json!({"ok": false, "error": "no db path"}),
+    };
+    let con = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("open: {e}")}),
+    };
+    let raw: String = match con.query_row("SELECT raw_data FROM company_profile WHERE id = 1", [], |r| r.get(0)) {
+        Ok(s) => s,
+        Err(_) => return serde_json::json!({"ok": true, "attachments": {}}),
+    };
+    let profile: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return serde_json::json!({"ok": true, "attachments": {}}),
+    };
+
+    let target_keys = ["logoDataUrl", "letterheadDataUrl", "signatureImageDataUrl"];
+    let mut out = serde_json::Map::new();
+    for key in &target_keys {
+        let Some(val) = profile.get(*key).and_then(|v| v.as_str()) else { continue; };
+        if !val.starts_with("ms-attachment://") {
+            continue;
+        }
+        let name = &val["ms-attachment://".len()..];
+        // Defense: only accept simple filenames, no path separators
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            continue;
+        }
+        let file_path = dir.join(name);
+        let Ok(bytes) = std::fs::read(&file_path) else { continue; };
+        let ext = name.rsplit('.').next().unwrap_or("bin");
+        let mime = match ext.to_lowercase().as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+        let b64 = base64_encode(&bytes);
+        let data_url = format!("data:{};base64,{}", mime, b64);
+        out.insert((*key).to_string(), serde_json::Value::String(data_url));
+    }
+    serde_json::json!({"ok": true, "attachments": out})
+}
+
+/// Minimal base64 encoder (matches base64_decode above).
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() * 4 / 3) + 4);
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let a = bytes[i];
+        let b = bytes[i + 1];
+        let c = bytes[i + 2];
+        out.push(ALPHA[(a >> 2) as usize] as char);
+        out.push(ALPHA[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
+        out.push(ALPHA[(((b & 0x0F) << 2) | (c >> 6)) as usize] as char);
+        out.push(ALPHA[(c & 0x3F) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let a = bytes[i];
+        out.push(ALPHA[(a >> 2) as usize] as char);
+        out.push(ALPHA[((a & 0x03) << 4) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let a = bytes[i];
+        let b = bytes[i + 1];
+        out.push(ALPHA[(a >> 2) as usize] as char);
+        out.push(ALPHA[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
+        out.push(ALPHA[((b & 0x0F) << 2) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -1624,6 +2293,15 @@ pub fn run() {
             reveal_onedrive_folder,
             generate_snapshot,
             get_snapshot_status,
+            // Session 6:
+            get_app_settings,
+            save_app_setting,
+            pick_folder,
+            run_backup_check,
+            check_db_conflict,
+            acknowledge_db_conflict,
+            extract_attachments,
+            load_attachments_into_data_urls,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

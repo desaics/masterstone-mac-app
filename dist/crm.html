@@ -3714,6 +3714,185 @@ body.tauri-runtime .main-content {
 .ms-action-toast-success { border-left-color: #34d399; }
 .ms-action-toast-error   { border-left-color: #f87171; }
 .ms-action-toast-info    { border-left-color: #6366f1; }
+
+/* ===== Session 6: settings modal + conflict modal + cutover banner ===== */
+.ms-modal-bg {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 100050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: msFadeIn 0.18s ease-out;
+}
+@keyframes msFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.ms-modal {
+    background: var(--bg-card, #161a21);
+    color: var(--text-bright, #f0f3f8);
+    border: 1px solid var(--border-soft, #232832);
+    border-radius: 10px;
+    padding: 24px 28px;
+    max-width: 480px;
+    width: 100%;
+    max-height: 88vh;
+    overflow-y: auto;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+.ms-modal h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    color: var(--text-bright, #f0f3f8);
+}
+.ms-modal p {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-dim, #8a93a3);
+    margin-bottom: 14px;
+}
+.ms-modal hr {
+    border: none;
+    border-top: 1px solid var(--border-soft, #232832);
+    margin: 18px 0 14px 0;
+}
+
+.ms-modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    justify-content: flex-end;
+}
+.ms-modal-actions button {
+    padding: 9px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border-soft, #2a2f3a);
+    background: transparent;
+    color: var(--text-bright, #f0f3f8);
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+.ms-modal-actions button.primary {
+    background: var(--accent-indigo, #6366f1);
+    color: #fff;
+    border-color: var(--accent-indigo, #6366f1);
+}
+.ms-modal-actions button.primary:hover { background: #4f46e5; }
+.ms-modal-actions button:hover:not(.primary) { background: rgba(255,255,255,0.06); }
+
+.ms-setting-block {
+    margin-bottom: 14px;
+}
+.ms-setting-block label:not(.ms-radio):not(.ms-checkbox) {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright, #f0f3f8);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+}
+.ms-setting-block input[type="text"],
+.ms-setting-block input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border-soft, #2a2f3a);
+    border-radius: 4px;
+    color: var(--text-bright, #f0f3f8);
+    font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.ms-setting-block input[type="number"] {
+    font-family: inherit;
+    width: 80px;
+}
+.ms-setting-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.ms-setting-row input[type="text"] { flex: 1; }
+.ms-setting-row button {
+    padding: 7px 14px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border-soft, #2a2f3a);
+    color: var(--text-bright, #f0f3f8);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    flex-shrink: 0;
+}
+.ms-setting-row button:hover { background: rgba(255,255,255,0.12); }
+.ms-setting-help {
+    font-size: 11px;
+    color: var(--text-dim, #8a93a3);
+    margin-top: 4px;
+    margin-left: 0;
+    font-weight: normal;
+    text-transform: none;
+    letter-spacing: 0;
+    display: block;
+}
+.ms-radio, .ms-checkbox {
+    display: block;
+    font-size: 13px !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-weight: normal !important;
+    margin-bottom: 8px !important;
+    cursor: pointer;
+    color: var(--text-bright, #f0f3f8) !important;
+}
+.ms-radio input, .ms-checkbox input {
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+/* Cutover banner — second-tier banner below the live-mode banner */
+.ms-cutover-banner {
+    position: fixed;
+    top: 44px; /* below the indigo live-mode banner */
+    left: 0; right: 0;
+    background: rgba(245, 158, 11, 0.92);
+    color: #1a1f2e;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 500;
+    z-index: 99998;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.ms-cutover-banner button {
+    background: rgba(0,0,0,0.15);
+    border: none;
+    color: #1a1f2e;
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    font-family: inherit;
+    flex-shrink: 0;
+}
+.ms-cutover-banner button:hover { background: rgba(0,0,0,0.25); }
+body.tauri-runtime.mac-app-mode .ms-cutover-banner ~ * {
+    /* If the cutover banner is shown alongside the live banner, push down content. */
+}
+body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
+
 </style>
 </head>
 <body>
@@ -3755,13 +3934,14 @@ body.tauri-runtime .main-content {
         banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app · Session 5 · Live mode</strong> &nbsp;·&nbsp; ' +
+            '<strong>Mac app · Session 6 · Live mode</strong> &nbsp;·&nbsp; ' +
             'Edits save to your local database. ' +
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
             '</span>' +
-            '<button onclick="window.__msSnapshot()" title="Generate iPhone snapshot to OneDrive now">📸 Snapshot</button>' +
-            '<button onclick="window.__msReveal()" title="Open ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone in Finder">📁 OneDrive</button>' +
+            '<button onclick="window.__msSnapshot()" title="Generate iPhone snapshot now">📸 Snapshot</button>' +
+            '<button onclick="window.__msReveal()" title="Open OneDrive folder in Finder">📁 OneDrive</button>' +
+            '<button onclick="window.__msOpenSettings()" title="Configure folders, retention, conflict guard">⚙️ Settings</button>' +
             '<button onclick="window.__msShowDbInfo()" title="Show database connection details">DB info</button>' +
             '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
         document.body.appendChild(banner);
@@ -4148,6 +4328,371 @@ body.tauri-runtime .main-content {
             refreshIndicator();
         }
     };
+
+    // ========================================================================
+    // SESSION 6 — additional shim functionality
+    //
+    // 1. Auto-backup on boot (run_backup_check) — silent unless it errors
+    // 2. Attachment loader — re-injects extracted images as data URLs
+    // 3. Conflict guard — periodically checks if .db was modified externally
+    // 4. Settings modal — folder pickers, retention counts, etc.
+    // 5. Production cutover banner — one-time announcement, dismissible
+    // ========================================================================
+
+    // ---- 1. Auto-backup on boot --------------------------------------------
+    // Fires shortly after page load. Silent on success and "skipped today";
+    // toasts an error toast only if backup fails. Doesn't block the UI.
+    setTimeout(async function runBackupOnBoot() {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('run_backup_check');
+            if (r && !r.ok && !r.skipped) {
+                console.error('[ms] backup failed:', r.error);
+                showActionToast('Auto-backup failed: ' + (r.error || 'unknown'), 'error');
+            } else if (r && r.ok && !r.skipped) {
+                console.log('[ms] backup created:', r.path,
+                    r.purged_count > 0 ? '(purged ' + r.purged_count + ' old)' : '');
+            }
+        } catch (e) {
+            console.error('[ms] backup boot error:', e);
+        }
+    }, 3500); // runs after the initial render settles
+
+    // ---- 2. Attachment loader ----------------------------------------------
+    // After storage_load_all populates localStorage with company_profile,
+    // any logo/letterhead/signature fields that hold an "ms-attachment://"
+    // sentinel need to be replaced with the actual base64 data URL read
+    // from disk. This keeps existing CRM code that expects logoDataUrl to
+    // be a data URL working unchanged.
+    //
+    // Runs once on boot, after the populating shim has done its work but
+    // before the user can do anything that reads company_profile.
+    (async function loadAttachmentsIntoLocalStorage() {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('load_attachments_into_data_urls');
+            if (!r || !r.ok || !r.attachments) return;
+            var keys = Object.keys(r.attachments);
+            if (keys.length === 0) return;
+
+            var rawProfile = window.localStorage.getItem('ms_company_profile_v1');
+            if (!rawProfile) return;
+            var profile;
+            try { profile = JSON.parse(rawProfile); } catch (e) { return; }
+            if (!profile || typeof profile !== 'object') return;
+
+            var changed = false;
+            keys.forEach(function (k) {
+                profile[k] = r.attachments[k];
+                changed = true;
+            });
+            if (changed) {
+                // Use realSet to avoid triggering a save-back to SQLite — this is
+                // load-time hydration, not a user edit.
+                realSet.call(window.localStorage, 'ms_company_profile_v1', JSON.stringify(profile));
+            }
+        } catch (e) {
+            console.error('[ms] attachment loader error:', e);
+        }
+    })();
+
+    // ---- 3. Conflict guard -------------------------------------------------
+    // Periodically poll check_db_conflict (every 30s while the app is active).
+    // If a conflict is detected, surface a modal asking the user whether to
+    // reload or override. We pause polling while the modal is open to avoid
+    // re-firing.
+    var conflictModalOpen = false;
+    async function pollConflictGuard() {
+        if (conflictModalOpen) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            // Skip if user has disabled it via settings
+            var settings = await t.invoke('get_app_settings');
+            if (settings && settings.ok && settings.settings &&
+                settings.settings['ms_app__conflict_guard_enabled'] === '0') {
+                return;
+            }
+            var r = await t.invoke('check_db_conflict');
+            if (r && r.ok && r.conflict) {
+                conflictModalOpen = true;
+                showConflictModal(r.detail || 'Database file was modified externally.');
+            }
+        } catch (e) {
+            console.error('[ms] conflict poll error:', e);
+        }
+    }
+    setInterval(pollConflictGuard, 30000);
+    // Also check after 5s post-load — gives time for any startup migrations
+    // (e.g., migrate.py finishing up) to settle, then verifies state.
+    setTimeout(pollConflictGuard, 5000);
+
+    function showConflictModal(detail) {
+        var existing = document.getElementById('msConflictModal');
+        if (existing) existing.remove();
+        var bg = document.createElement('div');
+        bg.id = 'msConflictModal';
+        bg.className = 'ms-modal-bg';
+        bg.innerHTML =
+            '<div class="ms-modal">' +
+              '<h3>⚠️ Database conflict detected</h3>' +
+              '<p>' + escapeHtml(detail) + '</p>' +
+              '<p style="font-size:12px;color:var(--text-dim);">' +
+              'This usually means migrate.py or another tool wrote to the database while the app was open. ' +
+              'Choose <b>Reload</b> to use the new on-disk state (safe). Or <b>Override</b> to keep using your ' +
+              'in-memory state and overwrite on the next save (risk: loses external changes).' +
+              '</p>' +
+              '<div class="ms-modal-actions">' +
+                '<button class="primary" onclick="window.__msResolveConflict(\'reload\')">Reload from disk</button>' +
+                '<button onclick="window.__msResolveConflict(\'override\')">Override (keep my changes)</button>' +
+              '</div>' +
+            '</div>';
+        document.body.appendChild(bg);
+    }
+    window.__msResolveConflict = async function (action) {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            await t.invoke('acknowledge_db_conflict', { action: action });
+            var m = document.getElementById('msConflictModal');
+            if (m) m.remove();
+            conflictModalOpen = false;
+            if (action === 'reload') {
+                // Force a full reload — index.html will re-fetch from SQLite.
+                window.location.href = 'index.html';
+            } else {
+                showActionToast('Override accepted. Your in-memory data will overwrite on next save.', 'info');
+            }
+        } catch (e) {
+            showActionToast('Conflict resolution error: ' + e, 'error');
+            conflictModalOpen = false;
+        }
+    };
+
+    // ---- 4. Settings modal -------------------------------------------------
+    window.__msOpenSettings = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                return;
+            }
+            var settings = await t.invoke('get_app_settings');
+            var s = (settings && settings.ok && settings.settings) ? settings.settings : {};
+
+            var snapshotFolder = s['ms_app__snapshot_folder'] || '';
+            var snapshotRetention = s['ms_app__snapshot_retention'] || '7';
+            var backupFolder = s['ms_app__backup_folder'] || '';
+            var backupMode = s['ms_app__backup_destination_mode'] || 'local';
+            var backupRetention = s['ms_app__backup_retention'] || '14';
+            var conflictGuard = s['ms_app__conflict_guard_enabled'] !== '0'; // default on
+
+            var existing = document.getElementById('msSettingsModal');
+            if (existing) existing.remove();
+            var bg = document.createElement('div');
+            bg.id = 'msSettingsModal';
+            bg.className = 'ms-modal-bg';
+            bg.innerHTML =
+                '<div class="ms-modal" style="max-width:560px;">' +
+                  '<h3>⚙️ Mac App Settings</h3>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label>Snapshot folder</label>' +
+                    '<div class="ms-setting-row">' +
+                      '<input type="text" id="msSetSnapshotFolder" value="' + escapeAttr(snapshotFolder) +
+                      '" placeholder="(default: ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone)" />' +
+                      '<button onclick="window.__msPickFolder(\'msSetSnapshotFolder\')">Browse…</button>' +
+                    '</div>' +
+                    '<div class="ms-setting-help">Empty = use default. Snapshots written here on quit.</div>' +
+                  '</div>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label>Snapshot retention</label>' +
+                    '<input type="number" id="msSetSnapshotRetention" value="' + escapeAttr(snapshotRetention) +
+                      '" min="1" max="365" style="width:80px;" /> snapshots (oldest auto-purged)' +
+                  '</div>' +
+
+                  '<hr/>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label>Auto-backup destination</label>' +
+                    '<div>' +
+                      '<label class="ms-radio"><input type="radio" name="msSetBackupMode" value="local"' +
+                        (backupMode === 'local' ? ' checked' : '') + ' /> Local only ' +
+                        '<span class="ms-setting-help">~/Library/Application Support/com.masterstone.crm/backups/</span></label>' +
+                      '<label class="ms-radio"><input type="radio" name="msSetBackupMode" value="onedrive"' +
+                        (backupMode === 'onedrive' ? ' checked' : '') + ' /> OneDrive ' +
+                        '<span class="ms-setting-help">alongside snapshots, in OneDrive-Masterstone/Masterstone/backups/</span></label>' +
+                    '</div>' +
+                  '</div>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label>Backup folder (override)</label>' +
+                    '<div class="ms-setting-row">' +
+                      '<input type="text" id="msSetBackupFolder" value="' + escapeAttr(backupFolder) +
+                      '" placeholder="(use default for selected destination above)" />' +
+                      '<button onclick="window.__msPickFolder(\'msSetBackupFolder\')">Browse…</button>' +
+                    '</div>' +
+                  '</div>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label>Backup retention</label>' +
+                    '<input type="number" id="msSetBackupRetention" value="' + escapeAttr(backupRetention) +
+                      '" min="1" max="365" style="width:80px;" /> daily backups' +
+                  '</div>' +
+
+                  '<hr/>' +
+
+                  '<div class="ms-setting-block">' +
+                    '<label class="ms-checkbox"><input type="checkbox" id="msSetConflictGuard"' +
+                      (conflictGuard ? ' checked' : '') + ' /> Enable conflict guard ' +
+                      '<span class="ms-setting-help">Warn if migrate.py or another tool modifies the database while the app is open.</span></label>' +
+                  '</div>' +
+
+                  '<div class="ms-modal-actions">' +
+                    '<button class="primary" onclick="window.__msSaveSettings()">Save</button>' +
+                    '<button onclick="window.__msCloseSettings()">Cancel</button>' +
+                  '</div>' +
+
+                  '<hr/>' +
+                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                    '<summary style="cursor:pointer;">Advanced — Production cutover</summary>' +
+                    '<div style="padding-top:8px;line-height:1.55;">' +
+                      'When you\'re ready to switch from the HTML CRM to the Mac app permanently:<br/>' +
+                      '<ol style="padding-left:20px;margin:6px 0;">' +
+                        '<li>Open the HTML CRM, Settings → Backup → Export full backup as JSON</li>' +
+                        '<li>Run <code>migrate.py</code> on that JSON to produce a fresh masterstone.db</li>' +
+                        '<li>In the Mac app, replace the database via the first-launch wizard (delete the old file at ~/Library/Application Support/com.masterstone.crm/masterstone.db first, restart, point picker at the new file)</li>' +
+                        '<li>Archive the HTML version (zip Masterstone_CRM.html + the JSON, label with today\'s date)</li>' +
+                      '</ol>' +
+                      '<button onclick="window.__msMarkProductionCutover()" style="margin-top:6px;">' +
+                        'Mark cutover complete (dismiss reminder banner)' +
+                      '</button>' +
+                    '</div>' +
+                  '</details>' +
+
+                '</div>';
+            document.body.appendChild(bg);
+        } catch (e) {
+            showActionToast('Settings open error: ' + e, 'error');
+            console.error('[ms] settings error:', e);
+        }
+    };
+
+    window.__msCloseSettings = function () {
+        var m = document.getElementById('msSettingsModal');
+        if (m) m.remove();
+    };
+
+    window.__msPickFolder = async function (inputId) {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('pick_folder', { title: 'Choose folder' });
+            if (r && r.ok && r.path) {
+                var input = document.getElementById(inputId);
+                if (input) input.value = r.path;
+            }
+        } catch (e) {
+            showActionToast('Folder picker error: ' + e, 'error');
+        }
+    };
+
+    window.__msSaveSettings = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var snapshotFolder = (document.getElementById('msSetSnapshotFolder') || {}).value || '';
+            var snapshotRetention = (document.getElementById('msSetSnapshotRetention') || {}).value || '7';
+            var backupFolder = (document.getElementById('msSetBackupFolder') || {}).value || '';
+            var backupRetention = (document.getElementById('msSetBackupRetention') || {}).value || '14';
+            var modeRadio = document.querySelector('input[name="msSetBackupMode"]:checked');
+            var backupMode = modeRadio ? modeRadio.value : 'local';
+            var conflictGuard = (document.getElementById('msSetConflictGuard') || {}).checked ? '1' : '0';
+
+            var keys = [
+                ['ms_app__snapshot_folder', snapshotFolder],
+                ['ms_app__snapshot_retention', snapshotRetention],
+                ['ms_app__backup_folder', backupFolder],
+                ['ms_app__backup_retention', backupRetention],
+                ['ms_app__backup_destination_mode', backupMode],
+                ['ms_app__conflict_guard_enabled', conflictGuard]
+            ];
+
+            for (var i = 0; i < keys.length; i++) {
+                await t.invoke('save_app_setting', { key: keys[i][0], value: keys[i][1] });
+            }
+
+            window.__msCloseSettings();
+            showActionToast('Settings saved.', 'success');
+        } catch (e) {
+            showActionToast('Settings save error: ' + e, 'error');
+            console.error('[ms] save settings error:', e);
+        }
+    };
+
+    window.__msMarkProductionCutover = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            await t.invoke('save_app_setting', {
+                key: 'ms_app__production_announcement_dismissed', value: '1'
+            });
+            showActionToast('Production cutover marked complete. Reminder banner suppressed going forward.', 'success');
+            window.__msCloseSettings();
+            // Hide cutover banner if currently visible
+            var cb = document.getElementById('msCutoverBanner');
+            if (cb) cb.remove();
+        } catch (e) {
+            showActionToast('Mark cutover error: ' + e, 'error');
+        }
+    };
+
+    // ---- 5. Production cutover reminder banner -----------------------------
+    // Subtle one-time banner shown until the user dismisses or marks cutover.
+    // Lives below the live-mode banner. Stored flag persists across sessions.
+    setTimeout(async function maybeShowCutoverBanner() {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var settings = await t.invoke('get_app_settings');
+            if (!settings || !settings.ok || !settings.settings) return;
+            if (settings.settings['ms_app__production_announcement_dismissed'] === '1') {
+                return; // already acknowledged
+            }
+            // Show the banner
+            if (document.getElementById('msCutoverBanner')) return;
+            var b = document.createElement('div');
+            b.id = 'msCutoverBanner';
+            b.className = 'ms-cutover-banner';
+            b.innerHTML =
+                '<span><b>📋 Reminder:</b> When you\'re ready, complete the production cutover ' +
+                '(archive HTML version, mark this app as primary). See Settings → Production cutover.</span>' +
+                '<button onclick="window.__msDismissCutoverBanner()" title="Dismiss for this session">×</button>';
+            document.body.appendChild(b);
+        } catch (e) {
+            console.error('[ms] cutover check error:', e);
+        }
+    }, 4000);
+
+    window.__msDismissCutoverBanner = function () {
+        // Just hide for this session — doesn't permanently mark cutover.
+        // To permanently dismiss, user goes through Settings → Production cutover.
+        var b = document.getElementById('msCutoverBanner');
+        if (b) b.remove();
+    };
+
+    // ---- helpers used above ------------------------------------------------
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function escapeAttr(s) {
+        return escapeHtml(s);
+    }
 })();
 </script>
 <!-- ===================================================================== -->
