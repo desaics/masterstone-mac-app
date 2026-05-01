@@ -3934,7 +3934,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app · Session 7 · Live mode</strong> &nbsp;·&nbsp; ' +
+            '<strong>Mac app · Session 8 · Live mode</strong> &nbsp;·&nbsp; ' +
             'Edits save to your local database. ' +
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
@@ -4348,7 +4348,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app · Session 7 · Live mode</strong> &nbsp;·&nbsp; ' +
+            '<strong>Mac app · Session 8 · Live mode</strong> &nbsp;·&nbsp; ' +
             'Edits save to your local database. ' +
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
@@ -4591,22 +4591,29 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
                   '<hr/>' +
                   '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
-                    '<summary style="cursor:pointer;">Advanced — Download OneDrive files</summary>' +
+                    '<summary style="cursor:pointer;">Advanced — Files &amp; folders</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
-                      'Bulk-downloads every OneDrive file referenced in your contracts (POs, invoices, etc.) and organizes them into folders under <code>~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/Files/</code>. After this completes, each affected record gets a parallel <code>_local</code> field pointing at the local copy. Original OneDrive URLs are preserved.<br/><br/>' +
-                      '<b>Prerequisite:</b> the OneDrive links must be set to "Anyone with the link can view" (no Microsoft sign-in required).<br/><br/>' +
-                      '<div id="msMigrationStatus" style="margin:8px 0;display:none;">' +
-                        '<div id="msMigrationMessage">Idle.</div>' +
-                        '<div id="msMigrationProgressBar" style="height:6px;background:rgba(255,255,255,0.08);border-radius:3px;margin-top:6px;overflow:hidden;">' +
-                          '<div id="msMigrationProgressFill" style="height:100%;width:0%;background:var(--accent-indigo,#6366f1);transition:width 0.3s ease;"></div>' +
-                        '</div>' +
-                        '<div id="msMigrationCounts" style="margin-top:6px;font-size:11px;"></div>' +
+                      'Sets up the folder structure for storing local copies of your contract documents (POs, invoices, proposals, etc.). ' +
+                      'After initialization, drop your existing files into the <b>Migration</b> folder; the matching tool (next build) will assign each one to its CRM record and move it to the right place.<br/><br/>' +
+                      '<div id="msFilesStatusBox" style="margin:8px 0;padding:10px 12px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:12px;">' +
+                        '<div id="msFilesStatusBody">Loading status…</div>' +
                       '</div>' +
-                      '<div id="msMigrationActions" style="margin-top:8px;">' +
-                        '<button onclick="window.__msStartFileMigration()" id="msMigrateStartBtn">Download all files</button>' +
-                        '<button onclick="window.__msCancelFileMigration()" id="msMigrateCancelBtn" style="display:none;margin-left:6px;">Cancel</button>' +
+                      '<div style="margin-top:8px;">' +
+                        '<button onclick="window.__msInitializeFolders()" id="msInitFoldersBtn">Initialize / refresh folder structure</button>' +
+                        '<button onclick="window.__msOpenFilesFolder()" id="msOpenFilesBtn" style="margin-left:6px;">Open Files folder</button>' +
+                        '<button onclick="window.__msOpenMigrationFolder()" id="msOpenMigrationBtn" style="margin-left:6px;">Open Migration folder</button>' +
                       '</div>' +
-                      '<div id="msMigrationFailures" style="margin-top:10px;display:none;font-size:11px;"></div>' +
+                      '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
+                      '<div><b>Document categories</b></div>' +
+                      '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
+                        'Each category becomes a sub-folder under every FY (e.g. FY24-25 / Proposals). ' +
+                        'Default categories cannot be removed; user-added ones can.' +
+                      '</div>' +
+                      '<div id="msCategoriesList">Loading categories…</div>' +
+                      '<button onclick="window.__msAddCategory()" id="msAddCategoryBtn" style="margin-top:8px;">+ Add document category</button>' +
+                      '<div style="margin-top:10px;font-size:11px;color:var(--text-dim);font-style:italic;">' +
+                        'Note: the matching tool that proposes file-to-record assignments and moves files from Migration to their final folders ships in the next build.' +
+                      '</div>' +
                     '</div>' +
                   '</details>' +
 
@@ -4629,6 +4636,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
                 '</div>';
             document.body.appendChild(bg);
+            // Session 8: lazy-load the Files & folders status now that the
+            // Settings modal DOM is in place.
+            __msEnsureFilesStatusLoaded();
         } catch (e) {
             showActionToast('Settings open error: ' + e, 'error');
             console.error('[ms] settings error:', e);
@@ -4705,146 +4715,250 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // ========================================================================
-    // SESSION 7 — OneDrive file migration handlers
+    // SESSION 8 — Files & folders setup handlers
     //
     // Workflow:
-    //  1. User clicks "Download all files" → __msStartFileMigration calls
-    //     start_file_migration which begins the background download task.
-    //  2. UI starts polling every 1s via __msPollMigrationProgress to update
-    //     the progress bar, message, and counts.
-    //  3. When the task completes (or is cancelled), polling stops and the
-    //     final state is rendered with any failures listed.
-    //  4. After successful completion, the in-memory localStorage cache for
-    //     contracts is reloaded from SQLite so the UI sees the new _local
-    //     fields without needing a full app restart.
+    //  1. User opens Settings → expands "Files & folders" section
+    //  2. UI loads current setup status (folders exist? how many? pending files?)
+    //     and the configured document categories from the Rust side.
+    //  3. "Initialize folder structure" creates all FY × category folders
+    //     plus the Migration folder. Idempotent — safe to re-run.
+    //  4. "Add document category" prompts for name + path; the Rust side
+    //     persists it and creates the folder under every existing FY.
+    //  5. "Open Files folder" / "Open Migration folder" reveal in Finder.
     // ========================================================================
 
-    var msMigrationPollTimer = null;
+    // Lazy-load the status when the Settings modal opens. We hook into
+    // __msOpenSettings by having the modal call our setup loader after
+    // it's finished building DOM. We do this here by polling for the
+    // status box element after Settings opens.
+    function __msEnsureFilesStatusLoaded() {
+        // Run on next tick so the modal DOM is in place.
+        setTimeout(function () {
+            var box = document.getElementById('msFilesStatusBody');
+            if (!box) return; // modal not open / section not present
+            __msRefreshFilesStatus();
+            __msRefreshCategoriesList();
+        }, 50);
+    }
 
-    window.__msStartFileMigration = async function () {
+    async function __msRefreshFilesStatus() {
+        var box = document.getElementById('msFilesStatusBody');
+        if (!box) return;
         try {
             var t = getTauri();
             if (!t || !t.invoke) {
-                showActionToast('Tauri runtime unavailable', 'error');
+                box.textContent = 'Tauri runtime unavailable.';
                 return;
             }
-            var startBtn = document.getElementById('msMigrateStartBtn');
-            var cancelBtn = document.getElementById('msMigrateCancelBtn');
-            var status = document.getElementById('msMigrationStatus');
-            if (startBtn) startBtn.disabled = true;
-            if (status) status.style.display = 'block';
-
-            var r = await t.invoke('start_file_migration');
-            if (!r || !r.ok) {
-                showActionToast('Could not start migration: ' + ((r && r.error) || 'unknown'), 'error');
-                if (startBtn) startBtn.disabled = false;
+            var s = await t.invoke('get_files_setup_status');
+            if (!s || !s.ok) {
+                box.textContent = 'Could not read status.';
                 return;
             }
-            if (!r.started) {
-                // Nothing to download — total was 0
-                document.getElementById('msMigrationMessage').textContent = 'Nothing to download.';
-                if (startBtn) startBtn.disabled = false;
-                return;
+            var html = '';
+            if (s.initialized) {
+                html += '<div style="color:#34d399;"><b>✓ Folder structure ready</b></div>';
+            } else {
+                html += '<div style="color:#fbbf24;"><b>⚠ Not initialized yet</b> — click below to create folders.</div>';
             }
-            if (cancelBtn) cancelBtn.style.display = '';
-            // Begin polling.
-            __msPollMigrationProgress();
-            if (msMigrationPollTimer) clearInterval(msMigrationPollTimer);
-            msMigrationPollTimer = setInterval(__msPollMigrationProgress, 1000);
+            html += '<div style="margin-top:6px;">';
+            html += 'Files folder: <code style="font-size:10px;">' + escapeHtml(s.files_root || '(unknown)') + '</code>' +
+                (s.files_root_exists ? ' <span style="color:#34d399;">✓</span>' : ' <span style="color:#f87171;">missing</span>') +
+                '<br/>';
+            html += 'Migration folder: <code style="font-size:10px;">' + escapeHtml(s.migration_root || '(unknown)') + '</code>' +
+                (s.migration_root_exists ? ' <span style="color:#34d399;">✓</span>' : ' <span style="color:#f87171;">missing</span>') +
+                '<br/>';
+            html += 'FY folders: <b>' + s.fy_folders_present + '</b> / ' + s.fy_folders_total + '<br/>';
+            html += 'Category sub-folders: <b>' + s.category_folders_present + '</b> / ' + s.category_folders_total + '<br/>';
+            if (s.migration_pending_count > 0) {
+                html += '<div style="margin-top:6px;color:#fbbf24;">📥 <b>' + s.migration_pending_count + '</b> file(s) waiting in Migration folder.</div>';
+            } else {
+                html += '<div style="margin-top:6px;color:var(--text-dim);">Migration folder is empty.</div>';
+            }
+            html += '</div>';
+            box.innerHTML = html;
         } catch (e) {
-            showActionToast('Migration start error: ' + e, 'error');
-            console.error('[ms] migration start error:', e);
-            var sb = document.getElementById('msMigrateStartBtn');
-            if (sb) sb.disabled = false;
-        }
-    };
-
-    window.__msCancelFileMigration = async function () {
-        try {
-            var t = getTauri();
-            if (!t || !t.invoke) return;
-            await t.invoke('cancel_file_migration');
-            showActionToast('Cancellation requested. In-flight downloads will finish.', 'info');
-        } catch (e) {
-            showActionToast('Cancel error: ' + e, 'error');
-        }
-    };
-
-    async function __msPollMigrationProgress() {
-        try {
-            var t = getTauri();
-            if (!t || !t.invoke) return;
-            var r = await t.invoke('get_migration_progress');
-            if (!r || !r.ok) return;
-            if (!r.active) {
-                // No active run — stop polling
-                if (msMigrationPollTimer) { clearInterval(msMigrationPollTimer); msMigrationPollTimer = null; }
-                return;
-            }
-            var p = r.progress || {};
-            var msg = document.getElementById('msMigrationMessage');
-            var fill = document.getElementById('msMigrationProgressFill');
-            var counts = document.getElementById('msMigrationCounts');
-            if (msg) msg.textContent = p.last_message || '';
-            var done = (p.downloaded || 0) + (p.skipped_existing || 0) + (p.failed || 0);
-            var pct = p.total > 0 ? Math.round(100 * done / p.total) : 0;
-            if (fill) fill.style.width = pct + '%';
-            if (counts) {
-                counts.innerHTML =
-                    '<b>' + (p.downloaded || 0) + '</b> downloaded · ' +
-                    '<b>' + (p.skipped_existing || 0) + '</b> already existed · ' +
-                    '<b>' + (p.failed || 0) + '</b> failed · ' +
-                    'of <b>' + (p.total || 0) + '</b> total';
-            }
-            if (p.completed) {
-                // Done — stop polling, show the start button again, render failures.
-                if (msMigrationPollTimer) { clearInterval(msMigrationPollTimer); msMigrationPollTimer = null; }
-                var sb = document.getElementById('msMigrateStartBtn');
-                var cb = document.getElementById('msMigrateCancelBtn');
-                if (sb) { sb.disabled = false; sb.textContent = 'Re-run migration'; }
-                if (cb) cb.style.display = 'none';
-
-                if (p.failures && p.failures.length > 0) {
-                    var failBox = document.getElementById('msMigrationFailures');
-                    if (failBox) {
-                        var html = '<details><summary style="cursor:pointer;color:var(--accent-red,#ef4444);">' +
-                            'Failures (' + p.failures.length + ') — click to expand</summary>' +
-                            '<ul style="padding-left:18px;margin-top:6px;">';
-                        for (var i = 0; i < p.failures.length; i++) {
-                            var f = p.failures[i];
-                            html += '<li style="margin-bottom:4px;"><b>' + escapeHtml(f.reason || 'unknown') +
-                                '</b><br/><span style="opacity:0.7;font-family:ui-monospace,monospace;font-size:10px;">' +
-                                escapeHtml(f.url) + '</span></li>';
-                        }
-                        html += '</ul></details>';
-                        failBox.innerHTML = html;
-                        failBox.style.display = 'block';
-                    }
-                }
-
-                // If we successfully downloaded anything, refresh the in-memory
-                // contracts cache so the rest of the CRM picks up the _local fields.
-                if ((p.downloaded || 0) > 0 || (p.skipped_existing || 0) > 0) {
-                    try {
-                        var loadResult = await t.invoke('storage_load_all');
-                        if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
-                            // Use realSet to avoid triggering a save-back to SQLite —
-                            // this is just refreshing the cache.
-                            realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
-                            showActionToast(
-                                'Migration complete. Local cache refreshed. Some views may need a page reload to show the new local file references.',
-                                'success'
-                            );
-                        }
-                    } catch (e) {
-                        console.error('[ms] refresh after migration failed:', e);
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('[ms] poll progress error:', e);
+            box.textContent = 'Status error: ' + e;
         }
     }
+
+    async function __msRefreshCategoriesList() {
+        var listEl = document.getElementById('msCategoriesList');
+        if (!listEl) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('get_document_categories');
+            if (!r || !r.ok || !r.categories) {
+                listEl.textContent = 'Could not load categories.';
+                return;
+            }
+            var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+            html += '<tr style="text-align:left;color:var(--text-dim);font-size:10px;text-transform:uppercase;">' +
+                '<th style="padding:4px 6px;">Display name</th>' +
+                '<th style="padding:4px 6px;">Folder path</th>' +
+                '<th style="padding:4px 6px;width:1%;">Type</th>' +
+                '<th style="padding:4px 6px;width:1%;"></th>' +
+                '</tr>';
+            for (var i = 0; i < r.categories.length; i++) {
+                var c = r.categories[i];
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">' +
+                    '<td style="padding:6px;">' + escapeHtml(c.display_name) + '</td>' +
+                    '<td style="padding:6px;font-family:ui-monospace,monospace;font-size:11px;">' +
+                        escapeHtml(c.path_segments.join(' / ')) + '</td>' +
+                    '<td style="padding:6px;color:var(--text-dim);font-size:10px;">' +
+                        (c.is_default ? 'default' : 'custom') + '</td>' +
+                    '<td style="padding:6px;">';
+                if (!c.is_default) {
+                    html += '<button onclick="window.__msRemoveCategory(\'' +
+                        c.key.replace(/'/g, "\\'") + '\', \'' +
+                        c.display_name.replace(/'/g, "\\'") + '\')" ' +
+                        'style="font-size:11px;padding:2px 8px;">Remove</button>';
+                }
+                html += '</td></tr>';
+            }
+            html += '</table>';
+            listEl.innerHTML = html;
+        } catch (e) {
+            listEl.textContent = 'Categories error: ' + e;
+        }
+    }
+
+    window.__msInitializeFolders = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var btn = document.getElementById('msInitFoldersBtn');
+            if (btn) btn.disabled = true;
+            var r = await t.invoke('initialize_files_folders');
+            if (btn) btn.disabled = false;
+            if (!r || !r.ok) {
+                showActionToast('Initialize failed: ' + ((r && r.error) || 'unknown'), 'error');
+                return;
+            }
+            var msg = 'Folders ready. Created ' + r.created_count + ' new, ' +
+                r.skipped_count + ' already existed.';
+            showActionToast(msg, 'success');
+            __msRefreshFilesStatus();
+        } catch (e) {
+            showActionToast('Initialize error: ' + e, 'error');
+            var btn2 = document.getElementById('msInitFoldersBtn');
+            if (btn2) btn2.disabled = false;
+        }
+    };
+
+    window.__msOpenFilesFolder = async function () {
+        await __msRevealConfiguredPath('files');
+    };
+
+    window.__msOpenMigrationFolder = async function () {
+        await __msRevealConfiguredPath('migration');
+    };
+
+    async function __msRevealConfiguredPath(which) {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var s = await t.invoke('get_files_setup_status');
+            if (!s || !s.ok) {
+                showActionToast('Could not resolve folder path.', 'error');
+                return;
+            }
+            var path = which === 'migration' ? s.migration_root : s.files_root;
+            if (!path) {
+                showActionToast('Folder path is not set.', 'error');
+                return;
+            }
+            var rev = await t.invoke('reveal_path', { path: path });
+            if (!rev || !rev.ok) {
+                if (rev && rev.error && rev.error.indexOf('not exist') >= 0) {
+                    showActionToast('Folder does not exist yet — click "Initialize" first.', 'error');
+                } else {
+                    showActionToast('Open error: ' + ((rev && rev.error) || 'unknown'), 'error');
+                }
+            }
+        } catch (e) {
+            showActionToast('Open error: ' + e, 'error');
+        }
+    }
+
+    window.__msAddCategory = async function () {
+        // Two-step prompt — display name + path. Could be a modal but
+        // a simple prompt sequence is enough for this use case.
+        var displayName = window.prompt(
+            'New category display name (1-80 chars):\n' +
+            'Examples: "Service Reports", "NDAs", "Authorization Letters"',
+            ''
+        );
+        if (displayName == null) return; // cancelled
+        displayName = displayName.trim();
+        if (!displayName) { showActionToast('Display name required.', 'error'); return; }
+
+        var pathInput = window.prompt(
+            'Folder path under each FY (use slashes for nesting; max 4 levels).\n' +
+            'Examples:\n' +
+            '  ServiceReports\n' +
+            '  Documents/Legal/NDAs\n' +
+            '  Authorizations',
+            displayName.replace(/[^A-Za-z0-9]/g, '')
+        );
+        if (pathInput == null) return; // cancelled
+        var segments = pathInput.split('/').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+        if (segments.length === 0) { showActionToast('Folder path required.', 'error'); return; }
+
+        // Auto-derive a key from the display name.
+        var key = displayName.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+        if (!key) {
+            showActionToast('Could not derive a valid category key from the name.', 'error');
+            return;
+        }
+        if (key.length > 40) key = key.substring(0, 40);
+
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('add_document_category', {
+                key: key,
+                displayName: displayName,
+                pathSegments: segments
+            });
+            if (!r || !r.ok) {
+                showActionToast('Add category failed: ' + ((r && r.error) || 'unknown'), 'error');
+                return;
+            }
+            showActionToast(
+                'Category added. Created ' + (r.folders_created || 0) +
+                ' folder(s) under existing FYs.',
+                'success'
+            );
+            __msRefreshCategoriesList();
+            __msRefreshFilesStatus();
+        } catch (e) {
+            showActionToast('Add category error: ' + e, 'error');
+        }
+    };
+
+    window.__msRemoveCategory = async function (key, displayName) {
+        if (!window.confirm(
+            'Remove category "' + displayName + '"?\n\n' +
+            'Existing folders on disk will be PRESERVED — files inside them are safe. ' +
+            'You can delete the empty folders manually if no longer needed.'
+        )) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('remove_document_category', { key: key });
+            if (!r || !r.ok) {
+                showActionToast('Remove failed: ' + ((r && r.error) || 'unknown'), 'error');
+                return;
+            }
+            showActionToast('Category removed.', 'success');
+            __msRefreshCategoriesList();
+        } catch (e) {
+            showActionToast('Remove error: ' + e, 'error');
+        }
+    };
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.

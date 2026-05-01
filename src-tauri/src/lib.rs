@@ -2264,684 +2264,493 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+
 // ============================================================================
-// Session 7 — OneDrive file migration
+// Session 8 — Files folder structure + document categories
 //
-// Bulk-downloads every OneDrive file referenced in the CRM data, organizes
-// them into folders under `~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/Files/`,
-// and writes a parallel `_local` field on each affected record so the UI can
-// later show both local-file and OneDrive-URL options side by side.
+// Replaces the broken Session 7 download approach with a local-files-first
+// model. The user dumps files into a "Migration/" folder, the matching tool
+// (Session 8 Build B, separate deliverable) proposes record matches, and on
+// confirmation files are moved to their permanent home in:
 //
-// Sources of links (per backup data inspection):
-//   - contracts[*].internalPOLink                  → POs/Internal/
-//   - contracts[*].clientPOLink                    → POs/Client/
-//   - contracts[*].clientPOs[*].poLink             → POs/Client/
-//   - contracts[*].billingYears[*].clientInvoiceLink → Invoices/Client/
-//   - contracts[*].billingYears[*].oemInvoiceLink    → Invoices/OEM/
+//   <files_root>/<FY-folder>/<category-path>/
 //
-// Concurrency: 4 parallel downloads, conservative to avoid OneDrive
-// rate-limiting. With 171 unique URLs averaging 200KB each, a fresh run
-// takes 1-3 minutes.
+// Defaults:
+//   files_root        = OneDrive-Masterstone/Masterstone/Files/
+//   migration_root    = OneDrive-Masterstone/Masterstone/Migration/
+//   FY folders        = FY20-21 through FY26-27 (7 folders)
+//   default categories: Proposals, POs/Internal, POs/Client, Invoices/Client,
+//                       Invoices/OEM (5 categories)
 //
-// Idempotency: if the target file already exists on disk, the download is
-// skipped and the record is just updated with the existing path. So re-running
-// the migration is safe (and useful for filling in records added since the
-// last run).
-//
-// Cancellability: a shared atomic flag is checked between requests. The UI
-// gets a Cancel button that flips the flag.
+// Categories are stored in app_settings under key "ms_app__document_categories"
+// as a JSON array. Users can add/remove categories via Settings UI.
+// Adding a category creates the folder under every existing FY.
 // ============================================================================
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+/// The 7 financial year folder names used by Build 2A.
+/// Format: FYxx-yy where xx is start year (2 digits) and yy is end year (2 digits).
+const FY_FOLDERS: &[&str] = &[
+    "FY20-21", "FY21-22", "FY22-23", "FY23-24",
+    "FY24-25", "FY25-26", "FY26-27",
+];
 
-#[derive(Default)]
-struct FileMigrationState {
-    inner: Mutex<Option<Arc<MigrationRun>>>,
+/// Default document categories seeded on first initialization.
+/// Each tuple = (key, display_name, path_segments).
+fn default_categories() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
+    vec![
+        ("proposals",       "Proposals",       vec!["Proposals"]),
+        ("pos_internal",    "POs / Internal",  vec!["POs", "Internal"]),
+        ("pos_client",      "POs / Client",    vec!["POs", "Client"]),
+        ("invoices_client", "Invoices / Client", vec!["Invoices", "Client"]),
+        ("invoices_oem",    "Invoices / OEM",  vec!["Invoices", "OEM"]),
+    ]
 }
 
-struct MigrationRun {
-    total: AtomicUsize,
-    downloaded: AtomicUsize,
-    skipped_existing: AtomicUsize,
-    failed: AtomicUsize,
-    cancel_flag: AtomicBool,
-    completed: AtomicBool,
-    failures: Mutex<Vec<MigrationFailure>>,
-    started_at: Mutex<Option<String>>,
-    finished_at: Mutex<Option<String>>,
-    last_message: Mutex<Option<String>>,
-}
-
-#[derive(Clone, Serialize)]
-struct MigrationFailure {
-    url: String,
-    target_path: String,
-    reason: String,
-}
-
-impl MigrationRun {
-    fn new() -> Self {
-        Self {
-            total: AtomicUsize::new(0),
-            downloaded: AtomicUsize::new(0),
-            skipped_existing: AtomicUsize::new(0),
-            failed: AtomicUsize::new(0),
-            cancel_flag: AtomicBool::new(false),
-            completed: AtomicBool::new(false),
-            failures: Mutex::new(Vec::new()),
-            started_at: Mutex::new(Some(now_iso())),
-            finished_at: Mutex::new(None),
-            last_message: Mutex::new(Some("Initializing…".to_string())),
-        }
-    }
-
-    fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({
-            "total": self.total.load(Ordering::SeqCst),
-            "downloaded": self.downloaded.load(Ordering::SeqCst),
-            "skipped_existing": self.skipped_existing.load(Ordering::SeqCst),
-            "failed": self.failed.load(Ordering::SeqCst),
-            "cancelled": self.cancel_flag.load(Ordering::SeqCst),
-            "completed": self.completed.load(Ordering::SeqCst),
-            "failures": self.failures.lock().ok().map(|f| f.clone()).unwrap_or_default(),
-            "started_at": self.started_at.lock().ok().and_then(|s| s.clone()),
-            "finished_at": self.finished_at.lock().ok().and_then(|s| s.clone()),
-            "last_message": self.last_message.lock().ok().and_then(|s| s.clone()),
-        })
-    }
-
-    fn set_message(&self, msg: &str) {
-        if let Ok(mut m) = self.last_message.lock() {
-            *m = Some(msg.to_string());
-        }
-    }
-
-    fn record_failure(&self, url: String, target_path: String, reason: String) {
-        if let Ok(mut f) = self.failures.lock() {
-            f.push(MigrationFailure { url, target_path, reason });
-        }
-    }
-}
-
-/// Where downloaded files live. Returns None if no usable OneDrive folder.
-fn migration_files_root() -> Option<PathBuf> {
+/// Resolve the configured files root. Defaults to
+/// OneDrive-Masterstone/Masterstone/Files/.
+fn files_root() -> Option<PathBuf> {
     snapshot_dir().map(|p| p.join("Files"))
 }
 
-/// Sanitize a string for use as a filename component. Replaces unsafe chars,
-/// collapses whitespace, trims to a reasonable length.
-fn safe_filename_part(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => out.push('_'),
-            c if c.is_control() => {},
-            c => out.push(c),
-        }
-    }
-    let trimmed = out.trim().trim_matches('.').to_string();
-    if trimmed.len() > 80 {
-        trimmed.chars().take(80).collect()
-    } else {
-        trimmed
-    }
+/// Resolve the migration dump folder. User drops unsorted files here.
+fn migration_root() -> Option<PathBuf> {
+    snapshot_dir().map(|p| p.join("Migration"))
 }
 
-/// Plan: for a given URL and its source context (which contract, which year,
-/// what kind of doc), produce the target folder path and a stable filename
-/// stem. Filename is finalized later when we know the actual filename from
-/// Content-Disposition.
-#[derive(Clone, Debug)]
-struct DownloadPlan {
-    url: String,
-    target_dir: PathBuf,
-    filename_stem: String,           // e.g. "63Moons_C03_Y2_clientInvoice"
-    source_field_path: String,       // e.g. "contracts[3].billingYears[1].clientInvoiceLink"
-                                     // Used to locate the record for writing back the _local field.
+/// Document category record stored in app_settings JSON.
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct DocumentCategory {
+    key: String,
+    display_name: String,
+    path_segments: Vec<String>,
+    /// True if this is a default category (not user-added). Defaults can be
+    /// renamed but not removed.
+    is_default: bool,
 }
 
-/// Walk the contracts data and emit DownloadPlans for every link field.
-/// Transform a OneDrive share URL into a direct-download URL.
-///
-/// For 1drv.ms short-codes (the format used in this CRM), appending
-/// `&download=1` (or `?download=1` if no query yet) tells Microsoft's
-/// redirect chain to skip the in-browser preview page and serve the file
-/// content directly. This works for both personal and business share
-/// links as of mid-2025+.
-///
-/// For non-OneDrive URLs, returns the URL unchanged.
-fn build_download_url(original: &str) -> String {
-    if !original.contains("1drv.ms")
-        && !original.contains("onedrive.live.com")
-        && !original.contains("sharepoint.com")
-    {
-        return original.to_string();
-    }
-    if original.contains("download=") {
-        return original.to_string(); // already set
-    }
-    let sep = if original.contains('?') { '&' } else { '?' };
-    format!("{original}{sep}download=1")
-}
-
-fn plan_downloads(contracts: &[serde_json::Value], files_root: &PathBuf) -> Vec<DownloadPlan> {
-    let mut plans = Vec::new();
-
-    for (idx, c) in contracts.iter().enumerate() {
-        let client_name = c.get("client").or_else(|| c.get("clientName"))
-            .and_then(|v| v.as_str()).unwrap_or("Unknown");
-        // Make a short identifier — use first ~16 chars of client name, sanitized.
-        let client_short = safe_filename_part(client_name);
-        let client_short: String = client_short.chars().take(20).collect();
-        let cid = format!("{}_C{:03}", client_short.trim().replace(' ', ""), idx);
-
-        // 1. internalPOLink
-        if let Some(url) = c.get("internalPOLink").and_then(|v| v.as_str()) {
-            if !url.is_empty() && url.starts_with("http") {
-                plans.push(DownloadPlan {
-                    url: build_download_url(url),
-                    target_dir: files_root.join("POs").join("Internal"),
-                    filename_stem: format!("{cid}_internalPO"),
-                    source_field_path: format!("contracts[{idx}].internalPOLink"),
-                });
-            }
-        }
-
-        // 2. clientPOLink (legacy single)
-        if let Some(url) = c.get("clientPOLink").and_then(|v| v.as_str()) {
-            if !url.is_empty() && url.starts_with("http") {
-                plans.push(DownloadPlan {
-                    url: build_download_url(url),
-                    target_dir: files_root.join("POs").join("Client"),
-                    filename_stem: format!("{cid}_clientPO"),
-                    source_field_path: format!("contracts[{idx}].clientPOLink"),
-                });
-            }
-        }
-
-        // 3. clientPOs[*].poLink (newer multi-PO structure)
-        if let Some(arr) = c.get("clientPOs").and_then(|v| v.as_array()) {
-            for (po_idx, po) in arr.iter().enumerate() {
-                if let Some(url) = po.get("poLink").and_then(|v| v.as_str()) {
-                    if !url.is_empty() && url.starts_with("http") {
-                        plans.push(DownloadPlan {
-                            url: build_download_url(url),
-                            target_dir: files_root.join("POs").join("Client"),
-                            filename_stem: format!("{cid}_clientPO_{po_idx:02}"),
-                            source_field_path: format!("contracts[{idx}].clientPOs[{po_idx}].poLink"),
-                        });
-                    }
-                }
-            }
-        }
-
-        // 4. billingYears[*].clientInvoiceLink + .oemInvoiceLink
-        if let Some(years) = c.get("billingYears").and_then(|v| v.as_array()) {
-            for (y_idx, y) in years.iter().enumerate() {
-                if let Some(url) = y.get("clientInvoiceLink").and_then(|v| v.as_str()) {
-                    if !url.is_empty() && url.starts_with("http") {
-                        plans.push(DownloadPlan {
-                            url: build_download_url(url),
-                            target_dir: files_root.join("Invoices").join("Client"),
-                            filename_stem: format!("{cid}_Y{y_idx:02}_clientInv"),
-                            source_field_path: format!(
-                                "contracts[{idx}].billingYears[{y_idx}].clientInvoiceLink"
-                            ),
-                        });
-                    }
-                }
-                if let Some(url) = y.get("oemInvoiceLink").and_then(|v| v.as_str()) {
-                    if !url.is_empty() && url.starts_with("http") {
-                        plans.push(DownloadPlan {
-                            url: build_download_url(url),
-                            target_dir: files_root.join("Invoices").join("OEM"),
-                            filename_stem: format!("{cid}_Y{y_idx:02}_oemInv"),
-                            source_field_path: format!(
-                                "contracts[{idx}].billingYears[{y_idx}].oemInvoiceLink"
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    plans
-}
-
-/// Parse a Content-Disposition header to extract the filename. Falls back to
-/// None if the header is missing or unparseable. Handles both quoted and
-/// RFC5987-encoded filenames.
-fn parse_content_disposition_filename(value: &str) -> Option<String> {
-    // Look for filename*=UTF-8''... first (RFC 5987)
-    if let Some(start) = value.find("filename*=") {
-        let rest = &value[start + 10..];
-        let end = rest.find(';').unwrap_or(rest.len());
-        let token = &rest[..end];
-        if let Some(quote_end) = token.rfind("''") {
-            let encoded = &token[quote_end + 2..];
-            // URL-decode percent-escapes, leaving the filename
-            let decoded = url_decode(encoded);
-            if !decoded.is_empty() { return Some(decoded); }
-        }
-    }
-    // Fall back to filename="..."
-    if let Some(start) = value.find("filename=") {
-        let rest = &value[start + 9..];
-        let trimmed = rest.trim_start_matches('"');
-        let end = trimmed.find(['"', ';']).unwrap_or(trimmed.len());
-        let name = &trimmed[..end];
-        if !name.is_empty() { return Some(name.to_string()); }
-    }
-    None
-}
-
-/// Minimal URL percent-decoder. Preserves non-encoded chars as-is.
-fn url_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let h1 = (bytes[i + 1] as char).to_digit(16);
-            let h2 = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(h1), Some(h2)) = (h1, h2) {
-                out.push((h1 * 16 + h2) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
-/// Determine an extension from a filename, defaulting to "bin".
-fn extension_from_filename(name: &str) -> &str {
-    name.rsplit('.').next().filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or("bin")
-}
-
-#[tauri::command]
-async fn start_file_migration<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: tauri::State<'_, FileMigrationState>,
-) -> Result<serde_json::Value, String> {
-    // 1. If a run is already in progress (and not completed), refuse.
-    {
-        let guard = state.inner.lock().map_err(|e| format!("Mutex: {e}"))?;
-        if let Some(run) = guard.as_ref() {
-            if !run.completed.load(Ordering::SeqCst) {
-                return Ok(serde_json::json!({
-                    "ok": false,
-                    "error": "Another migration is already running. Cancel it or wait."
-                }));
-            }
-        }
-    }
-
-    // 2. Resolve the files root.
-    let files_root = match migration_files_root() {
+/// Load the configured document categories from app_settings.
+/// On first run (no setting present), returns the seeded default list.
+fn load_document_categories() -> Vec<DocumentCategory> {
+    let path = match db_path() {
         Some(p) => p,
-        None => return Ok(serde_json::json!({
-            "ok": false,
-            "error": "OneDrive folder not found. Cannot create Files/ subfolder."
-        })),
+        None => return seed_default_categories(),
     };
-
-    // 3. Read contracts from SQLite.
-    let dbp = match db_path() {
-        Some(p) => p,
-        None => return Ok(serde_json::json!({"ok": false, "error": "no db path"})),
-    };
-    let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    if !path.exists() {
+        return seed_default_categories();
+    }
+    let con = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,
-        Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("open db: {e}")})),
+        Err(_) => return seed_default_categories(),
     };
-    let mut contracts: Vec<serde_json::Value> = Vec::new();
-    {
-        let mut stmt = match con.prepare("SELECT raw_data FROM contracts ORDER BY legacy_idx ASC") {
-            Ok(s) => s,
-            Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("prepare: {e}")})),
-        };
-        let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
-            Ok(r) => r,
-            Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("query: {e}")})),
-        };
-        for row in rows {
-            let raw = match row { Ok(s) => s, Err(_) => continue };
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                contracts.push(v);
-            }
-        }
-    }
-
-    // 4. Plan downloads.
-    let plans = plan_downloads(&contracts, &files_root);
-    let total = plans.len();
-
-    // 5. Create the run state.
-    let run = Arc::new(MigrationRun::new());
-    run.total.store(total, Ordering::SeqCst);
-    run.set_message(&format!("Found {} files to download.", total));
-    {
-        let mut guard = state.inner.lock().map_err(|e| format!("Mutex: {e}"))?;
-        *guard = Some(run.clone());
-    }
-
-    if total == 0 {
-        run.completed.store(true, Ordering::SeqCst);
-        if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
-        run.set_message("Nothing to download.");
-        return Ok(serde_json::json!({"ok": true, "started": false, "total": 0}));
-    }
-
-    // 6. Spawn the background task.
-    let app_handle = app.clone();
-    let run_clone = run.clone();
-    tauri::async_runtime::spawn(async move {
-        run_migration_task(run_clone, plans, app_handle).await;
-    });
-
-    Ok(serde_json::json!({"ok": true, "started": true, "total": total}))
-}
-
-async fn run_migration_task<R: tauri::Runtime>(
-    run: Arc<MigrationRun>,
-    plans: Vec<DownloadPlan>,
-    _app: tauri::AppHandle<R>,
-) {
-    use futures_util::stream::{self, StreamExt};
-
-    let client = match reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(8))
-        .timeout(std::time::Duration::from_secs(60))
-        .user_agent("Masterstone-CRM/0.6 (file-migration)")
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            run.set_message(&format!("Could not initialize HTTP client: {e}"));
-            run.completed.store(true, Ordering::SeqCst);
-            if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
-            return;
-        }
+    let raw: String = match con.query_row(
+        "SELECT value FROM app_settings WHERE key = 'ms_app__document_categories'",
+        [],
+        |r| r.get(0),
+    ) {
+        Ok(v) => v,
+        Err(_) => return seed_default_categories(),
     };
-
-    // Run downloads with bounded concurrency (4 at a time).
-    let cancel_flag = run.clone();
-    let downloads = stream::iter(plans.into_iter().enumerate())
-        .map(|(i, plan)| {
-            let client = client.clone();
-            let run = run.clone();
-            let cancel = cancel_flag.clone();
-            async move {
-                if cancel.cancel_flag.load(Ordering::SeqCst) {
-                    return (i, plan, Err("Cancelled".to_string()));
-                }
-                run.set_message(&format!("Downloading file {} of {}…", i + 1, run.total.load(Ordering::SeqCst)));
-                let result = download_one(&client, &plan).await;
-                (i, plan, result)
-            }
-        })
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await;
-
-    // Count outcomes and accumulate the local-path map for record updates.
-    // Map: source_field_path → local file absolute path.
-    let mut local_path_updates: BTreeMap<String, String> = BTreeMap::new();
-    for (_i, plan, result) in &downloads {
-        match result {
-            Ok(DownloadOutcome::Downloaded(path)) => {
-                run.downloaded.fetch_add(1, Ordering::SeqCst);
-                local_path_updates.insert(plan.source_field_path.clone(), path.to_string_lossy().to_string());
-            },
-            Ok(DownloadOutcome::SkippedExisting(path)) => {
-                run.skipped_existing.fetch_add(1, Ordering::SeqCst);
-                local_path_updates.insert(plan.source_field_path.clone(), path.to_string_lossy().to_string());
-            },
-            Err(e) => {
-                run.failed.fetch_add(1, Ordering::SeqCst);
-                run.record_failure(plan.url.clone(), plan.target_dir.to_string_lossy().to_string(), e.clone());
-            }
-        }
-    }
-
-    // Apply the _local field updates back to the contracts table.
-    if !local_path_updates.is_empty() {
-        run.set_message(&format!("Updating {} record fields…", local_path_updates.len()));
-        if let Err(e) = apply_local_field_updates(&local_path_updates) {
-            run.set_message(&format!("Updates failed: {e}"));
-        }
-    }
-
-    run.completed.store(true, Ordering::SeqCst);
-    if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
-
-    let downloaded = run.downloaded.load(Ordering::SeqCst);
-    let skipped = run.skipped_existing.load(Ordering::SeqCst);
-    let failed = run.failed.load(Ordering::SeqCst);
-    let cancelled = run.cancel_flag.load(Ordering::SeqCst);
-    if cancelled {
-        run.set_message(&format!(
-            "Cancelled. Downloaded {downloaded}, skipped {skipped} (already existed), failed {failed}."
-        ));
-    } else {
-        run.set_message(&format!(
-            "Done. Downloaded {downloaded}, skipped {skipped} (already existed), failed {failed}."
-        ));
+    match serde_json::from_str::<Vec<DocumentCategory>>(&raw) {
+        Ok(list) if !list.is_empty() => list,
+        _ => seed_default_categories(),
     }
 }
 
-enum DownloadOutcome {
-    Downloaded(PathBuf),
-    SkippedExisting(PathBuf),
+fn seed_default_categories() -> Vec<DocumentCategory> {
+    default_categories().into_iter().map(|(k, n, p)| DocumentCategory {
+        key: k.to_string(),
+        display_name: n.to_string(),
+        path_segments: p.iter().map(|s| s.to_string()).collect(),
+        is_default: true,
+    }).collect()
 }
 
-async fn download_one(
-    client: &reqwest::Client,
-    plan: &DownloadPlan,
-) -> Result<DownloadOutcome, String> {
-    // Make sure target dir exists.
-    if let Err(e) = std::fs::create_dir_all(&plan.target_dir) {
-        return Err(format!("create dir: {e}"));
-    }
-
-    // First pass: check if any file with our stem prefix already exists in the
-    // target dir. If yes, skip the download and reuse it.
-    if let Some(existing) = find_existing_with_stem(&plan.target_dir, &plan.filename_stem) {
-        return Ok(DownloadOutcome::SkippedExisting(existing));
-    }
-
-    // GET the URL — reqwest follows redirects automatically up to the limit.
-    let resp = client.get(&plan.url).send().await
-        .map_err(|e| format!("HTTP error: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    // Try to extract filename from Content-Disposition. Fallback to URL guess.
-    let original_name = resp.headers().get(reqwest::header::CONTENT_DISPOSITION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(parse_content_disposition_filename);
-
-    let ext = match original_name.as_deref() {
-        Some(n) => extension_from_filename(n).to_string(),
-        None => "pdf".to_string(),  // default — most stored docs are PDFs
-    };
-
-    let filename = format!("{}.{}", plan.filename_stem, ext);
-    let target_path = plan.target_dir.join(&filename);
-
-    // Stream the body to disk.
-    use futures_util::StreamExt;
-    let mut stream = resp.bytes_stream();
-    let mut buf = Vec::with_capacity(256 * 1024);
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("read chunk: {e}"))?;
-        buf.extend_from_slice(&chunk);
-        if buf.len() > 50 * 1024 * 1024 {
-            return Err("File exceeds 50 MB safety limit".to_string());
-        }
-    }
-    std::fs::write(&target_path, &buf).map_err(|e| format!("write: {e}"))?;
-
-    Ok(DownloadOutcome::Downloaded(target_path))
-}
-
-fn find_existing_with_stem(dir: &PathBuf, stem: &str) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-            // Match "stem.ext" — name starts with stem + "."
-            if name.starts_with(&format!("{stem}.")) {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-/// Apply local-path updates to the contracts table by re-reading raw_data,
-/// patching the appropriate field at the given dotted path, and writing back.
-/// Field paths look like:
-///   contracts[3].internalPOLink
-///   contracts[3].clientPOs[1].poLink
-///   contracts[3].billingYears[2].oemInvoiceLink
-///
-/// Each gets a sibling field with "Local" suffix written, e.g. internalPOLinkLocal.
-fn apply_local_field_updates(updates: &BTreeMap<String, String>) -> Result<(), String> {
+/// Persist a category list to app_settings. Caller is responsible for
+/// validation; this just writes whatever it's given.
+fn save_document_categories(cats: &[DocumentCategory]) -> Result<(), String> {
+    let json = serde_json::to_string(cats).map_err(|e| format!("serialize: {e}"))?;
     let dbp = db_path().ok_or("no db path")?;
-    let mut con = Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_WRITE)
+    let con = Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open: {e}"))?;
-    let _ : String = con.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))
+    let _: String = con.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get(0))
         .map_err(|e| format!("wal: {e}"))?;
-
-    // Group updates by contract idx.
-    let mut by_contract: BTreeMap<usize, Vec<(String, String)>> = BTreeMap::new();
-    for (path, local) in updates {
-        // path = contracts[N].rest...
-        let stripped = path.trim_start_matches("contracts[");
-        let close_idx = stripped.find(']').ok_or("malformed path")?;
-        let idx_str = &stripped[..close_idx];
-        let idx: usize = idx_str.parse().map_err(|e| format!("idx parse: {e}"))?;
-        let rest = &stripped[close_idx + 2..]; // skip "].",
-        by_contract.entry(idx).or_default().push((rest.to_string(), local.clone()));
-    }
-
-    let tx = con.transaction().map_err(|e| format!("tx: {e}"))?;
-    for (idx, field_updates) in by_contract {
-        // Read the raw_data for this contract by legacy_idx.
-        let raw: String = match tx.query_row(
-            "SELECT raw_data FROM contracts WHERE legacy_idx = ?1",
-            params![idx as i64],
-            |r| r.get(0),
-        ) {
-            Ok(s) => s,
-            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
-            Err(e) => return Err(format!("query contract {idx}: {e}")),
-        };
-
-        let mut value: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("parse contract {idx}: {e}"))?;
-
-        for (field_subpath, local_path) in &field_updates {
-            apply_local_at_subpath(&mut value, field_subpath, local_path);
-        }
-
-        let new_raw = value.to_string();
-        tx.execute(
-            "UPDATE contracts SET raw_data = ?1, modified_at = ?2 WHERE legacy_idx = ?3",
-            params![new_raw, now_iso(), idx as i64],
-        ).map_err(|e| format!("update contract {idx}: {e}"))?;
-    }
-    tx.commit().map_err(|e| format!("commit: {e}"))?;
+    con.execute(
+        "INSERT INTO app_settings (key, value, modified_at)
+         VALUES ('ms_app__document_categories', ?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, modified_at = excluded.modified_at",
+        params![json, now_iso()],
+    ).map_err(|e| format!("write: {e}"))?;
     Ok(())
 }
 
-/// Apply a single update, e.g. subpath = "internalPOLink", "clientPOs[2].poLink",
-/// "billingYears[1].clientInvoiceLink". The function writes a sibling field
-/// with "Local" appended to the leaf field name.
-fn apply_local_at_subpath(value: &mut serde_json::Value, subpath: &str, local_path: &str) {
-    // Split into segments. Each segment is either "field" or "field[N]".
-    // The last segment is the target field (a string url); we write a sibling
-    // {field}Local on the same parent object.
-    let segments: Vec<&str> = subpath.split('.').collect();
-    if segments.is_empty() { return; }
+/// Validate a path segment for safety.
+/// Disallows: empty, ., .., absolute paths, slashes, special chars.
+/// Returns Ok(()) if safe, Err with reason otherwise.
+fn validate_path_segment(seg: &str) -> Result<(), String> {
+    let s = seg.trim();
+    if s.is_empty() {
+        return Err("Path segment cannot be empty.".into());
+    }
+    if s == "." || s == ".." {
+        return Err("Path segment cannot be . or ..".into());
+    }
+    if s.contains('/') || s.contains('\\') {
+        return Err("Path segment cannot contain slashes.".into());
+    }
+    if s.contains('\0') {
+        return Err("Path segment contains null character.".into());
+    }
+    if s.starts_with('.') {
+        return Err("Path segment cannot start with a dot.".into());
+    }
+    // Reject characters that don't behave on macOS/Windows in filenames.
+    let bad_chars = ['<', '>', ':', '"', '|', '?', '*'];
+    for c in bad_chars {
+        if s.contains(c) {
+            return Err(format!("Path segment cannot contain '{c}'."));
+        }
+    }
+    if s.len() > 80 {
+        return Err("Path segment too long (max 80 chars).".into());
+    }
+    Ok(())
+}
 
-    fn navigate<'a>(v: &'a mut serde_json::Value, seg: &str) -> Option<&'a mut serde_json::Value> {
-        // seg may have an [N] suffix
-        if let Some(open) = seg.find('[') {
-            let close = seg.find(']')?;
-            let key = &seg[..open];
-            let idx: usize = seg[open + 1..close].parse().ok()?;
-            let arr = v.get_mut(key)?.as_array_mut()?;
-            arr.get_mut(idx)
-        } else {
-            v.get_mut(seg)
+/// Validate a category key — used as a stable identifier in settings.
+/// Lowercase letters, digits, underscores only.
+fn validate_category_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("Category key cannot be empty.".into());
+    }
+    if key.len() > 40 {
+        return Err("Category key too long (max 40 chars).".into());
+    }
+    for c in key.chars() {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            return Err("Category key must use only lowercase letters, digits, and underscores.".into());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct InitFoldersResult {
+    ok: bool,
+    error: Option<String>,
+    /// Number of folders created (newly). Already-existing folders are not counted.
+    created_count: usize,
+    /// Number of folders that already existed (no-op).
+    skipped_count: usize,
+    /// Absolute path to the files root.
+    files_root: Option<String>,
+    /// Absolute path to the migration root.
+    migration_root: Option<String>,
+}
+
+#[tauri::command]
+fn initialize_files_folders() -> InitFoldersResult {
+    // 1. Resolve roots.
+    let files = match files_root() {
+        Some(p) => p,
+        None => return InitFoldersResult {
+            ok: false, error: Some("Could not resolve OneDrive-Masterstone folder.".into()),
+            created_count: 0, skipped_count: 0,
+            files_root: None, migration_root: None,
+        },
+    };
+    let migration = match migration_root() {
+        Some(p) => p,
+        None => return InitFoldersResult {
+            ok: false, error: Some("Could not resolve OneDrive-Masterstone folder.".into()),
+            created_count: 0, skipped_count: 0,
+            files_root: Some(files.to_string_lossy().to_string()), migration_root: None,
+        },
+    };
+
+    let categories = load_document_categories();
+    let mut created = 0usize;
+    let mut skipped = 0usize;
+
+    // 2. Create files_root and migration_root.
+    for r in [&files, &migration] {
+        let existed = r.exists();
+        if let Err(e) = std::fs::create_dir_all(r) {
+            return InitFoldersResult {
+                ok: false, error: Some(format!("Could not create {}: {}", r.display(), e)),
+                created_count: created, skipped_count: skipped,
+                files_root: Some(files.to_string_lossy().to_string()),
+                migration_root: Some(migration.to_string_lossy().to_string()),
+            };
+        }
+        if existed { skipped += 1; } else { created += 1; }
+    }
+
+    // 3. Create FY × category folders.
+    for fy in FY_FOLDERS {
+        for cat in &categories {
+            let mut p = files.clone();
+            p.push(fy);
+            for seg in &cat.path_segments {
+                p.push(seg);
+            }
+            let existed = p.exists();
+            if let Err(e) = std::fs::create_dir_all(&p) {
+                return InitFoldersResult {
+                    ok: false, error: Some(format!("Could not create {}: {}", p.display(), e)),
+                    created_count: created, skipped_count: skipped,
+                    files_root: Some(files.to_string_lossy().to_string()),
+                    migration_root: Some(migration.to_string_lossy().to_string()),
+                };
+            }
+            if existed { skipped += 1; } else { created += 1; }
         }
     }
 
-    // Walk to the parent of the last segment.
-    let last = segments.last().unwrap();
-    let leaf_field = if let Some(open) = last.find('[') { &last[..open] } else { last };
-    let local_field = format!("{leaf_field}Local");
+    InitFoldersResult {
+        ok: true, error: None,
+        created_count: created, skipped_count: skipped,
+        files_root: Some(files.to_string_lossy().to_string()),
+        migration_root: Some(migration.to_string_lossy().to_string()),
+    }
+}
 
-    let parent: Option<&mut serde_json::Value> = if segments.len() == 1 {
-        Some(value)
-    } else {
-        let mut cur: &mut serde_json::Value = value;
-        for seg in &segments[..segments.len() - 1] {
-            match navigate(cur, seg) {
-                Some(v) => cur = v,
-                None => return,
+#[derive(Serialize)]
+struct FilesSetupStatus {
+    ok: bool,
+    initialized: bool,
+    files_root_exists: bool,
+    migration_root_exists: bool,
+    files_root: Option<String>,
+    migration_root: Option<String>,
+    fy_folders_present: usize,
+    fy_folders_total: usize,
+    category_folders_present: usize,
+    category_folders_total: usize,
+    /// Number of files currently sitting in the Migration folder, awaiting matching.
+    /// Counted recursively. Folders are not counted.
+    migration_pending_count: usize,
+}
+
+#[tauri::command]
+fn get_files_setup_status() -> FilesSetupStatus {
+    let files = files_root();
+    let migration = migration_root();
+    let files_str = files.as_ref().map(|p| p.to_string_lossy().to_string());
+    let migration_str = migration.as_ref().map(|p| p.to_string_lossy().to_string());
+    let files_root_exists = files.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let migration_root_exists = migration.as_ref().map(|p| p.exists()).unwrap_or(false);
+
+    let categories = load_document_categories();
+    let mut fy_present = 0usize;
+    let mut cat_present = 0usize;
+    let fy_total = FY_FOLDERS.len();
+    let cat_total = FY_FOLDERS.len() * categories.len();
+
+    if let Some(ref f) = files {
+        for fy in FY_FOLDERS {
+            let fy_path = f.join(fy);
+            if fy_path.exists() {
+                fy_present += 1;
+                for cat in &categories {
+                    let mut p = fy_path.clone();
+                    for seg in &cat.path_segments {
+                        p.push(seg);
+                    }
+                    if p.exists() { cat_present += 1; }
+                }
             }
         }
-        Some(cur)
-    };
+    }
 
-    let parent = match parent { Some(p) => p, None => return };
-    if let Some(obj) = parent.as_object_mut() {
-        obj.insert(local_field, serde_json::Value::String(local_path.to_string()));
+    let migration_pending = migration.as_ref()
+        .map(|p| count_files_recursive(p))
+        .unwrap_or(0);
+
+    FilesSetupStatus {
+        ok: true,
+        initialized: files_root_exists && migration_root_exists && fy_present == fy_total,
+        files_root_exists,
+        migration_root_exists,
+        files_root: files_str,
+        migration_root: migration_str,
+        fy_folders_present: fy_present,
+        fy_folders_total: fy_total,
+        category_folders_present: cat_present,
+        category_folders_total: cat_total,
+        migration_pending_count: migration_pending,
     }
 }
 
-#[tauri::command]
-fn get_migration_progress(state: tauri::State<FileMigrationState>) -> serde_json::Value {
-    let guard = match state.inner.lock() {
-        Ok(g) => g,
-        Err(_) => return serde_json::json!({"ok": false, "error": "lock"}),
-    };
-    if let Some(run) = guard.as_ref() {
-        let snap = run.snapshot();
-        serde_json::json!({"ok": true, "active": true, "progress": snap})
-    } else {
-        serde_json::json!({"ok": true, "active": false})
-    }
-}
-
-#[tauri::command]
-fn cancel_file_migration(state: tauri::State<FileMigrationState>) -> serde_json::Value {
-    let guard = match state.inner.lock() {
-        Ok(g) => g,
-        Err(_) => return serde_json::json!({"ok": false, "error": "lock"}),
-    };
-    if let Some(run) = guard.as_ref() {
-        if run.completed.load(Ordering::SeqCst) {
-            return serde_json::json!({"ok": false, "error": "Already completed."});
+/// Recursively count files (not directories) under a path. Used for the
+/// "files awaiting matching" count in the Settings UI.
+fn count_files_recursive(p: &PathBuf) -> usize {
+    if !p.exists() { return 0; }
+    let mut count = 0usize;
+    let mut stack: Vec<PathBuf> = vec![p.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue; };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Skip macOS metadata files
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name == ".DS_Store" || name.starts_with("._") {
+                    continue;
+                }
+            }
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(path),
+                Ok(ft) if ft.is_file() => count += 1,
+                _ => {}
+            }
         }
-        run.cancel_flag.store(true, Ordering::SeqCst);
-        run.set_message("Cancelling — finishing in-flight downloads…");
-        serde_json::json!({"ok": true, "cancelled": true})
-    } else {
-        serde_json::json!({"ok": false, "error": "No active migration."})
+    }
+    count
+}
+
+#[tauri::command]
+fn get_document_categories() -> serde_json::Value {
+    let cats = load_document_categories();
+    serde_json::json!({"ok": true, "categories": cats})
+}
+
+#[derive(Serialize)]
+struct AddCategoryResult {
+    ok: bool,
+    error: Option<String>,
+    folders_created: usize,
+}
+
+#[tauri::command]
+fn add_document_category(
+    key: String,
+    display_name: String,
+    path_segments: Vec<String>,
+) -> AddCategoryResult {
+    // 1. Validate inputs.
+    if let Err(e) = validate_category_key(&key) {
+        return AddCategoryResult { ok: false, error: Some(e), folders_created: 0 };
+    }
+    if display_name.trim().is_empty() || display_name.len() > 80 {
+        return AddCategoryResult {
+            ok: false, error: Some("Display name must be 1-80 characters.".into()),
+            folders_created: 0,
+        };
+    }
+    if path_segments.is_empty() {
+        return AddCategoryResult {
+            ok: false, error: Some("At least one path segment required.".into()),
+            folders_created: 0,
+        };
+    }
+    if path_segments.len() > 4 {
+        return AddCategoryResult {
+            ok: false, error: Some("Path nesting too deep (max 4 levels).".into()),
+            folders_created: 0,
+        };
+    }
+    for seg in &path_segments {
+        if let Err(e) = validate_path_segment(seg) {
+            return AddCategoryResult { ok: false, error: Some(e), folders_created: 0 };
+        }
+    }
+
+    // 2. Load existing categories, refuse if key already used.
+    let mut cats = load_document_categories();
+    if cats.iter().any(|c| c.key == key) {
+        return AddCategoryResult {
+            ok: false, error: Some(format!("A category with key '{key}' already exists.")),
+            folders_created: 0,
+        };
+    }
+
+    // 3. Add the new category, save.
+    cats.push(DocumentCategory {
+        key: key.clone(),
+        display_name: display_name.trim().to_string(),
+        path_segments: path_segments.iter().map(|s| s.trim().to_string()).collect(),
+        is_default: false,
+    });
+    if let Err(e) = save_document_categories(&cats) {
+        return AddCategoryResult { ok: false, error: Some(e), folders_created: 0 };
+    }
+
+    // 4. Create folders under every existing FY.
+    let files = match files_root() {
+        Some(p) => p,
+        None => return AddCategoryResult {
+            ok: true, error: None, folders_created: 0, // settings saved, but folders skipped
+        },
+    };
+    let mut created = 0usize;
+    for fy in FY_FOLDERS {
+        let mut p = files.clone();
+        p.push(fy);
+        // Only create category folder if FY folder exists. Otherwise skip;
+        // the user hasn't initialized yet, and a future initialize call
+        // will pick up the new category from settings.
+        if !p.exists() { continue; }
+        for seg in &path_segments {
+            p.push(seg.trim());
+        }
+        if !p.exists() {
+            if std::fs::create_dir_all(&p).is_ok() {
+                created += 1;
+            }
+        }
+    }
+
+    AddCategoryResult { ok: true, error: None, folders_created: created }
+}
+
+#[tauri::command]
+fn remove_document_category(key: String) -> serde_json::Value {
+    let mut cats = load_document_categories();
+    let original_len = cats.len();
+    let target = match cats.iter().find(|c| c.key == key) {
+        Some(c) => c.clone(),
+        None => return serde_json::json!({"ok": false, "error": format!("No category with key '{key}'.")}),
+    };
+    if target.is_default {
+        return serde_json::json!({
+            "ok": false,
+            "error": "Default categories cannot be removed (only user-added ones)."
+        });
+    }
+    cats.retain(|c| c.key != key);
+    if cats.len() == original_len {
+        return serde_json::json!({"ok": false, "error": "Category not found."});
+    }
+    if let Err(e) = save_document_categories(&cats) {
+        return serde_json::json!({"ok": false, "error": e});
+    }
+    // Note: we deliberately do NOT delete the folders on disk. They may
+    // contain user files. The user can delete them manually if they wish.
+    serde_json::json!({
+        "ok": true,
+        "removed_category": target.key,
+        "folders_left_intact": "Existing folders on disk were preserved. Delete manually if no longer needed."
+    })
+}
+
+/// Open a folder or file in Finder / default app. Used from the Settings
+/// UI to let the user click through to the Migration or Files folder.
+#[tauri::command]
+fn reveal_path<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) -> serde_json::Value {
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "error": "Empty path"});
+    }
+    let pb = PathBuf::from(&path);
+    if !pb.exists() {
+        return serde_json::json!({"ok": false, "error": "Path does not exist."});
+    }
+    match app.opener().open_path(path.clone(), None::<&str>) {
+        Ok(_) => serde_json::json!({"ok": true, "path": path}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{e}")}),
     }
 }
+
+
+
 
 // ============================================================================
 // Entry point
@@ -2953,7 +2762,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(DbState::new())
-        .manage(FileMigrationState::default())
         .invoke_handler(tauri::generate_handler![
             storage_load_all,
             storage_save_clients,
@@ -2982,10 +2790,13 @@ pub fn run() {
             acknowledge_db_conflict,
             extract_attachments,
             load_attachments_into_data_urls,
-            // Session 7:
-            start_file_migration,
-            get_migration_progress,
-            cancel_file_migration,
+            // Session 8:
+            initialize_files_folders,
+            get_files_setup_status,
+            get_document_categories,
+            add_document_category,
+            remove_document_category,
+            reveal_path,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
