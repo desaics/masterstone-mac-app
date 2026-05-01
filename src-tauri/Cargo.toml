@@ -21,8 +21,14 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
 chrono = "0.4"
 tauri-plugin-dialog = "2"
-
-# Session 5 additions:
-# - tauri-plugin-opener: opens URLs in the default browser, reveals files
-#   in Finder. Replaces the broken `<a target="_blank">` behavior.
 tauri-plugin-opener = "2"
+
+# Session 7 additions:
+# - reqwest: HTTP client for downloading OneDrive files. Uses rustls-tls
+#   instead of native-tls so we don't need to link against macOS Security
+#   framework (smaller binary, simpler GitHub Actions build).
+# - tokio: async runtime needed by reqwest. We only use a small surface
+#   (futures, mutex, time) so feature flags are minimal.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures-util = "0.3"
