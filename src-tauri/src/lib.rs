@@ -2265,6 +2265,685 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 // ============================================================================
+// Session 7 — OneDrive file migration
+//
+// Bulk-downloads every OneDrive file referenced in the CRM data, organizes
+// them into folders under `~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/Files/`,
+// and writes a parallel `_local` field on each affected record so the UI can
+// later show both local-file and OneDrive-URL options side by side.
+//
+// Sources of links (per backup data inspection):
+//   - contracts[*].internalPOLink                  → POs/Internal/
+//   - contracts[*].clientPOLink                    → POs/Client/
+//   - contracts[*].clientPOs[*].poLink             → POs/Client/
+//   - contracts[*].billingYears[*].clientInvoiceLink → Invoices/Client/
+//   - contracts[*].billingYears[*].oemInvoiceLink    → Invoices/OEM/
+//
+// Concurrency: 4 parallel downloads, conservative to avoid OneDrive
+// rate-limiting. With 171 unique URLs averaging 200KB each, a fresh run
+// takes 1-3 minutes.
+//
+// Idempotency: if the target file already exists on disk, the download is
+// skipped and the record is just updated with the existing path. So re-running
+// the migration is safe (and useful for filling in records added since the
+// last run).
+//
+// Cancellability: a shared atomic flag is checked between requests. The UI
+// gets a Cancel button that flips the flag.
+// ============================================================================
+
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+
+#[derive(Default)]
+struct FileMigrationState {
+    inner: Mutex<Option<Arc<MigrationRun>>>,
+}
+
+struct MigrationRun {
+    total: AtomicUsize,
+    downloaded: AtomicUsize,
+    skipped_existing: AtomicUsize,
+    failed: AtomicUsize,
+    cancel_flag: AtomicBool,
+    completed: AtomicBool,
+    failures: Mutex<Vec<MigrationFailure>>,
+    started_at: Mutex<Option<String>>,
+    finished_at: Mutex<Option<String>>,
+    last_message: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Serialize)]
+struct MigrationFailure {
+    url: String,
+    target_path: String,
+    reason: String,
+}
+
+impl MigrationRun {
+    fn new() -> Self {
+        Self {
+            total: AtomicUsize::new(0),
+            downloaded: AtomicUsize::new(0),
+            skipped_existing: AtomicUsize::new(0),
+            failed: AtomicUsize::new(0),
+            cancel_flag: AtomicBool::new(false),
+            completed: AtomicBool::new(false),
+            failures: Mutex::new(Vec::new()),
+            started_at: Mutex::new(Some(now_iso())),
+            finished_at: Mutex::new(None),
+            last_message: Mutex::new(Some("Initializing…".to_string())),
+        }
+    }
+
+    fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "total": self.total.load(Ordering::SeqCst),
+            "downloaded": self.downloaded.load(Ordering::SeqCst),
+            "skipped_existing": self.skipped_existing.load(Ordering::SeqCst),
+            "failed": self.failed.load(Ordering::SeqCst),
+            "cancelled": self.cancel_flag.load(Ordering::SeqCst),
+            "completed": self.completed.load(Ordering::SeqCst),
+            "failures": self.failures.lock().ok().map(|f| f.clone()).unwrap_or_default(),
+            "started_at": self.started_at.lock().ok().and_then(|s| s.clone()),
+            "finished_at": self.finished_at.lock().ok().and_then(|s| s.clone()),
+            "last_message": self.last_message.lock().ok().and_then(|s| s.clone()),
+        })
+    }
+
+    fn set_message(&self, msg: &str) {
+        if let Ok(mut m) = self.last_message.lock() {
+            *m = Some(msg.to_string());
+        }
+    }
+
+    fn record_failure(&self, url: String, target_path: String, reason: String) {
+        if let Ok(mut f) = self.failures.lock() {
+            f.push(MigrationFailure { url, target_path, reason });
+        }
+    }
+}
+
+/// Where downloaded files live. Returns None if no usable OneDrive folder.
+fn migration_files_root() -> Option<PathBuf> {
+    snapshot_dir().map(|p| p.join("Files"))
+}
+
+/// Sanitize a string for use as a filename component. Replaces unsafe chars,
+/// collapses whitespace, trims to a reasonable length.
+fn safe_filename_part(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => out.push('_'),
+            c if c.is_control() => {},
+            c => out.push(c),
+        }
+    }
+    let trimmed = out.trim().trim_matches('.').to_string();
+    if trimmed.len() > 80 {
+        trimmed.chars().take(80).collect()
+    } else {
+        trimmed
+    }
+}
+
+/// Plan: for a given URL and its source context (which contract, which year,
+/// what kind of doc), produce the target folder path and a stable filename
+/// stem. Filename is finalized later when we know the actual filename from
+/// Content-Disposition.
+#[derive(Clone, Debug)]
+struct DownloadPlan {
+    url: String,
+    target_dir: PathBuf,
+    filename_stem: String,           // e.g. "63Moons_C03_Y2_clientInvoice"
+    source_field_path: String,       // e.g. "contracts[3].billingYears[1].clientInvoiceLink"
+                                     // Used to locate the record for writing back the _local field.
+}
+
+/// Walk the contracts data and emit DownloadPlans for every link field.
+/// Transform a OneDrive share URL into a direct-download URL.
+///
+/// For 1drv.ms short-codes (the format used in this CRM), appending
+/// `&download=1` (or `?download=1` if no query yet) tells Microsoft's
+/// redirect chain to skip the in-browser preview page and serve the file
+/// content directly. This works for both personal and business share
+/// links as of mid-2025+.
+///
+/// For non-OneDrive URLs, returns the URL unchanged.
+fn build_download_url(original: &str) -> String {
+    if !original.contains("1drv.ms")
+        && !original.contains("onedrive.live.com")
+        && !original.contains("sharepoint.com")
+    {
+        return original.to_string();
+    }
+    if original.contains("download=") {
+        return original.to_string(); // already set
+    }
+    let sep = if original.contains('?') { '&' } else { '?' };
+    format!("{original}{sep}download=1")
+}
+
+fn plan_downloads(contracts: &[serde_json::Value], files_root: &PathBuf) -> Vec<DownloadPlan> {
+    let mut plans = Vec::new();
+
+    for (idx, c) in contracts.iter().enumerate() {
+        let client_name = c.get("client").or_else(|| c.get("clientName"))
+            .and_then(|v| v.as_str()).unwrap_or("Unknown");
+        // Make a short identifier — use first ~16 chars of client name, sanitized.
+        let client_short = safe_filename_part(client_name);
+        let client_short: String = client_short.chars().take(20).collect();
+        let cid = format!("{}_C{:03}", client_short.trim().replace(' ', ""), idx);
+
+        // 1. internalPOLink
+        if let Some(url) = c.get("internalPOLink").and_then(|v| v.as_str()) {
+            if !url.is_empty() && url.starts_with("http") {
+                plans.push(DownloadPlan {
+                    url: build_download_url(url),
+                    target_dir: files_root.join("POs").join("Internal"),
+                    filename_stem: format!("{cid}_internalPO"),
+                    source_field_path: format!("contracts[{idx}].internalPOLink"),
+                });
+            }
+        }
+
+        // 2. clientPOLink (legacy single)
+        if let Some(url) = c.get("clientPOLink").and_then(|v| v.as_str()) {
+            if !url.is_empty() && url.starts_with("http") {
+                plans.push(DownloadPlan {
+                    url: build_download_url(url),
+                    target_dir: files_root.join("POs").join("Client"),
+                    filename_stem: format!("{cid}_clientPO"),
+                    source_field_path: format!("contracts[{idx}].clientPOLink"),
+                });
+            }
+        }
+
+        // 3. clientPOs[*].poLink (newer multi-PO structure)
+        if let Some(arr) = c.get("clientPOs").and_then(|v| v.as_array()) {
+            for (po_idx, po) in arr.iter().enumerate() {
+                if let Some(url) = po.get("poLink").and_then(|v| v.as_str()) {
+                    if !url.is_empty() && url.starts_with("http") {
+                        plans.push(DownloadPlan {
+                            url: build_download_url(url),
+                            target_dir: files_root.join("POs").join("Client"),
+                            filename_stem: format!("{cid}_clientPO_{po_idx:02}"),
+                            source_field_path: format!("contracts[{idx}].clientPOs[{po_idx}].poLink"),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 4. billingYears[*].clientInvoiceLink + .oemInvoiceLink
+        if let Some(years) = c.get("billingYears").and_then(|v| v.as_array()) {
+            for (y_idx, y) in years.iter().enumerate() {
+                if let Some(url) = y.get("clientInvoiceLink").and_then(|v| v.as_str()) {
+                    if !url.is_empty() && url.starts_with("http") {
+                        plans.push(DownloadPlan {
+                            url: build_download_url(url),
+                            target_dir: files_root.join("Invoices").join("Client"),
+                            filename_stem: format!("{cid}_Y{y_idx:02}_clientInv"),
+                            source_field_path: format!(
+                                "contracts[{idx}].billingYears[{y_idx}].clientInvoiceLink"
+                            ),
+                        });
+                    }
+                }
+                if let Some(url) = y.get("oemInvoiceLink").and_then(|v| v.as_str()) {
+                    if !url.is_empty() && url.starts_with("http") {
+                        plans.push(DownloadPlan {
+                            url: build_download_url(url),
+                            target_dir: files_root.join("Invoices").join("OEM"),
+                            filename_stem: format!("{cid}_Y{y_idx:02}_oemInv"),
+                            source_field_path: format!(
+                                "contracts[{idx}].billingYears[{y_idx}].oemInvoiceLink"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    plans
+}
+
+/// Parse a Content-Disposition header to extract the filename. Falls back to
+/// None if the header is missing or unparseable. Handles both quoted and
+/// RFC5987-encoded filenames.
+fn parse_content_disposition_filename(value: &str) -> Option<String> {
+    // Look for filename*=UTF-8''... first (RFC 5987)
+    if let Some(start) = value.find("filename*=") {
+        let rest = &value[start + 10..];
+        let end = rest.find(';').unwrap_or(rest.len());
+        let token = &rest[..end];
+        if let Some(quote_end) = token.rfind("''") {
+            let encoded = &token[quote_end + 2..];
+            // URL-decode percent-escapes, leaving the filename
+            let decoded = url_decode(encoded);
+            if !decoded.is_empty() { return Some(decoded); }
+        }
+    }
+    // Fall back to filename="..."
+    if let Some(start) = value.find("filename=") {
+        let rest = &value[start + 9..];
+        let trimmed = rest.trim_start_matches('"');
+        let end = trimmed.find(['"', ';']).unwrap_or(trimmed.len());
+        let name = &trimmed[..end];
+        if !name.is_empty() { return Some(name.to_string()); }
+    }
+    None
+}
+
+/// Minimal URL percent-decoder. Preserves non-encoded chars as-is.
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = (bytes[i + 1] as char).to_digit(16);
+            let h2 = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                out.push((h1 * 16 + h2) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// Determine an extension from a filename, defaulting to "bin".
+fn extension_from_filename(name: &str) -> &str {
+    name.rsplit('.').next().filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("bin")
+}
+
+#[tauri::command]
+async fn start_file_migration<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, FileMigrationState>,
+) -> Result<serde_json::Value, String> {
+    // 1. If a run is already in progress (and not completed), refuse.
+    {
+        let guard = state.inner.lock().map_err(|e| format!("Mutex: {e}"))?;
+        if let Some(run) = guard.as_ref() {
+            if !run.completed.load(Ordering::SeqCst) {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "error": "Another migration is already running. Cancel it or wait."
+                }));
+            }
+        }
+    }
+
+    // 2. Resolve the files root.
+    let files_root = match migration_files_root() {
+        Some(p) => p,
+        None => return Ok(serde_json::json!({
+            "ok": false,
+            "error": "OneDrive folder not found. Cannot create Files/ subfolder."
+        })),
+    };
+
+    // 3. Read contracts from SQLite.
+    let dbp = match db_path() {
+        Some(p) => p,
+        None => return Ok(serde_json::json!({"ok": false, "error": "no db path"})),
+    };
+    let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("open db: {e}")})),
+    };
+    let mut contracts: Vec<serde_json::Value> = Vec::new();
+    {
+        let mut stmt = match con.prepare("SELECT raw_data FROM contracts ORDER BY legacy_idx ASC") {
+            Ok(s) => s,
+            Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("prepare: {e}")})),
+        };
+        let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+            Ok(r) => r,
+            Err(e) => return Ok(serde_json::json!({"ok": false, "error": format!("query: {e}")})),
+        };
+        for row in rows {
+            let raw = match row { Ok(s) => s, Err(_) => continue };
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                contracts.push(v);
+            }
+        }
+    }
+
+    // 4. Plan downloads.
+    let plans = plan_downloads(&contracts, &files_root);
+    let total = plans.len();
+
+    // 5. Create the run state.
+    let run = Arc::new(MigrationRun::new());
+    run.total.store(total, Ordering::SeqCst);
+    run.set_message(&format!("Found {} files to download.", total));
+    {
+        let mut guard = state.inner.lock().map_err(|e| format!("Mutex: {e}"))?;
+        *guard = Some(run.clone());
+    }
+
+    if total == 0 {
+        run.completed.store(true, Ordering::SeqCst);
+        if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
+        run.set_message("Nothing to download.");
+        return Ok(serde_json::json!({"ok": true, "started": false, "total": 0}));
+    }
+
+    // 6. Spawn the background task.
+    let app_handle = app.clone();
+    let run_clone = run.clone();
+    tauri::async_runtime::spawn(async move {
+        run_migration_task(run_clone, plans, app_handle).await;
+    });
+
+    Ok(serde_json::json!({"ok": true, "started": true, "total": total}))
+}
+
+async fn run_migration_task<R: tauri::Runtime>(
+    run: Arc<MigrationRun>,
+    plans: Vec<DownloadPlan>,
+    _app: tauri::AppHandle<R>,
+) {
+    use futures_util::stream::{self, StreamExt};
+
+    let client = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("Masterstone-CRM/0.6 (file-migration)")
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            run.set_message(&format!("Could not initialize HTTP client: {e}"));
+            run.completed.store(true, Ordering::SeqCst);
+            if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
+            return;
+        }
+    };
+
+    // Run downloads with bounded concurrency (4 at a time).
+    let cancel_flag = run.clone();
+    let downloads = stream::iter(plans.into_iter().enumerate())
+        .map(|(i, plan)| {
+            let client = client.clone();
+            let run = run.clone();
+            let cancel = cancel_flag.clone();
+            async move {
+                if cancel.cancel_flag.load(Ordering::SeqCst) {
+                    return (i, plan, Err("Cancelled".to_string()));
+                }
+                run.set_message(&format!("Downloading file {} of {}…", i + 1, run.total.load(Ordering::SeqCst)));
+                let result = download_one(&client, &plan).await;
+                (i, plan, result)
+            }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+    // Count outcomes and accumulate the local-path map for record updates.
+    // Map: source_field_path → local file absolute path.
+    let mut local_path_updates: BTreeMap<String, String> = BTreeMap::new();
+    for (_i, plan, result) in &downloads {
+        match result {
+            Ok(DownloadOutcome::Downloaded(path)) => {
+                run.downloaded.fetch_add(1, Ordering::SeqCst);
+                local_path_updates.insert(plan.source_field_path.clone(), path.to_string_lossy().to_string());
+            },
+            Ok(DownloadOutcome::SkippedExisting(path)) => {
+                run.skipped_existing.fetch_add(1, Ordering::SeqCst);
+                local_path_updates.insert(plan.source_field_path.clone(), path.to_string_lossy().to_string());
+            },
+            Err(e) => {
+                run.failed.fetch_add(1, Ordering::SeqCst);
+                run.record_failure(plan.url.clone(), plan.target_dir.to_string_lossy().to_string(), e.clone());
+            }
+        }
+    }
+
+    // Apply the _local field updates back to the contracts table.
+    if !local_path_updates.is_empty() {
+        run.set_message(&format!("Updating {} record fields…", local_path_updates.len()));
+        if let Err(e) = apply_local_field_updates(&local_path_updates) {
+            run.set_message(&format!("Updates failed: {e}"));
+        }
+    }
+
+    run.completed.store(true, Ordering::SeqCst);
+    if let Ok(mut f) = run.finished_at.lock() { *f = Some(now_iso()); }
+
+    let downloaded = run.downloaded.load(Ordering::SeqCst);
+    let skipped = run.skipped_existing.load(Ordering::SeqCst);
+    let failed = run.failed.load(Ordering::SeqCst);
+    let cancelled = run.cancel_flag.load(Ordering::SeqCst);
+    if cancelled {
+        run.set_message(&format!(
+            "Cancelled. Downloaded {downloaded}, skipped {skipped} (already existed), failed {failed}."
+        ));
+    } else {
+        run.set_message(&format!(
+            "Done. Downloaded {downloaded}, skipped {skipped} (already existed), failed {failed}."
+        ));
+    }
+}
+
+enum DownloadOutcome {
+    Downloaded(PathBuf),
+    SkippedExisting(PathBuf),
+}
+
+async fn download_one(
+    client: &reqwest::Client,
+    plan: &DownloadPlan,
+) -> Result<DownloadOutcome, String> {
+    // Make sure target dir exists.
+    if let Err(e) = std::fs::create_dir_all(&plan.target_dir) {
+        return Err(format!("create dir: {e}"));
+    }
+
+    // First pass: check if any file with our stem prefix already exists in the
+    // target dir. If yes, skip the download and reuse it.
+    if let Some(existing) = find_existing_with_stem(&plan.target_dir, &plan.filename_stem) {
+        return Ok(DownloadOutcome::SkippedExisting(existing));
+    }
+
+    // GET the URL — reqwest follows redirects automatically up to the limit.
+    let resp = client.get(&plan.url).send().await
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    // Try to extract filename from Content-Disposition. Fallback to URL guess.
+    let original_name = resp.headers().get(reqwest::header::CONTENT_DISPOSITION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(parse_content_disposition_filename);
+
+    let ext = match original_name.as_deref() {
+        Some(n) => extension_from_filename(n).to_string(),
+        None => "pdf".to_string(),  // default — most stored docs are PDFs
+    };
+
+    let filename = format!("{}.{}", plan.filename_stem, ext);
+    let target_path = plan.target_dir.join(&filename);
+
+    // Stream the body to disk.
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::with_capacity(256 * 1024);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("read chunk: {e}"))?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() > 50 * 1024 * 1024 {
+            return Err("File exceeds 50 MB safety limit".to_string());
+        }
+    }
+    std::fs::write(&target_path, &buf).map_err(|e| format!("write: {e}"))?;
+
+    Ok(DownloadOutcome::Downloaded(target_path))
+}
+
+fn find_existing_with_stem(dir: &PathBuf, stem: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+            // Match "stem.ext" — name starts with stem + "."
+            if name.starts_with(&format!("{stem}.")) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// Apply local-path updates to the contracts table by re-reading raw_data,
+/// patching the appropriate field at the given dotted path, and writing back.
+/// Field paths look like:
+///   contracts[3].internalPOLink
+///   contracts[3].clientPOs[1].poLink
+///   contracts[3].billingYears[2].oemInvoiceLink
+///
+/// Each gets a sibling field with "Local" suffix written, e.g. internalPOLinkLocal.
+fn apply_local_field_updates(updates: &BTreeMap<String, String>) -> Result<(), String> {
+    let dbp = db_path().ok_or("no db path")?;
+    let mut con = Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|e| format!("open: {e}"))?;
+    let _ : String = con.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))
+        .map_err(|e| format!("wal: {e}"))?;
+
+    // Group updates by contract idx.
+    let mut by_contract: BTreeMap<usize, Vec<(String, String)>> = BTreeMap::new();
+    for (path, local) in updates {
+        // path = contracts[N].rest...
+        let stripped = path.trim_start_matches("contracts[");
+        let close_idx = stripped.find(']').ok_or("malformed path")?;
+        let idx_str = &stripped[..close_idx];
+        let idx: usize = idx_str.parse().map_err(|e| format!("idx parse: {e}"))?;
+        let rest = &stripped[close_idx + 2..]; // skip "].",
+        by_contract.entry(idx).or_default().push((rest.to_string(), local.clone()));
+    }
+
+    let tx = con.transaction().map_err(|e| format!("tx: {e}"))?;
+    for (idx, field_updates) in by_contract {
+        // Read the raw_data for this contract by legacy_idx.
+        let raw: String = match tx.query_row(
+            "SELECT raw_data FROM contracts WHERE legacy_idx = ?1",
+            params![idx as i64],
+            |r| r.get(0),
+        ) {
+            Ok(s) => s,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => return Err(format!("query contract {idx}: {e}")),
+        };
+
+        let mut value: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("parse contract {idx}: {e}"))?;
+
+        for (field_subpath, local_path) in &field_updates {
+            apply_local_at_subpath(&mut value, field_subpath, local_path);
+        }
+
+        let new_raw = value.to_string();
+        tx.execute(
+            "UPDATE contracts SET raw_data = ?1, modified_at = ?2 WHERE legacy_idx = ?3",
+            params![new_raw, now_iso(), idx as i64],
+        ).map_err(|e| format!("update contract {idx}: {e}"))?;
+    }
+    tx.commit().map_err(|e| format!("commit: {e}"))?;
+    Ok(())
+}
+
+/// Apply a single update, e.g. subpath = "internalPOLink", "clientPOs[2].poLink",
+/// "billingYears[1].clientInvoiceLink". The function writes a sibling field
+/// with "Local" appended to the leaf field name.
+fn apply_local_at_subpath(value: &mut serde_json::Value, subpath: &str, local_path: &str) {
+    // Split into segments. Each segment is either "field" or "field[N]".
+    // The last segment is the target field (a string url); we write a sibling
+    // {field}Local on the same parent object.
+    let segments: Vec<&str> = subpath.split('.').collect();
+    if segments.is_empty() { return; }
+
+    fn navigate<'a>(v: &'a mut serde_json::Value, seg: &str) -> Option<&'a mut serde_json::Value> {
+        // seg may have an [N] suffix
+        if let Some(open) = seg.find('[') {
+            let close = seg.find(']')?;
+            let key = &seg[..open];
+            let idx: usize = seg[open + 1..close].parse().ok()?;
+            let arr = v.get_mut(key)?.as_array_mut()?;
+            arr.get_mut(idx)
+        } else {
+            v.get_mut(seg)
+        }
+    }
+
+    // Walk to the parent of the last segment.
+    let last = segments.last().unwrap();
+    let leaf_field = if let Some(open) = last.find('[') { &last[..open] } else { last };
+    let local_field = format!("{leaf_field}Local");
+
+    let parent: Option<&mut serde_json::Value> = if segments.len() == 1 {
+        Some(value)
+    } else {
+        let mut cur: &mut serde_json::Value = value;
+        for seg in &segments[..segments.len() - 1] {
+            match navigate(cur, seg) {
+                Some(v) => cur = v,
+                None => return,
+            }
+        }
+        Some(cur)
+    };
+
+    let parent = match parent { Some(p) => p, None => return };
+    if let Some(obj) = parent.as_object_mut() {
+        obj.insert(local_field, serde_json::Value::String(local_path.to_string()));
+    }
+}
+
+#[tauri::command]
+fn get_migration_progress(state: tauri::State<FileMigrationState>) -> serde_json::Value {
+    let guard = match state.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return serde_json::json!({"ok": false, "error": "lock"}),
+    };
+    if let Some(run) = guard.as_ref() {
+        let snap = run.snapshot();
+        serde_json::json!({"ok": true, "active": true, "progress": snap})
+    } else {
+        serde_json::json!({"ok": true, "active": false})
+    }
+}
+
+#[tauri::command]
+fn cancel_file_migration(state: tauri::State<FileMigrationState>) -> serde_json::Value {
+    let guard = match state.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return serde_json::json!({"ok": false, "error": "lock"}),
+    };
+    if let Some(run) = guard.as_ref() {
+        if run.completed.load(Ordering::SeqCst) {
+            return serde_json::json!({"ok": false, "error": "Already completed."});
+        }
+        run.cancel_flag.store(true, Ordering::SeqCst);
+        run.set_message("Cancelling — finishing in-flight downloads…");
+        serde_json::json!({"ok": true, "cancelled": true})
+    } else {
+        serde_json::json!({"ok": false, "error": "No active migration."})
+    }
+}
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -2274,6 +2953,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(DbState::new())
+        .manage(FileMigrationState::default())
         .invoke_handler(tauri::generate_handler![
             storage_load_all,
             storage_save_clients,
@@ -2302,6 +2982,10 @@ pub fn run() {
             acknowledge_db_conflict,
             extract_attachments,
             load_attachments_into_data_urls,
+            // Session 7:
+            start_file_migration,
+            get_migration_progress,
+            cancel_file_migration,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
