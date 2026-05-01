@@ -3934,7 +3934,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app · Session 6 · Live mode</strong> &nbsp;·&nbsp; ' +
+            '<strong>Mac app · Session 7 · Live mode</strong> &nbsp;·&nbsp; ' +
             'Edits save to your local database. ' +
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
@@ -4314,19 +4314,52 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var b = document.getElementById('macAppBanner');
         if (b && b.parentNode) b.parentNode.removeChild(b);
         document.body.classList.remove('mac-app-mode');
-        // Re-show a minimal sync indicator floating in the corner so the user
-        // still has feedback that writes are happening.
+        // Re-show a minimal sync indicator floating in the corner. Clicking
+        // the indicator brings the full banner back (Session 7 fix — without
+        // this, dismissing the banner required quitting the app to recover).
         if (!document.getElementById('msFloatingSync')) {
             var f = document.createElement('div');
             f.id = 'msFloatingSync';
             f.className = 'ms-floating-sync';
+            f.title = 'Click to restore the Mac app banner';
+            f.style.cursor = 'pointer';
+            f.onclick = window.__msRestoreBanner;
             f.innerHTML =
                 '<span id="msSyncIndicator" class="sync-indicator sync-idle">' +
                 '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
-                '</span>';
+                '</span>' +
+                '<span style="margin-left:8px;font-size:11px;opacity:0.7;">↑ banner</span>';
             document.body.appendChild(f);
             refreshIndicator();
         }
+    };
+
+    /// Bug fix #52 (Session 7) — recover the banner after dismissal without
+    /// requiring an app quit/restart. Re-creates the same banner DOM node and
+    /// removes the floating sync widget.
+    window.__msRestoreBanner = function () {
+        var f = document.getElementById('msFloatingSync');
+        if (f && f.parentNode) f.parentNode.removeChild(f);
+        document.body.classList.add('mac-app-mode');
+        // Remove any old banner DOM if somehow still present
+        var old = document.getElementById('macAppBanner');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        var banner = document.createElement('div');
+        banner.className = 'mac-app-banner mac-app-banner-live';
+        banner.id = 'macAppBanner';
+        banner.innerHTML =
+            '<strong>Mac app · Session 7 · Live mode</strong> &nbsp;·&nbsp; ' +
+            'Edits save to your local database. ' +
+            '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
+            '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
+            '</span>' +
+            '<button onclick="window.__msSnapshot()" title="Generate iPhone snapshot now">📸 Snapshot</button>' +
+            '<button onclick="window.__msReveal()" title="Open OneDrive folder in Finder">📁 OneDrive</button>' +
+            '<button onclick="window.__msOpenSettings()" title="Configure folders, retention, conflict guard">⚙️ Settings</button>' +
+            '<button onclick="window.__msShowDbInfo()" title="Show database connection details">DB info</button>' +
+            '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
+        document.body.appendChild(banner);
+        refreshIndicator();
     };
 
     // ========================================================================
@@ -4558,6 +4591,27 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
                   '<hr/>' +
                   '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                    '<summary style="cursor:pointer;">Advanced — Download OneDrive files</summary>' +
+                    '<div style="padding-top:8px;line-height:1.55;">' +
+                      'Bulk-downloads every OneDrive file referenced in your contracts (POs, invoices, etc.) and organizes them into folders under <code>~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/Files/</code>. After this completes, each affected record gets a parallel <code>_local</code> field pointing at the local copy. Original OneDrive URLs are preserved.<br/><br/>' +
+                      '<b>Prerequisite:</b> the OneDrive links must be set to "Anyone with the link can view" (no Microsoft sign-in required).<br/><br/>' +
+                      '<div id="msMigrationStatus" style="margin:8px 0;display:none;">' +
+                        '<div id="msMigrationMessage">Idle.</div>' +
+                        '<div id="msMigrationProgressBar" style="height:6px;background:rgba(255,255,255,0.08);border-radius:3px;margin-top:6px;overflow:hidden;">' +
+                          '<div id="msMigrationProgressFill" style="height:100%;width:0%;background:var(--accent-indigo,#6366f1);transition:width 0.3s ease;"></div>' +
+                        '</div>' +
+                        '<div id="msMigrationCounts" style="margin-top:6px;font-size:11px;"></div>' +
+                      '</div>' +
+                      '<div id="msMigrationActions" style="margin-top:8px;">' +
+                        '<button onclick="window.__msStartFileMigration()" id="msMigrateStartBtn">Download all files</button>' +
+                        '<button onclick="window.__msCancelFileMigration()" id="msMigrateCancelBtn" style="display:none;margin-left:6px;">Cancel</button>' +
+                      '</div>' +
+                      '<div id="msMigrationFailures" style="margin-top:10px;display:none;font-size:11px;"></div>' +
+                    '</div>' +
+                  '</details>' +
+
+                  '<hr/>' +
+                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
                     '<summary style="cursor:pointer;">Advanced — Production cutover</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'When you\'re ready to switch from the HTML CRM to the Mac app permanently:<br/>' +
@@ -4649,6 +4703,148 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             showActionToast('Mark cutover error: ' + e, 'error');
         }
     };
+
+    // ========================================================================
+    // SESSION 7 — OneDrive file migration handlers
+    //
+    // Workflow:
+    //  1. User clicks "Download all files" → __msStartFileMigration calls
+    //     start_file_migration which begins the background download task.
+    //  2. UI starts polling every 1s via __msPollMigrationProgress to update
+    //     the progress bar, message, and counts.
+    //  3. When the task completes (or is cancelled), polling stops and the
+    //     final state is rendered with any failures listed.
+    //  4. After successful completion, the in-memory localStorage cache for
+    //     contracts is reloaded from SQLite so the UI sees the new _local
+    //     fields without needing a full app restart.
+    // ========================================================================
+
+    var msMigrationPollTimer = null;
+
+    window.__msStartFileMigration = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                return;
+            }
+            var startBtn = document.getElementById('msMigrateStartBtn');
+            var cancelBtn = document.getElementById('msMigrateCancelBtn');
+            var status = document.getElementById('msMigrationStatus');
+            if (startBtn) startBtn.disabled = true;
+            if (status) status.style.display = 'block';
+
+            var r = await t.invoke('start_file_migration');
+            if (!r || !r.ok) {
+                showActionToast('Could not start migration: ' + ((r && r.error) || 'unknown'), 'error');
+                if (startBtn) startBtn.disabled = false;
+                return;
+            }
+            if (!r.started) {
+                // Nothing to download — total was 0
+                document.getElementById('msMigrationMessage').textContent = 'Nothing to download.';
+                if (startBtn) startBtn.disabled = false;
+                return;
+            }
+            if (cancelBtn) cancelBtn.style.display = '';
+            // Begin polling.
+            __msPollMigrationProgress();
+            if (msMigrationPollTimer) clearInterval(msMigrationPollTimer);
+            msMigrationPollTimer = setInterval(__msPollMigrationProgress, 1000);
+        } catch (e) {
+            showActionToast('Migration start error: ' + e, 'error');
+            console.error('[ms] migration start error:', e);
+            var sb = document.getElementById('msMigrateStartBtn');
+            if (sb) sb.disabled = false;
+        }
+    };
+
+    window.__msCancelFileMigration = async function () {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            await t.invoke('cancel_file_migration');
+            showActionToast('Cancellation requested. In-flight downloads will finish.', 'info');
+        } catch (e) {
+            showActionToast('Cancel error: ' + e, 'error');
+        }
+    };
+
+    async function __msPollMigrationProgress() {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('get_migration_progress');
+            if (!r || !r.ok) return;
+            if (!r.active) {
+                // No active run — stop polling
+                if (msMigrationPollTimer) { clearInterval(msMigrationPollTimer); msMigrationPollTimer = null; }
+                return;
+            }
+            var p = r.progress || {};
+            var msg = document.getElementById('msMigrationMessage');
+            var fill = document.getElementById('msMigrationProgressFill');
+            var counts = document.getElementById('msMigrationCounts');
+            if (msg) msg.textContent = p.last_message || '';
+            var done = (p.downloaded || 0) + (p.skipped_existing || 0) + (p.failed || 0);
+            var pct = p.total > 0 ? Math.round(100 * done / p.total) : 0;
+            if (fill) fill.style.width = pct + '%';
+            if (counts) {
+                counts.innerHTML =
+                    '<b>' + (p.downloaded || 0) + '</b> downloaded · ' +
+                    '<b>' + (p.skipped_existing || 0) + '</b> already existed · ' +
+                    '<b>' + (p.failed || 0) + '</b> failed · ' +
+                    'of <b>' + (p.total || 0) + '</b> total';
+            }
+            if (p.completed) {
+                // Done — stop polling, show the start button again, render failures.
+                if (msMigrationPollTimer) { clearInterval(msMigrationPollTimer); msMigrationPollTimer = null; }
+                var sb = document.getElementById('msMigrateStartBtn');
+                var cb = document.getElementById('msMigrateCancelBtn');
+                if (sb) { sb.disabled = false; sb.textContent = 'Re-run migration'; }
+                if (cb) cb.style.display = 'none';
+
+                if (p.failures && p.failures.length > 0) {
+                    var failBox = document.getElementById('msMigrationFailures');
+                    if (failBox) {
+                        var html = '<details><summary style="cursor:pointer;color:var(--accent-red,#ef4444);">' +
+                            'Failures (' + p.failures.length + ') — click to expand</summary>' +
+                            '<ul style="padding-left:18px;margin-top:6px;">';
+                        for (var i = 0; i < p.failures.length; i++) {
+                            var f = p.failures[i];
+                            html += '<li style="margin-bottom:4px;"><b>' + escapeHtml(f.reason || 'unknown') +
+                                '</b><br/><span style="opacity:0.7;font-family:ui-monospace,monospace;font-size:10px;">' +
+                                escapeHtml(f.url) + '</span></li>';
+                        }
+                        html += '</ul></details>';
+                        failBox.innerHTML = html;
+                        failBox.style.display = 'block';
+                    }
+                }
+
+                // If we successfully downloaded anything, refresh the in-memory
+                // contracts cache so the rest of the CRM picks up the _local fields.
+                if ((p.downloaded || 0) > 0 || (p.skipped_existing || 0) > 0) {
+                    try {
+                        var loadResult = await t.invoke('storage_load_all');
+                        if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                            // Use realSet to avoid triggering a save-back to SQLite —
+                            // this is just refreshing the cache.
+                            realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+                            showActionToast(
+                                'Migration complete. Local cache refreshed. Some views may need a page reload to show the new local file references.',
+                                'success'
+                            );
+                        }
+                    } catch (e) {
+                        console.error('[ms] refresh after migration failed:', e);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('[ms] poll progress error:', e);
+        }
+    }
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
