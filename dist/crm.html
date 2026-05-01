@@ -4611,9 +4611,20 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '</div>' +
                       '<div id="msCategoriesList">Loading categories…</div>' +
                       '<button onclick="window.__msAddCategory()" id="msAddCategoryBtn" style="margin-top:8px;">+ Add document category</button>' +
-                      '<div style="margin-top:10px;font-size:11px;color:var(--text-dim);font-style:italic;">' +
-                        'Note: the matching tool that proposes file-to-record assignments and moves files from Migration to their final folders ships in the next build.' +
-                      '</div>' +
+                    '</div>' +
+                  '</details>' +
+
+                  '<hr/>' +
+                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                    '<summary style="cursor:pointer;">Advanced — Match Migration files to records</summary>' +
+                    '<div style="padding-top:8px;line-height:1.55;">' +
+                      'Scans the Migration folder and proposes which CRM record each file should attach to. ' +
+                      'High-confidence matches (≥90%) auto-apply silently. Medium-confidence matches need your review. ' +
+                      'Files with no match show in an "Unmatched" list where you can file them by hand or link to a CRM record.<br/><br/>' +
+                      '<button onclick="window.__msStartMatcher()" id="msMatcherStartBtn">Scan &amp; propose matches</button>' +
+                      '<button onclick="window.__msApplyAllAuto()" id="msApplyAutoBtn" style="display:none;margin-left:6px;">Apply all auto-matches</button>' +
+                      '<div id="msMatcherSummary" style="margin-top:10px;display:none;font-size:12px;"></div>' +
+                      '<div id="msMatcherSection" style="margin-top:10px;"></div>' +
                     '</div>' +
                   '</details>' +
 
@@ -4957,6 +4968,518 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             __msRefreshCategoriesList();
         } catch (e) {
             showActionToast('Remove error: ' + e, 'error');
+        }
+    };
+
+    // ========================================================================
+    // SESSION 8 BUILD B — Migration matcher
+    //
+    // Workflow:
+    //   1. User clicks "Scan & propose matches" → calls scan + propose.
+    //   2. UI renders three sections:
+    //      - Auto-matched (≥0.9): one-click "Apply all auto-matches"
+    //      - Needs review (0.3–0.9): per-file row with top candidate +
+    //        alternatives dropdown
+    //      - Unmatched (<0.3 or no candidates): per-file row with options
+    //        File only / Link to record / Skip
+    //   3. As assignments are applied, files move to Files/{FY}/{cat}/, and
+    //      contracts get _local fields populated.
+    //   4. After applying, re-scan to refresh the list.
+    // ========================================================================
+
+    var msMatcherProposals = null; // last propose_file_matches result
+
+    window.__msStartMatcher = async function () {
+        var btn = document.getElementById('msMatcherStartBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+        var summary = document.getElementById('msMatcherSummary');
+        var section = document.getElementById('msMatcherSection');
+        if (section) section.innerHTML = '';
+        if (summary) { summary.style.display = 'none'; summary.innerHTML = ''; }
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                if (btn) { btn.disabled = false; btn.textContent = 'Scan & propose matches'; }
+                return;
+            }
+            var r = await t.invoke('propose_file_matches');
+            if (!r || !r.ok) {
+                showActionToast('Match proposal failed: ' + ((r && r.error) || 'unknown'), 'error');
+                if (btn) { btn.disabled = false; btn.textContent = 'Scan & propose matches'; }
+                return;
+            }
+            msMatcherProposals = r;
+            __msRenderMatcher();
+        } catch (e) {
+            showActionToast('Matcher error: ' + e, 'error');
+            console.error('[ms] matcher error:', e);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Re-scan'; }
+        }
+    };
+
+    function __msRenderMatcher() {
+        var p = msMatcherProposals;
+        var summary = document.getElementById('msMatcherSummary');
+        var section = document.getElementById('msMatcherSection');
+        var applyAllBtn = document.getElementById('msApplyAutoBtn');
+        if (!p || !section) return;
+
+        if (summary) {
+            summary.style.display = 'block';
+            summary.innerHTML =
+                '<div><b>' + p.total_files + '</b> file(s) in Migration folder</div>' +
+                '<div style="margin-top:4px;">' +
+                  '<span style="color:#34d399;">' + p.auto_count + ' auto-matched</span> · ' +
+                  '<span style="color:#fbbf24;">' + p.review_count + ' need review</span> · ' +
+                  '<span style="color:var(--text-dim);">' + p.unmatched_count + ' unmatched</span>' +
+                '</div>';
+        }
+        if (applyAllBtn) {
+            applyAllBtn.style.display = (p.auto_count > 0) ? '' : 'none';
+        }
+
+        if (p.total_files === 0) {
+            section.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-style:italic;">' +
+                'Migration folder is empty. Move files into it via Finder, then click "Scan &amp; propose matches" again.' +
+                '</div>';
+            return;
+        }
+
+        var html = '';
+
+        // Auto-matched section (collapsed by default, just summarized)
+        var autoFiles = p.files.filter(function (f) { return f.bucket === 'auto'; });
+        if (autoFiles.length > 0) {
+            html += '<details style="margin-top:12px;">' +
+                '<summary style="cursor:pointer;color:#34d399;font-weight:600;">' +
+                  '✓ Auto-matched (' + autoFiles.length + ') — click to expand' +
+                '</summary>' +
+                '<div style="padding:8px 0;">';
+            for (var i = 0; i < autoFiles.length; i++) {
+                var f = autoFiles[i];
+                var c = f.candidates[0];
+                html += '<div style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+                    '<div style="font-family:ui-monospace,monospace;font-size:11px;">' + escapeHtml(f.file.filename) + '</div>' +
+                    '<div style="font-size:11px;color:var(--text-dim);">→ ' + escapeHtml(c.label) + '</div>' +
+                    '<div style="font-size:10px;color:var(--text-dim);">FY: ' +
+                        escapeHtml(c.suggested_fy || '?') + ' · confidence: ' + Math.round(c.confidence * 100) + '%</div>' +
+                  '</div>';
+            }
+            html += '</div></details>';
+        }
+
+        // Review section (top candidate visible, expandable to alternatives)
+        var reviewFiles = p.files.filter(function (f) { return f.bucket === 'review'; });
+        if (reviewFiles.length > 0) {
+            html += '<div style="margin-top:14px;color:#fbbf24;font-weight:600;">⚠ Needs review (' + reviewFiles.length + ')</div>';
+            for (var j = 0; j < reviewFiles.length; j++) {
+                html += __msRenderReviewRow(reviewFiles[j], j);
+            }
+        }
+
+        // Unmatched section
+        var unmatchedFiles = p.files.filter(function (f) { return f.bucket === 'unmatched'; });
+        if (unmatchedFiles.length > 0) {
+            html += '<div style="margin-top:14px;color:var(--text-dim);font-weight:600;">○ Unmatched (' + unmatchedFiles.length + ')</div>';
+            for (var k = 0; k < unmatchedFiles.length; k++) {
+                html += __msRenderUnmatchedRow(unmatchedFiles[k], k);
+            }
+        }
+
+        section.innerHTML = html;
+    }
+
+    function __msRenderReviewRow(f, idx) {
+        var rowId = 'msReviewRow_' + idx;
+        var html = '<div id="' + rowId + '" style="padding:10px;margin-top:6px;background:rgba(255,255,255,0.03);border-radius:4px;border-left:3px solid #fbbf24;">' +
+            '<div style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;">' + escapeHtml(f.file.filename) + '</div>' +
+            '<div style="margin-top:6px;font-size:11px;">' +
+              '<select id="' + rowId + '_select" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;">';
+        for (var i = 0; i < f.candidates.length; i++) {
+            var c = f.candidates[i];
+            html += '<option value="' + i + '">' +
+                Math.round(c.confidence * 100) + '% — ' + escapeHtml(c.label) +
+                ' [' + escapeHtml(c.suggested_fy || '?') + ']' +
+                '</option>';
+        }
+        html += '</select>' +
+              '</div>' +
+              '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">' +
+                '<button onclick="window.__msConfirmReview(\'' + escapeAttr(f.file.abs_path) + '\', ' + idx + ')" style="font-size:11px;padding:4px 10px;">Confirm</button>' +
+                '<button onclick="window.__msShowReasons(' + idx + ')" style="font-size:11px;padding:4px 10px;">Why?</button>' +
+                '<button onclick="window.__msSkipFile(\'' + escapeAttr(f.file.abs_path) + '\', \'' + rowId + '\')" style="font-size:11px;padding:4px 10px;">Skip</button>' +
+              '</div>' +
+              '<div id="' + rowId + '_status" style="margin-top:4px;font-size:10px;color:var(--text-dim);"></div>' +
+            '</div>';
+        return html;
+    }
+
+    function __msRenderUnmatchedRow(f, idx) {
+        var rowId = 'msUnmatchedRow_' + idx;
+        var html = '<div id="' + rowId + '" style="padding:10px;margin-top:6px;background:rgba(255,255,255,0.03);border-radius:4px;border-left:3px solid var(--text-dim);">' +
+            '<div style="font-family:ui-monospace,monospace;font-size:11px;font-weight:600;">' + escapeHtml(f.file.filename) + '</div>' +
+            '<div style="margin-top:6px;font-size:11px;color:var(--text-dim);">No CRM record matched. Choose what to do:</div>' +
+            '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">' +
+              '<button onclick="window.__msFileOnly(\'' + escapeAttr(f.file.abs_path) + '\', \'' + rowId + '\')" style="font-size:11px;padding:4px 10px;">File without linking</button>' +
+              '<button onclick="window.__msLinkToRecord(\'' + escapeAttr(f.file.abs_path) + '\', \'' + rowId + '\')" style="font-size:11px;padding:4px 10px;">Link to a CRM record…</button>' +
+              '<button onclick="window.__msSkipFile(\'' + escapeAttr(f.file.abs_path) + '\', \'' + rowId + '\')" style="font-size:11px;padding:4px 10px;">Skip</button>' +
+            '</div>' +
+            '<div id="' + rowId + '_status" style="margin-top:4px;font-size:10px;color:var(--text-dim);"></div>' +
+          '</div>';
+        return html;
+    }
+
+    window.__msShowReasons = function (idx) {
+        var p = msMatcherProposals;
+        if (!p) return;
+        var reviewFiles = p.files.filter(function (f) { return f.bucket === 'review'; });
+        if (idx >= reviewFiles.length) return;
+        var sel = document.getElementById('msReviewRow_' + idx + '_select');
+        var sel_idx = sel ? parseInt(sel.value, 10) : 0;
+        var c = reviewFiles[idx].candidates[sel_idx];
+        if (!c) return;
+        var msg = 'Match reasons for "' + reviewFiles[idx].file.filename + '"\n\n' +
+            'Candidate: ' + c.label + '\n' +
+            'Confidence: ' + Math.round(c.confidence * 100) + '%\n' +
+            'Suggested FY: ' + (c.suggested_fy || '(none)') + '\n\n' +
+            'Reasons:\n  • ' + c.reasons.join('\n  • ');
+        window.alert(msg);
+    };
+
+    window.__msConfirmReview = async function (filePath, idx) {
+        var p = msMatcherProposals;
+        if (!p) return;
+        var reviewFiles = p.files.filter(function (f) { return f.bucket === 'review'; });
+        if (idx >= reviewFiles.length) return;
+        var sel = document.getElementById('msReviewRow_' + idx + '_select');
+        var sel_idx = sel ? parseInt(sel.value, 10) : 0;
+        var c = reviewFiles[idx].candidates[sel_idx];
+        if (!c) return;
+
+        var fy = c.suggested_fy;
+        if (!fy) {
+            fy = window.prompt('No FY auto-derived. Enter FY (e.g. FY24-25):', 'FY' + new Date().getFullYear().toString().slice(-2) + '-' + (new Date().getFullYear() + 1).toString().slice(-2));
+            if (!fy) return;
+        }
+
+        var statusEl = document.getElementById('msReviewRow_' + idx + '_status');
+        if (statusEl) statusEl.textContent = 'Moving file…';
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('apply_file_assignment', {
+                filePath: filePath,
+                action: 'link_to_record',
+                fy: fy,
+                categoryPath: c.category_path,
+                fieldPath: c.field_path
+            });
+            if (r && r.ok) {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">✓ Filed to ' + escapeHtml(r.destination || '?') + '</span>';
+                __msMarkRowDone('msReviewRow_' + idx);
+            } else {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">✗ ' + escapeHtml((r && r.error) || 'unknown') + '</span>';
+            }
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'Error: ' + e;
+        }
+    };
+
+    window.__msSkipFile = function (filePath, rowId) {
+        // No-op apart from greying out the row.
+        __msMarkRowDone(rowId, 'Skipped — file left in Migration.');
+    };
+
+    function __msMarkRowDone(rowId, label) {
+        var row = document.getElementById(rowId);
+        if (row) {
+            row.style.opacity = '0.5';
+            // Disable all buttons in the row
+            var buttons = row.querySelectorAll('button');
+            for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+            if (label) {
+                var status = row.querySelector('[id$="_status"]');
+                if (status && !status.textContent) status.textContent = label;
+            }
+        }
+    }
+
+    window.__msApplyAllAuto = async function () {
+        var p = msMatcherProposals;
+        if (!p) return;
+        var autoFiles = p.files.filter(function (f) { return f.bucket === 'auto'; });
+        if (autoFiles.length === 0) { showActionToast('No auto-matches to apply.', 'info'); return; }
+        if (!window.confirm('Apply ' + autoFiles.length + ' auto-matches?\n\nFiles will be moved from Migration/ to their final folders. Records will be updated.')) return;
+
+        var btn = document.getElementById('msApplyAutoBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+
+        var success = 0, failed = 0;
+        var failures = [];
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            for (var i = 0; i < autoFiles.length; i++) {
+                var f = autoFiles[i];
+                var c = f.candidates[0];
+                if (!c.suggested_fy) {
+                    failed++;
+                    failures.push(f.file.filename + ': no FY could be auto-derived');
+                    continue;
+                }
+                try {
+                    var r = await t.invoke('apply_file_assignment', {
+                        filePath: f.file.abs_path,
+                        action: 'link_to_record',
+                        fy: c.suggested_fy,
+                        categoryPath: c.category_path,
+                        fieldPath: c.field_path
+                    });
+                    if (r && r.ok) {
+                        success++;
+                    } else {
+                        failed++;
+                        failures.push(f.file.filename + ': ' + ((r && r.error) || 'unknown'));
+                    }
+                } catch (e) {
+                    failed++;
+                    failures.push(f.file.filename + ': ' + e);
+                }
+                // Update progress in button
+                if (btn) btn.textContent = 'Applying… (' + (i + 1) + '/' + autoFiles.length + ')';
+            }
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Apply all auto-matches'; }
+        }
+
+        var msg = 'Applied ' + success + ' / ' + autoFiles.length + '.';
+        if (failed > 0) {
+            msg += ' ' + failed + ' failed.';
+            console.error('[ms] matcher failures:', failures);
+        }
+        showActionToast(msg, failed > 0 ? 'error' : 'success');
+
+        // Refresh the in-memory contract cache so the CRM picks up _local fields
+        try {
+            var loadResult = await t.invoke('storage_load_all');
+            if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+            }
+        } catch (e) { console.error('[ms] refresh after apply failed:', e); }
+
+        // Re-scan to update the matcher view.
+        await window.__msStartMatcher();
+    };
+
+    window.__msFileOnly = async function (filePath, rowId) {
+        // Open a small inline form to pick FY and category.
+        var form = await __msOpenFileOnlyForm(filePath, rowId);
+        // function is async because it shows a confirmation form
+    };
+
+    async function __msOpenFileOnlyForm(filePath, rowId) {
+        // Get the categories list to populate the dropdown
+        var t = getTauri();
+        if (!t || !t.invoke) return;
+
+        var catsResult;
+        try { catsResult = await t.invoke('get_document_categories'); }
+        catch (e) { showActionToast('Could not load categories: ' + e, 'error'); return; }
+        if (!catsResult || !catsResult.ok || !catsResult.categories) return;
+
+        var fyOptions = ['FY20-21','FY21-22','FY22-23','FY23-24','FY24-25','FY25-26','FY26-27'];
+        var thisFY = (function () {
+            var d = new Date();
+            var y = d.getFullYear();
+            var m = d.getMonth() + 1;
+            var startY = m >= 4 ? y : y - 1;
+            return 'FY' + (startY % 100).toString().padStart(2, '0') + '-' + ((startY + 1) % 100).toString().padStart(2, '0');
+        })();
+
+        var fyHtml = fyOptions.map(function (fy) {
+            return '<option value="' + fy + '"' + (fy === thisFY ? ' selected' : '') + '>' + fy + '</option>';
+        }).join('');
+
+        var catHtml = catsResult.categories.map(function (c) {
+            return '<option value="' + escapeAttr(c.path_segments.join('/')) + '">' + escapeHtml(c.display_name) + '</option>';
+        }).join('');
+
+        var row = document.getElementById(rowId);
+        if (!row) return;
+        var formId = rowId + '_form';
+        if (document.getElementById(formId)) return; // already open
+        var form = document.createElement('div');
+        form.id = formId;
+        form.style.marginTop = '8px';
+        form.style.padding = '8px';
+        form.style.background = 'rgba(0,0,0,0.2)';
+        form.style.borderRadius = '4px';
+        form.innerHTML =
+            '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
+            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fyHtml + '</select>' +
+            '<div style="font-size:11px;margin-bottom:4px;">Category:</div>' +
+            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + catHtml + '</select>' +
+            '<div style="display:flex;gap:6px;">' +
+              '<button onclick="window.__msFileOnlySubmit(\'' + escapeAttr(filePath) + '\', \'' + rowId + '\', \'' + formId + '\')" style="font-size:11px;padding:4px 10px;">File now</button>' +
+              '<button onclick="document.getElementById(\'' + formId + '\').remove();" style="font-size:11px;padding:4px 10px;">Cancel</button>' +
+            '</div>';
+        row.appendChild(form);
+    }
+
+    window.__msFileOnlySubmit = async function (filePath, rowId, formId) {
+        var fy = document.getElementById(formId + '_fy').value;
+        var catRaw = document.getElementById(formId + '_cat').value;
+        var catSegs = catRaw.split('/').filter(function (s) { return s.length > 0; });
+        var statusEl = document.getElementById(rowId + '_status');
+        if (statusEl) statusEl.textContent = 'Moving…';
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('apply_file_assignment', {
+                filePath: filePath,
+                action: 'file_only',
+                fy: fy,
+                categoryPath: catSegs,
+                fieldPath: null
+            });
+            if (r && r.ok) {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">✓ Filed (no link)</span>';
+                __msMarkRowDone(rowId);
+                document.getElementById(formId).remove();
+            } else {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">✗ ' + escapeHtml((r && r.error) || 'unknown') + '</span>';
+            }
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'Error: ' + e;
+        }
+    };
+
+    window.__msLinkToRecord = async function (filePath, rowId) {
+        var t = getTauri();
+        if (!t || !t.invoke) return;
+
+        // Load the linkable fields list once and cache.
+        var fieldsResult;
+        try { fieldsResult = await t.invoke('list_linkable_record_fields'); }
+        catch (e) { showActionToast('Could not load fields: ' + e, 'error'); return; }
+        if (!fieldsResult || !fieldsResult.ok || !fieldsResult.fields) {
+            showActionToast('No linkable fields available', 'error');
+            return;
+        }
+
+        // Filter to those without a _local already, sort alphabetically by label.
+        var available = fieldsResult.fields.filter(function (f) { return !f.already_has_local; });
+        available.sort(function (a, b) { return a.label.localeCompare(b.label); });
+
+        if (available.length === 0) {
+            showActionToast('No fields available — every CRM link already has a local file. File without linking instead.', 'info');
+            return;
+        }
+
+        // Build a searchable picker form
+        var row = document.getElementById(rowId);
+        if (!row) return;
+        var formId = rowId + '_linkform';
+        if (document.getElementById(formId)) return;
+
+        var fyOptions = ['FY20-21','FY21-22','FY22-23','FY23-24','FY24-25','FY25-26','FY26-27'];
+        var fyHtml = fyOptions.map(function (fy) { return '<option value="' + fy + '">' + fy + '</option>'; }).join('');
+
+        var catsResult = await t.invoke('get_document_categories');
+        var cats = (catsResult && catsResult.ok && catsResult.categories) ? catsResult.categories : [];
+        var catHtml = cats.map(function (c) {
+            return '<option value="' + escapeAttr(c.path_segments.join('/')) + '">' + escapeHtml(c.display_name) + '</option>';
+        }).join('');
+
+        var fieldOptions = available.map(function (f, i) {
+            return '<option value="' + i + '">' + escapeHtml(f.label) + '</option>';
+        }).join('');
+
+        var form = document.createElement('div');
+        form.id = formId;
+        form.style.marginTop = '8px';
+        form.style.padding = '8px';
+        form.style.background = 'rgba(0,0,0,0.2)';
+        form.style.borderRadius = '4px';
+        // Stash the available list on the form node so the submit handler can read it.
+        form._linkableFields = available;
+        form.innerHTML =
+            '<div style="font-size:11px;margin-bottom:4px;">Type to filter, then pick the record:</div>' +
+            '<input id="' + formId + '_filter" placeholder="Filter…" ' +
+              'oninput="window.__msFilterLinkOptions(\'' + formId + '\')" ' +
+              'style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:4px;" />' +
+            '<select id="' + formId + '_field" size="6" style="width:100%;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fieldOptions + '</select>' +
+            '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
+            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fyHtml + '</select>' +
+            '<div style="font-size:11px;margin-bottom:4px;">Category:</div>' +
+            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + catHtml + '</select>' +
+            '<div style="display:flex;gap:6px;">' +
+              '<button onclick="window.__msLinkToRecordSubmit(\'' + escapeAttr(filePath) + '\', \'' + rowId + '\', \'' + formId + '\')" style="font-size:11px;padding:4px 10px;">Link &amp; file</button>' +
+              '<button onclick="document.getElementById(\'' + formId + '\').remove();" style="font-size:11px;padding:4px 10px;">Cancel</button>' +
+            '</div>';
+        row.appendChild(form);
+    };
+
+    window.__msFilterLinkOptions = function (formId) {
+        var filter = (document.getElementById(formId + '_filter') || {}).value || '';
+        filter = filter.toLowerCase();
+        var sel = document.getElementById(formId + '_field');
+        if (!sel) return;
+        var form = document.getElementById(formId);
+        if (!form || !form._linkableFields) return;
+        var available = form._linkableFields;
+        // Rebuild options
+        var html = '';
+        for (var i = 0; i < available.length; i++) {
+            var f = available[i];
+            if (!filter || f.label.toLowerCase().indexOf(filter) >= 0) {
+                html += '<option value="' + i + '">' + escapeHtml(f.label) + '</option>';
+            }
+        }
+        sel.innerHTML = html;
+    };
+
+    window.__msLinkToRecordSubmit = async function (filePath, rowId, formId) {
+        var form = document.getElementById(formId);
+        if (!form || !form._linkableFields) return;
+        var sel = document.getElementById(formId + '_field');
+        if (!sel || !sel.value) { showActionToast('Pick a record first.', 'error'); return; }
+        var i = parseInt(sel.value, 10);
+        var fld = form._linkableFields[i];
+        if (!fld) return;
+        var fy = document.getElementById(formId + '_fy').value;
+        var catRaw = document.getElementById(formId + '_cat').value;
+        var catSegs = catRaw.split('/').filter(function (s) { return s.length > 0; });
+        var statusEl = document.getElementById(rowId + '_status');
+        if (statusEl) statusEl.textContent = 'Linking & moving…';
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('apply_file_assignment', {
+                filePath: filePath,
+                action: 'link_to_record',
+                fy: fy,
+                categoryPath: catSegs,
+                fieldPath: fld.field_path
+            });
+            if (r && r.ok) {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">✓ Linked &amp; filed</span>';
+                __msMarkRowDone(rowId);
+                form.remove();
+                // Refresh in-memory cache
+                try {
+                    var loadResult = await t.invoke('storage_load_all');
+                    if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                        realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+                    }
+                } catch (e2) { console.error('[ms] cache refresh failed:', e2); }
+            } else {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">✗ ' + escapeHtml((r && r.error) || 'unknown') + '</span>';
+            }
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'Error: ' + e;
         }
     };
 

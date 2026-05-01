@@ -2753,6 +2753,983 @@ fn reveal_path<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) -> ser
 
 
 // ============================================================================
+// Session 8 Build B — Migration matcher
+//
+// Walks the Migration/ folder, scores each file against every CRM link field
+// (internalPOLink, clientPOLink, clientPOs[*].poLink,
+//  billingYears[*].clientInvoiceLink, billingYears[*].oemInvoiceLink),
+// returns proposed matches grouped by confidence. The user confirms in the
+// UI; on confirmation, files move from Migration/ to their final destination
+// (Files/{FY}/{category}/) and the contract record's _local field is updated.
+//
+// Confidence model:
+//   1.0 = invoice/PO number found in filename + client name match (definitive)
+//   0.85-0.95 = client/OEM/product name + year match
+//   0.5-0.8 = single strong signal (e.g. just client name)
+//   0.2-0.5 = weak signal (e.g. just OEM name, no other context)
+//   < 0.2 = no candidates / unmatched
+//
+// Auto-confirm threshold: ≥ 0.9. Prompted: 0.3 - 0.9. Unmatched: < 0.3.
+// ============================================================================
+
+/// One file discovered in the Migration folder.
+#[derive(Clone, Serialize)]
+struct MigrationFile {
+    /// Absolute path on disk.
+    abs_path: String,
+    /// Filename only.
+    filename: String,
+    /// Lowercase filename (for case-insensitive substring matching).
+    filename_lc: String,
+    /// File size in bytes (for display, and to detect zero-byte files).
+    size_bytes: u64,
+}
+
+/// One candidate match for a file → CRM link field pairing.
+#[derive(Clone, Serialize)]
+struct MatchCandidate {
+    /// Stable identifier for the CRM record + field. Format:
+    ///   contracts[N].internalPOLink
+    ///   contracts[N].clientPOLink
+    ///   contracts[N].clientPOs[M].poLink
+    ///   contracts[N].billingYears[Y].clientInvoiceLink
+    ///   contracts[N].billingYears[Y].oemInvoiceLink
+    field_path: String,
+    /// Human-readable description for the UI:
+    ///   "63 Moons — Darktrace (DT Email) — Internal PO #49377-... (2021-03-21)"
+    label: String,
+    /// 0.0 to 1.0 confidence score.
+    confidence: f64,
+    /// What features matched, for the UI tooltip.
+    reasons: Vec<String>,
+    /// The original OneDrive URL (for reference).
+    original_url: String,
+    /// Document category — used to compute destination folder.
+    category_path: Vec<String>,
+    /// Indian FY string (e.g. "FY21-22") derived from the record's date fields.
+    /// May be None if no usable date — UI then asks the user to pick.
+    suggested_fy: Option<String>,
+    /// Document type label (for UI grouping/display).
+    document_type: String,
+}
+
+/// One file with its scored candidates (or empty list if unmatched).
+#[derive(Serialize)]
+struct FileWithMatches {
+    file: MigrationFile,
+    /// Sorted by confidence descending. Top candidate is at index 0.
+    candidates: Vec<MatchCandidate>,
+    /// Convenience: the bucket this file falls into for the UI.
+    /// "auto" (≥0.9) | "review" (0.3-0.9) | "unmatched" (<0.3 or empty)
+    bucket: String,
+}
+
+/// Convert a YYYY-MM-DD date string to "FYxx-yy" (Indian financial year).
+fn date_to_fy(date_str: &str) -> Option<String> {
+    if date_str.len() < 7 { return None; }
+    let year: i32 = date_str.get(0..4)?.parse().ok()?;
+    let month: i32 = date_str.get(5..7)?.parse().ok()?;
+    if month < 1 || month > 12 { return None; }
+    if year < 2000 || year > 2099 { return None; }
+    let (start, end) = if month >= 4 {
+        (year, year + 1)
+    } else {
+        (year - 1, year)
+    };
+    Some(format!("FY{:02}-{:02}", start % 100, end % 100))
+}
+
+/// Lowercase + strip non-alphanumeric for substring matching.
+/// "63 Moons Tech." → "63moonstech"
+fn normalize_for_match(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// Extract OEM names from the OEM master, including aliases.
+/// Returns a list of (display_name, normalized_name) tuples for matching.
+fn extract_oem_names(oem_master: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(obj) = oem_master.as_object() {
+        for (oem_name, _products) in obj {
+            let norm = normalize_for_match(oem_name);
+            if !norm.is_empty() {
+                out.push((oem_name.clone(), norm));
+            }
+        }
+    }
+    out
+}
+
+/// Extract product short names. From "Darktrace (DT Email)" → ["DT Email", "DTEmail"].
+fn product_match_tokens(product: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if product.is_empty() { return out; }
+    out.push(normalize_for_match(product));
+    // Pull bracketed portion if present.
+    if let (Some(open), Some(close)) = (product.find('('), product.find(')')) {
+        if open < close {
+            let inner = &product[open + 1..close];
+            let norm = normalize_for_match(inner);
+            if !norm.is_empty() && !out.contains(&norm) {
+                out.push(norm);
+            }
+        }
+    }
+    out.into_iter().filter(|s| s.len() >= 3).collect()
+}
+
+/// Score one filename against one record + field pairing. Returns a
+/// MatchCandidate if the score is above zero.
+fn score_field_match(
+    filename_lc_norm: &str,
+    contract: &serde_json::Value,
+    contract_idx: usize,
+    field_kind: &FieldKind,
+    client_norm: &str,
+    client_short_norm: &str,
+    oem_names: &[(String, String)],
+    product_tokens: &[String],
+) -> Option<MatchCandidate> {
+    let mut score: f64 = 0.0;
+    let mut reasons: Vec<String> = Vec::new();
+
+    // Client name match (strong signal — almost every file has client name)
+    let mut client_matched = false;
+    if !client_norm.is_empty() && filename_lc_norm.contains(client_norm) {
+        score += 0.45;
+        reasons.push(format!("client name '{}'", contract.get("client").and_then(|v| v.as_str()).unwrap_or("")));
+        client_matched = true;
+    } else if !client_short_norm.is_empty() && client_short_norm.len() >= 3
+        && filename_lc_norm.contains(client_short_norm) {
+        score += 0.40;
+        reasons.push(format!("client short '{}'", contract.get("client").and_then(|v| v.as_str()).unwrap_or("")));
+        client_matched = true;
+    }
+
+    // OEM match (especially relevant for OEM invoices)
+    let mut oem_matched_name = String::new();
+    for (display, norm) in oem_names {
+        if !norm.is_empty() && filename_lc_norm.contains(norm) {
+            score += 0.20;
+            reasons.push(format!("OEM '{display}'"));
+            oem_matched_name = display.clone();
+            break;
+        }
+    }
+
+    // Product token match
+    for tok in product_tokens {
+        if filename_lc_norm.contains(tok) {
+            score += 0.15;
+            reasons.push(format!("product '{tok}'"));
+            break;
+        }
+    }
+
+    // Field-specific matches: invoice number, PO number
+    let (date_hint, num_hint, doc_type, category_segs, original_url) = match field_kind {
+        FieldKind::InternalPO => {
+            let num = contract.get("internalPO").and_then(|v| v.as_str()).unwrap_or("");
+            let dt = contract.get("internalPODate").and_then(|v| v.as_str()).unwrap_or("");
+            let url = contract.get("internalPOLink").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (dt.to_string(), num.to_string(), "Internal PO".to_string(),
+             vec!["POs".to_string(), "Internal".to_string()], url)
+        },
+        FieldKind::ClientPOLegacy => {
+            let num = contract.get("clientPO").and_then(|v| v.as_str()).unwrap_or("");
+            let dt = contract.get("clientPODate").and_then(|v| v.as_str()).unwrap_or("");
+            let url = contract.get("clientPOLink").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (dt.to_string(), num.to_string(), "Client PO".to_string(),
+             vec!["POs".to_string(), "Client".to_string()], url)
+        },
+        FieldKind::ClientPOArr(po_idx) => {
+            let arr = contract.get("clientPOs").and_then(|v| v.as_array());
+            let po = arr.and_then(|a| a.get(*po_idx));
+            let num = po.and_then(|p| p.get("poNo")).and_then(|v| v.as_str()).unwrap_or("");
+            let dt = po.and_then(|p| p.get("poDate")).and_then(|v| v.as_str()).unwrap_or("");
+            let url = po.and_then(|p| p.get("poLink")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (dt.to_string(), num.to_string(), "Client PO".to_string(),
+             vec!["POs".to_string(), "Client".to_string()], url)
+        },
+        FieldKind::ClientInvoice(y_idx) => {
+            let arr = contract.get("billingYears").and_then(|v| v.as_array());
+            let by = arr.and_then(|a| a.get(*y_idx));
+            let num = by.and_then(|b| b.get("clientInvoiceNo")).and_then(|v| v.as_str()).unwrap_or("");
+            // Try actualInvoiceDate, then billDate
+            let dt = by.and_then(|b| b.get("actualInvoiceDate")).and_then(|v| v.as_str())
+                .or_else(|| by.and_then(|b| b.get("billDate")).and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let url = by.and_then(|b| b.get("clientInvoiceLink")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (dt.to_string(), num.to_string(), "Client Invoice".to_string(),
+             vec!["Invoices".to_string(), "Client".to_string()], url)
+        },
+        FieldKind::OemInvoice(y_idx) => {
+            let arr = contract.get("billingYears").and_then(|v| v.as_array());
+            let by = arr.and_then(|a| a.get(*y_idx));
+            let num = by.and_then(|b| b.get("oemInvoiceNo")).and_then(|v| v.as_str()).unwrap_or("");
+            let dt = by.and_then(|b| b.get("oemInvoiceDate")).and_then(|v| v.as_str())
+                .or_else(|| by.and_then(|b| b.get("billDate")).and_then(|v| v.as_str()))
+                .unwrap_or("");
+            let url = by.and_then(|b| b.get("oemInvoiceLink")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (dt.to_string(), num.to_string(), "OEM Invoice".to_string(),
+             vec!["Invoices".to_string(), "OEM".to_string()], url)
+        },
+    };
+
+    // Skip the candidate entirely if there's no link in this field —
+    // we never want to match a file to a record's field that's empty
+    // (would be a useless assignment).
+    if original_url.is_empty() { return None; }
+
+    // Document number match (very strong if present)
+    if !num_hint.is_empty() {
+        let num_norm = normalize_for_match(&num_hint);
+        if num_norm.len() >= 4 && filename_lc_norm.contains(&num_norm) {
+            score += 0.50;
+            reasons.push(format!("doc number '{num_hint}'"));
+        }
+    }
+
+    // Year match — pull year from the date hint
+    if date_hint.len() >= 4 {
+        let year_full = &date_hint[..4];
+        let year_short = if date_hint.len() >= 4 { &year_full[2..4] } else { "" };
+        if filename_lc_norm.contains(year_full) {
+            score += 0.20;
+            reasons.push(format!("year {year_full}"));
+        } else if !year_short.is_empty() && filename_lc_norm.contains(year_short) {
+            // Weaker — short year matches more accidentally
+            score += 0.05;
+            reasons.push(format!("year hint {year_short}"));
+        }
+    }
+
+    // For OEM Invoice, lack of OEM match in filename is a signal that this
+    // file probably isn't an OEM invoice for this record. Reduce confidence.
+    if matches!(field_kind, FieldKind::OemInvoice(_)) && oem_matched_name.is_empty() {
+        score *= 0.70;
+    }
+
+    // For Internal PO and Client invoices, OEM match isn't required so no penalty.
+
+    // If we matched neither client nor OEM, the score is essentially noise.
+    if !client_matched && oem_matched_name.is_empty() {
+        return None;
+    }
+
+    if score < 0.05 { return None; }
+
+    // Cap at 1.0
+    let final_score = score.min(1.0);
+
+    // Build the human-readable label
+    let client = contract.get("client").and_then(|v| v.as_str()).unwrap_or("(unknown client)");
+    let product = contract.get("product").and_then(|v| v.as_str()).unwrap_or("");
+    let label = if !num_hint.is_empty() {
+        format!("{client} — {product} — {doc_type} #{num_hint} ({date_hint})")
+    } else {
+        format!("{client} — {product} — {doc_type} ({date_hint})")
+    };
+
+    let suggested_fy = if !date_hint.is_empty() { date_to_fy(&date_hint) } else { None };
+
+    let field_path = match field_kind {
+        FieldKind::InternalPO => format!("contracts[{contract_idx}].internalPOLink"),
+        FieldKind::ClientPOLegacy => format!("contracts[{contract_idx}].clientPOLink"),
+        FieldKind::ClientPOArr(po_idx) => format!("contracts[{contract_idx}].clientPOs[{po_idx}].poLink"),
+        FieldKind::ClientInvoice(y_idx) => format!("contracts[{contract_idx}].billingYears[{y_idx}].clientInvoiceLink"),
+        FieldKind::OemInvoice(y_idx) => format!("contracts[{contract_idx}].billingYears[{y_idx}].oemInvoiceLink"),
+    };
+
+    Some(MatchCandidate {
+        field_path,
+        label,
+        confidence: final_score,
+        reasons,
+        original_url,
+        category_path: category_segs,
+        suggested_fy,
+        document_type: doc_type,
+    })
+}
+
+#[derive(Clone)]
+enum FieldKind {
+    InternalPO,
+    ClientPOLegacy,
+    ClientPOArr(usize),
+    ClientInvoice(usize),
+    OemInvoice(usize),
+}
+
+/// Walk the migration folder and return all files (recursive, ignoring
+/// macOS metadata files like .DS_Store and ._*).
+fn list_migration_files() -> Result<Vec<MigrationFile>, String> {
+    let root = migration_root().ok_or("Could not resolve migration folder")?;
+    if !root.exists() {
+        return Err("Migration folder does not exist. Initialize first.".into());
+    }
+    let mut out: Vec<MigrationFile> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![root];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue; };
+            if name == ".DS_Store" || name.starts_with("._") { continue; }
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(path),
+                Ok(ft) if ft.is_file() => {
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let filename = name.to_string();
+                    let filename_lc = filename.to_lowercase();
+                    out.push(MigrationFile {
+                        abs_path: path.to_string_lossy().to_string(),
+                        filename,
+                        filename_lc,
+                        size_bytes: size,
+                    });
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+struct ScanResult {
+    ok: bool,
+    error: Option<String>,
+    file_count: usize,
+}
+
+#[tauri::command]
+fn scan_migration_folder() -> ScanResult {
+    match list_migration_files() {
+        Ok(files) => ScanResult { ok: true, error: None, file_count: files.len() },
+        Err(e) => ScanResult { ok: false, error: Some(e), file_count: 0 },
+    }
+}
+
+#[derive(Serialize)]
+struct ProposeResult {
+    ok: bool,
+    error: Option<String>,
+    files: Vec<FileWithMatches>,
+    /// Counts for the UI dashboard.
+    auto_count: usize,
+    review_count: usize,
+    unmatched_count: usize,
+    total_files: usize,
+}
+
+#[tauri::command]
+fn propose_file_matches() -> ProposeResult {
+    // 1. Read contracts + clients + OEMs from SQLite.
+    let dbp = match db_path() {
+        Some(p) => p,
+        None => return ProposeResult {
+            ok: false, error: Some("no db path".into()),
+            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+        },
+    };
+    let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return ProposeResult {
+            ok: false, error: Some(format!("open db: {e}")),
+            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+        },
+    };
+
+    let mut contracts: Vec<serde_json::Value> = Vec::new();
+    {
+        let mut stmt = match con.prepare("SELECT raw_data FROM contracts ORDER BY legacy_idx ASC") {
+            Ok(s) => s,
+            Err(e) => return ProposeResult {
+                ok: false, error: Some(format!("prepare: {e}")),
+                files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+            },
+        };
+        let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+            Ok(r) => r,
+            Err(e) => return ProposeResult {
+                ok: false, error: Some(format!("query: {e}")),
+                files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+            },
+        };
+        for row in rows.flatten() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row) {
+                contracts.push(v);
+            }
+        }
+    }
+
+    // OEM master — for OEM name matching
+    let oem_master: serde_json::Value = (|| -> serde_json::Value {
+        let raw: String = match con.query_row(
+            "SELECT raw_data FROM app_settings WHERE key = 'ms_oem_master_v1'",
+            [], |r| r.get(0),
+        ) {
+            Ok(s) => s,
+            Err(_) => {
+                // Try the dedicated table first
+                let res: Result<String, _> = con.query_row(
+                    "SELECT raw_data FROM oems LIMIT 1", [], |r| r.get(0)
+                );
+                if let Ok(_) = res {
+                    // OEMs are stored individually — gather as object
+                    let mut obj = serde_json::Map::new();
+                    if let Ok(mut stmt) = con.prepare("SELECT name, raw_data FROM oems") {
+                        if let Ok(rows) = stmt.query_map([], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        }) {
+                            for row in rows.flatten() {
+                                let name = row.0;
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.1) {
+                                    obj.insert(name, v);
+                                }
+                            }
+                        }
+                    }
+                    return serde_json::Value::Object(obj);
+                }
+                return serde_json::Value::Null;
+            }
+        };
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null)
+    })();
+
+    let oem_names = extract_oem_names(&oem_master);
+
+    // 2. List migration files.
+    let files = match list_migration_files() {
+        Ok(f) => f,
+        Err(e) => return ProposeResult {
+            ok: false, error: Some(e),
+            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+        },
+    };
+
+    // 3. For each file, score against every contract field that has a non-empty link.
+    let mut results: Vec<FileWithMatches> = Vec::new();
+    for f in &files {
+        let filename_norm = normalize_for_match(&f.filename_lc);
+        let mut candidates: Vec<MatchCandidate> = Vec::new();
+
+        for (idx, contract) in contracts.iter().enumerate() {
+            let client = contract.get("client").and_then(|v| v.as_str()).unwrap_or("");
+            let client_norm = normalize_for_match(client);
+            // Find client short name from clients dictionary if present
+            let client_short_norm = String::new(); // We'll enhance with client master in a moment
+            let product = contract.get("product").and_then(|v| v.as_str()).unwrap_or("");
+            let product_toks = product_match_tokens(product);
+
+            // Collect all FieldKinds that have a link present
+            let mut kinds: Vec<FieldKind> = Vec::new();
+            if contract.get("internalPOLink").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                kinds.push(FieldKind::InternalPO);
+            }
+            if contract.get("clientPOLink").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                kinds.push(FieldKind::ClientPOLegacy);
+            }
+            if let Some(arr) = contract.get("clientPOs").and_then(|v| v.as_array()) {
+                for (po_idx, po) in arr.iter().enumerate() {
+                    if po.get("poLink").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                        kinds.push(FieldKind::ClientPOArr(po_idx));
+                    }
+                }
+            }
+            if let Some(arr) = contract.get("billingYears").and_then(|v| v.as_array()) {
+                for (y_idx, by) in arr.iter().enumerate() {
+                    if by.get("clientInvoiceLink").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                        kinds.push(FieldKind::ClientInvoice(y_idx));
+                    }
+                    if by.get("oemInvoiceLink").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                        kinds.push(FieldKind::OemInvoice(y_idx));
+                    }
+                }
+            }
+
+            for k in &kinds {
+                if let Some(c) = score_field_match(
+                    &filename_norm, contract, idx, k,
+                    &client_norm, &client_short_norm,
+                    &oem_names, &product_toks,
+                ) {
+                    candidates.push(c);
+                }
+            }
+        }
+
+        // Sort by confidence descending
+        candidates.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Trim to top 5 candidates per file (keeps response size sane)
+        candidates.truncate(5);
+
+        let bucket = if candidates.is_empty() {
+            "unmatched".to_string()
+        } else if candidates[0].confidence >= 0.9 {
+            "auto".to_string()
+        } else if candidates[0].confidence >= 0.3 {
+            "review".to_string()
+        } else {
+            "unmatched".to_string()
+        };
+
+        results.push(FileWithMatches { file: f.clone(), candidates, bucket });
+    }
+
+    let total = results.len();
+    let auto_count = results.iter().filter(|r| r.bucket == "auto").count();
+    let review_count = results.iter().filter(|r| r.bucket == "review").count();
+    let unmatched_count = results.iter().filter(|r| r.bucket == "unmatched").count();
+
+    ProposeResult {
+        ok: true, error: None,
+        files: results,
+        auto_count, review_count, unmatched_count,
+        total_files: total,
+    }
+}
+
+/// Sanitize a filename component for the destination filename. Drops chars
+/// unsafe on macOS/iCloud, collapses whitespace, trims length.
+fn safe_filename_part_v2(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_space = false;
+    for c in s.chars() {
+        let safe = match c {
+            '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*' | '\0' => '_',
+            _ => c,
+        };
+        if safe == ' ' || safe == '\t' {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(safe);
+            last_was_space = false;
+        }
+    }
+    let trimmed = out.trim().to_string();
+    if trimmed.len() > 100 { trimmed.chars().take(100).collect() } else { trimmed }
+}
+
+#[derive(Serialize)]
+struct ApplyResult {
+    ok: bool,
+    error: Option<String>,
+    /// Final destination path, if move succeeded.
+    destination: Option<String>,
+    /// True if the record was updated (i.e. action was link_to_record).
+    record_updated: bool,
+}
+
+/// Apply one file assignment.
+///
+/// `action` values:
+///   "link_to_record" — move file to Files/{fy}/{category_path}/, update record's _local field
+///   "file_only"      — move file to Files/{fy}/{category_path}/, no record change
+///   "skip"           — leave file in place (no-op, but useful for completeness)
+#[tauri::command]
+fn apply_file_assignment(
+    file_path: String,
+    action: String,
+    fy: Option<String>,
+    category_path: Option<Vec<String>>,
+    field_path: Option<String>,
+) -> ApplyResult {
+    if action == "skip" {
+        return ApplyResult { ok: true, error: None, destination: None, record_updated: false };
+    }
+
+    if action != "link_to_record" && action != "file_only" {
+        return ApplyResult {
+            ok: false, error: Some(format!("Unknown action: {action}")),
+            destination: None, record_updated: false,
+        };
+    }
+
+    let src = PathBuf::from(&file_path);
+    if !src.exists() {
+        return ApplyResult {
+            ok: false, error: Some("Source file not found.".into()),
+            destination: None, record_updated: false,
+        };
+    }
+
+    // Validate FY
+    let fy_str = match fy.as_ref() {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => return ApplyResult {
+            ok: false, error: Some("FY is required.".into()),
+            destination: None, record_updated: false,
+        },
+    };
+    if !FY_FOLDERS.iter().any(|f| **f == fy_str) {
+        return ApplyResult {
+            ok: false, error: Some(format!("Unknown FY: {fy_str}")),
+            destination: None, record_updated: false,
+        };
+    }
+
+    // Validate category_path
+    let cat = match category_path.as_ref() {
+        Some(c) if !c.is_empty() => c.clone(),
+        _ => return ApplyResult {
+            ok: false, error: Some("Category path is required.".into()),
+            destination: None, record_updated: false,
+        },
+    };
+    for seg in &cat {
+        if let Err(e) = validate_path_segment(seg) {
+            return ApplyResult {
+                ok: false, error: Some(format!("Invalid category segment: {e}")),
+                destination: None, record_updated: false,
+            };
+        }
+    }
+
+    // Build destination path
+    let files = match files_root() {
+        Some(p) => p,
+        None => return ApplyResult {
+            ok: false, error: Some("Could not resolve Files folder.".into()),
+            destination: None, record_updated: false,
+        },
+    };
+    let mut dest_dir = files.clone();
+    dest_dir.push(&fy_str);
+    for seg in &cat {
+        dest_dir.push(seg);
+    }
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        return ApplyResult {
+            ok: false, error: Some(format!("Could not create destination: {e}")),
+            destination: None, record_updated: false,
+        };
+    }
+
+    // Use the original filename. If a file with that name already exists,
+    // append a number until unique.
+    let fname = src.file_name().and_then(|s| s.to_str())
+        .map(|s| safe_filename_part_v2(s))
+        .unwrap_or_else(|| "file".to_string());
+    let mut dest = dest_dir.join(&fname);
+    let mut counter = 1;
+    while dest.exists() {
+        // Split filename and extension, insert " (N)" before extension.
+        let (stem, ext) = match fname.rsplit_once('.') {
+            Some((s, e)) => (s.to_string(), format!(".{e}")),
+            None => (fname.clone(), String::new()),
+        };
+        dest = dest_dir.join(format!("{stem} ({counter}){ext}"));
+        counter += 1;
+        if counter > 999 {
+            return ApplyResult {
+                ok: false, error: Some("Too many filename collisions in destination.".into()),
+                destination: None, record_updated: false,
+            };
+        }
+    }
+
+    // Move the file. fs::rename works on same filesystem; if cross-fs, copy + delete.
+    match std::fs::rename(&src, &dest) {
+        Ok(_) => {},
+        Err(_) => {
+            // Try copy + delete fallback
+            if let Err(e) = std::fs::copy(&src, &dest) {
+                return ApplyResult {
+                    ok: false, error: Some(format!("Could not move file: {e}")),
+                    destination: None, record_updated: false,
+                };
+            }
+            if let Err(e) = std::fs::remove_file(&src) {
+                // Copy succeeded but remove failed — partial failure. Surface it.
+                return ApplyResult {
+                    ok: false,
+                    error: Some(format!("File copied but original could not be removed: {e}")),
+                    destination: Some(dest.to_string_lossy().to_string()),
+                    record_updated: false,
+                };
+            }
+        }
+    }
+
+    let mut record_updated = false;
+
+    // If linking to a record, update the contract's _local field.
+    if action == "link_to_record" {
+        let fp = match field_path.as_ref() {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => return ApplyResult {
+                ok: true,
+                error: Some("File moved but no field_path provided to link record.".into()),
+                destination: Some(dest.to_string_lossy().to_string()),
+                record_updated: false,
+            },
+        };
+        match update_contract_local_field(&fp, &dest.to_string_lossy().to_string()) {
+            Ok(()) => { record_updated = true; },
+            Err(e) => return ApplyResult {
+                ok: true,
+                error: Some(format!("File moved but record update failed: {e}")),
+                destination: Some(dest.to_string_lossy().to_string()),
+                record_updated: false,
+            },
+        }
+    }
+
+    ApplyResult {
+        ok: true, error: None,
+        destination: Some(dest.to_string_lossy().to_string()),
+        record_updated,
+    }
+}
+
+/// Update one contract's raw_data to add a sibling _local field at the
+/// given dotted-bracket path. Field path examples:
+///   contracts[3].internalPOLink
+///   contracts[3].clientPOs[1].poLink
+///   contracts[3].billingYears[2].oemInvoiceLink
+///
+/// The new field name is the original suffix + "Local" (e.g.
+/// internalPOLinkLocal). The original URL field is left untouched.
+fn update_contract_local_field(field_path: &str, local_path: &str) -> Result<(), String> {
+    // Parse the contract index from the path.
+    let stripped = field_path.trim_start_matches("contracts[");
+    let close_idx = stripped.find(']').ok_or("malformed field path")?;
+    let idx_str = &stripped[..close_idx];
+    let idx: i64 = idx_str.parse().map_err(|e| format!("idx parse: {e}"))?;
+    let rest = &stripped[close_idx + 2..]; // skip "]."
+
+    let dbp = db_path().ok_or("no db path")?;
+    let mut con = Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|e| format!("open: {e}"))?;
+    let _: String = con.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))
+        .map_err(|e| format!("wal: {e}"))?;
+
+    let raw: String = con.query_row(
+        "SELECT raw_data FROM contracts WHERE legacy_idx = ?1",
+        params![idx], |r| r.get(0),
+    ).map_err(|e| format!("read contract {idx}: {e}"))?;
+
+    let mut data: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("parse contract: {e}"))?;
+
+    apply_local_at_subpath(&mut data, rest, local_path)?;
+
+    let new_raw = data.to_string();
+    con.execute(
+        "UPDATE contracts SET raw_data = ?1, modified_at = ?2 WHERE legacy_idx = ?3",
+        params![new_raw, now_iso(), idx],
+    ).map_err(|e| format!("update: {e}"))?;
+    Ok(())
+}
+
+/// Navigate a dotted-bracket subpath into the JSON value and write a sibling
+/// {field}Local field with the given value. Subpath examples (after stripping
+/// the contracts[N]. prefix):
+///
+///   internalPOLink
+///   clientPOs[1].poLink
+///   billingYears[2].oemInvoiceLink
+fn apply_local_at_subpath(
+    data: &mut serde_json::Value,
+    subpath: &str,
+    local_path: &str,
+) -> Result<(), String> {
+    // Tokenize: alternates of {ident} and {[index]}.{ident}.
+    // We'll do a small hand-rolled parser.
+    let bytes = subpath.as_bytes();
+    let mut i = 0usize;
+    let mut current: &mut serde_json::Value = data;
+
+    loop {
+        // Read identifier (a-zA-Z0-9_)
+        let start = i;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if (c as char).is_alphanumeric() || c == b'_' { i += 1; } else { break; }
+        }
+        let ident = std::str::from_utf8(&bytes[start..i]).map_err(|e| format!("utf8: {e}"))?;
+        if ident.is_empty() {
+            return Err(format!("expected identifier in subpath at {start}"));
+        }
+
+        // Check what's next: end, '.', '[', or trailing
+        let at_end = i >= bytes.len();
+        let next_is_bracket = !at_end && bytes[i] == b'[';
+        let next_is_dot = !at_end && bytes[i] == b'.';
+
+        if at_end {
+            // This is the leaf field — write sibling {ident}Local.
+            let parent_obj = current.as_object_mut().ok_or("expected object at leaf")?;
+            let local_field = format!("{ident}Local");
+            parent_obj.insert(local_field, serde_json::Value::String(local_path.to_string()));
+            return Ok(());
+        }
+
+        if next_is_dot {
+            // Step into the named field as an object.
+            let next = current.get_mut(ident).ok_or_else(|| format!("missing field '{ident}'"))?;
+            current = next;
+            i += 1; // skip '.'
+            continue;
+        }
+
+        if next_is_bracket {
+            // Read the index inside brackets.
+            i += 1; // skip '['
+            let idx_start = i;
+            while i < bytes.len() && bytes[i] != b']' { i += 1; }
+            if i >= bytes.len() {
+                return Err("missing ']' in subpath".into());
+            }
+            let idx_str = std::str::from_utf8(&bytes[idx_start..i]).map_err(|e| format!("utf8: {e}"))?;
+            let arr_idx: usize = idx_str.parse().map_err(|e| format!("index parse: {e}"))?;
+            i += 1; // skip ']'
+
+            // Step into the named field, then into the array index.
+            let next = current.get_mut(ident).ok_or_else(|| format!("missing field '{ident}'"))?;
+            let arr = next.as_array_mut().ok_or_else(|| format!("expected array at '{ident}'"))?;
+            let elem = arr.get_mut(arr_idx).ok_or_else(|| format!("array '{ident}' has no index {arr_idx}"))?;
+            current = elem;
+
+            // After [N] expect '.' or end
+            if i >= bytes.len() {
+                return Err("subpath ends after array index — expected '.field'".into());
+            }
+            if bytes[i] == b'.' { i += 1; } else {
+                return Err("expected '.' after array index".into());
+            }
+            continue;
+        }
+
+        // Should not get here
+        return Err(format!("unexpected character in subpath at {i}"));
+    }
+}
+
+/// Open a local file in its default app. Used by the CRM render layer
+/// (Build C) when the user clicks the 📁 icon next to a link.
+#[tauri::command]
+fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) -> serde_json::Value {
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "error": "Empty path"});
+    }
+    let pb = PathBuf::from(&path);
+    if !pb.exists() {
+        return serde_json::json!({"ok": false, "error": "File no longer exists at that path."});
+    }
+    match app.opener().open_path(path.clone(), None::<&str>) {
+        Ok(_) => serde_json::json!({"ok": true, "path": path}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{e}")}),
+    }
+}
+
+/// Get a list of all CRM records the user can manually link a file to.
+/// Used by the "Unmatched files" UI when the user wants to link a file
+/// to a record manually. Returns a flat list of (record_label, field_path)
+/// for every contract field that has a non-empty URL field but does NOT
+/// yet have a _local field set.
+#[tauri::command]
+fn list_linkable_record_fields() -> serde_json::Value {
+    let dbp = match db_path() {
+        Some(p) => p,
+        None => return serde_json::json!({"ok": false, "error": "no db path"}),
+    };
+    let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("open: {e}")}),
+    };
+    let mut stmt = match con.prepare("SELECT legacy_idx, raw_data FROM contracts ORDER BY legacy_idx ASC") {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("prepare: {e}")}),
+    };
+    let rows = match stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
+        Ok(r) => r,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("query: {e}")}),
+    };
+
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    for row in rows.flatten() {
+        let idx = row.0 as usize;
+        let v: serde_json::Value = match serde_json::from_str(&row.1) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let client = v.get("client").and_then(|x| x.as_str()).unwrap_or("");
+        let product = v.get("product").and_then(|x| x.as_str()).unwrap_or("");
+
+        let push = |entries: &mut Vec<serde_json::Value>, fp: String, label: String, has_local: bool| {
+            entries.push(serde_json::json!({
+                "field_path": fp,
+                "label": label,
+                "already_has_local": has_local,
+            }));
+        };
+
+        if v.get("internalPOLink").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+            let has_local = v.get("internalPOLinkLocal").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+            push(&mut entries,
+                format!("contracts[{idx}].internalPOLink"),
+                format!("{client} — {product} — Internal PO"),
+                has_local);
+        }
+        if v.get("clientPOLink").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+            let has_local = v.get("clientPOLinkLocal").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+            push(&mut entries,
+                format!("contracts[{idx}].clientPOLink"),
+                format!("{client} — {product} — Client PO (legacy)"),
+                has_local);
+        }
+        if let Some(arr) = v.get("clientPOs").and_then(|x| x.as_array()) {
+            for (po_idx, po) in arr.iter().enumerate() {
+                if po.get("poLink").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                    let has_local = po.get("poLinkLocal").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                    let no = po.get("poNo").and_then(|x| x.as_str()).unwrap_or("");
+                    push(&mut entries,
+                        format!("contracts[{idx}].clientPOs[{po_idx}].poLink"),
+                        format!("{client} — {product} — Client PO #{no}"),
+                        has_local);
+                }
+            }
+        }
+        if let Some(arr) = v.get("billingYears").and_then(|x| x.as_array()) {
+            for (y_idx, by) in arr.iter().enumerate() {
+                if by.get("clientInvoiceLink").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                    let has_local = by.get("clientInvoiceLinkLocal").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                    let no = by.get("clientInvoiceNo").and_then(|x| x.as_str()).unwrap_or("");
+                    push(&mut entries,
+                        format!("contracts[{idx}].billingYears[{y_idx}].clientInvoiceLink"),
+                        format!("{client} — {product} — Client Invoice #{no} (Y{y_idx})"),
+                        has_local);
+                }
+                if by.get("oemInvoiceLink").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+                    let has_local = by.get("oemInvoiceLinkLocal").and_then(|x| x.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                    let no = by.get("oemInvoiceNo").and_then(|x| x.as_str()).unwrap_or("");
+                    push(&mut entries,
+                        format!("contracts[{idx}].billingYears[{y_idx}].oemInvoiceLink"),
+                        format!("{client} — {product} — OEM Invoice #{no} (Y{y_idx})"),
+                        has_local);
+                }
+            }
+        }
+    }
+
+    serde_json::json!({"ok": true, "fields": entries})
+}
+
+
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -2797,6 +3774,12 @@ pub fn run() {
             add_document_category,
             remove_document_category,
             reveal_path,
+            // Session 8 Build B (matcher):
+            scan_migration_folder,
+            propose_file_matches,
+            apply_file_assignment,
+            list_linkable_record_fields,
+            open_local_file,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
