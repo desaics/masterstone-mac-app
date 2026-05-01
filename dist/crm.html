@@ -4619,12 +4619,37 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     '<summary style="cursor:pointer;">Advanced — Match Migration files to records</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Scans the Migration folder and proposes which CRM record each file should attach to. ' +
-                      'High-confidence matches (≥90%) auto-apply silently. Medium-confidence matches need your review. ' +
+                      'High-confidence matches (≥85%) can be auto-applied. Medium-confidence matches need your review. ' +
                       'Files with no match show in an "Unmatched" list where you can file them by hand or link to a CRM record.<br/><br/>' +
                       '<button onclick="window.__msStartMatcher()" id="msMatcherStartBtn">Scan &amp; propose matches</button>' +
                       '<button onclick="window.__msApplyAllAuto()" id="msApplyAutoBtn" style="display:none;margin-left:6px;">Apply all auto-matches</button>' +
+                      '<button onclick="window.__msRefreshStatus()" id="msRefreshStatusBtn" style="margin-left:6px;">Refresh status</button>' +
+                      '<div id="msLocalFieldStatus" style="margin-top:8px;font-size:11px;color:var(--text-dim);"></div>' +
                       '<div id="msMatcherSummary" style="margin-top:10px;display:none;font-size:12px;"></div>' +
                       '<div id="msMatcherSection" style="margin-top:10px;"></div>' +
+                    '</div>' +
+                  '</details>' +
+
+                  '<hr/>' +
+                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                    '<summary style="cursor:pointer;">Advanced — Filename product code aliases (AGE, EIS, etc.)</summary>' +
+                    '<div style="padding-top:8px;line-height:1.55;">' +
+                      'Teach the matcher about short codes used in your filenames. ' +
+                      'For example, "AGE" in <i>63 Moons_AGE_04_04_2025.pdf</i> means the product is "DT Email". ' +
+                      'These aliases boost match confidence when codes appear as standalone tokens in filenames.<br/><br/>' +
+                      '<div id="msProductAliasesList">Loading…</div>' +
+                      '<button onclick="window.__msAddProductAlias()" style="margin-top:8px;">+ Add product code alias</button>' +
+                    '</div>' +
+                  '</details>' +
+
+                  '<hr/>' +
+                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                    '<summary style="cursor:pointer;">Advanced — Filename OEM aliases (DT, VRS, etc.)</summary>' +
+                    '<div style="padding-top:8px;line-height:1.55;">' +
+                      'Teach the matcher about OEM short codes in filenames. ' +
+                      'For example, "DT" in <i>DT_JKCEMENT_30_06_2021.pdf</i> means OEM "Darktrace".<br/><br/>' +
+                      '<div id="msOemAliasesList">Loading…</div>' +
+                      '<button onclick="window.__msAddOemAlias()" style="margin-top:8px;">+ Add OEM alias</button>' +
                     '</div>' +
                   '</details>' +
 
@@ -4972,15 +4997,15 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // ========================================================================
-    // SESSION 8 BUILD B — Migration matcher
+    // SESSION 8 BUILD B (rev) — Migration matcher
     //
     // Workflow:
     //   1. User clicks "Scan & propose matches" → calls scan + propose.
     //   2. UI renders three sections:
-    //      - Auto-matched (≥0.9): one-click "Apply all auto-matches"
-    //      - Needs review (0.3–0.9): per-file row with top candidate +
+    //      - Auto-matched (≥0.85): one-click "Apply all auto-matches"
+    //      - Needs review (0.20–0.85): per-file row with top candidate +
     //        alternatives dropdown
-    //      - Unmatched (<0.3 or no candidates): per-file row with options
+    //      - Unmatched (<0.20 or no candidates): per-file row with options
     //        File only / Link to record / Skip
     //   3. As assignments are applied, files move to Files/{FY}/{cat}/, and
     //      contracts get _local fields populated.
@@ -5365,16 +5390,18 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         try { fieldsResult = await t.invoke('list_linkable_record_fields'); }
         catch (e) { showActionToast('Could not load fields: ' + e, 'error'); return; }
         if (!fieldsResult || !fieldsResult.ok || !fieldsResult.fields) {
-            showActionToast('No linkable fields available', 'error');
+            showActionToast('Could not load fields list', 'error');
             return;
         }
 
-        // Filter to those without a _local already, sort alphabetically by label.
-        var available = fieldsResult.fields.filter(function (f) { return !f.already_has_local; });
-        available.sort(function (a, b) { return a.label.localeCompare(b.label); });
+        // Show ALL fields by default. The user can toggle "Hide already-linked"
+        // to filter down. This avoids the previous "no fields available" footgun
+        // when many fields had _local set from prior auto-applies.
+        var allFields = fieldsResult.fields.slice();
+        allFields.sort(function (a, b) { return a.label.localeCompare(b.label); });
 
-        if (available.length === 0) {
-            showActionToast('No fields available — every CRM link already has a local file. File without linking instead.', 'info');
+        if (allFields.length === 0) {
+            showActionToast('No CRM link fields exist at all. Add a contract with link fields first.', 'info');
             return;
         }
 
@@ -5393,9 +5420,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             return '<option value="' + escapeAttr(c.path_segments.join('/')) + '">' + escapeHtml(c.display_name) + '</option>';
         }).join('');
 
-        var fieldOptions = available.map(function (f, i) {
-            return '<option value="' + i + '">' + escapeHtml(f.label) + '</option>';
-        }).join('');
+        // Count linked vs unlinked for the toggle hint
+        var linkedCount = allFields.filter(function (f) { return f.already_has_local; }).length;
+        var unlinkedCount = allFields.length - linkedCount;
 
         var form = document.createElement('div');
         form.id = formId;
@@ -5403,23 +5430,64 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         form.style.padding = '8px';
         form.style.background = 'rgba(0,0,0,0.2)';
         form.style.borderRadius = '4px';
-        // Stash the available list on the form node so the submit handler can read it.
-        form._linkableFields = available;
+        // Stash the full list on the form node so the filter handler can read it.
+        form._linkableFields = allFields;
+        form._showOnlyUnlinked = false;
         form.innerHTML =
-            '<div style="font-size:11px;margin-bottom:4px;">Type to filter, then pick the record:</div>' +
-            '<input id="' + formId + '_filter" placeholder="Filter…" ' +
+            '<div style="font-size:11px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">' +
+              '<span>Pick the record (' + unlinkedCount + ' unlinked, ' + linkedCount + ' already linked):</span>' +
+              '<label style="font-size:10px;cursor:pointer;">' +
+                '<input type="checkbox" id="' + formId + '_onlyUnlinked" ' +
+                  'onchange="window.__msToggleOnlyUnlinked(\'' + formId + '\')" ' +
+                  'style="margin-right:3px;vertical-align:middle;" />' +
+                'Hide already-linked' +
+              '</label>' +
+            '</div>' +
+            '<input id="' + formId + '_filter" placeholder="Type to filter (client, product, doc number)…" ' +
               'oninput="window.__msFilterLinkOptions(\'' + formId + '\')" ' +
-              'style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:4px;" />' +
-            '<select id="' + formId + '_field" size="6" style="width:100%;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fieldOptions + '</select>' +
+              'style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:4px;box-sizing:border-box;" />' +
+            '<select id="' + formId + '_field" size="6" style="width:100%;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;"></select>' +
+            '<div id="' + formId + '_fieldHint" style="font-size:10px;color:var(--text-dim);margin-top:-4px;margin-bottom:6px;min-height:14px;"></div>' +
             '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
-            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fyHtml + '</select>' +
+            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + fyHtml + '</select>' +
             '<div style="font-size:11px;margin-bottom:4px;">Category:</div>' +
-            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + catHtml + '</select>' +
+            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + catHtml + '</select>' +
             '<div style="display:flex;gap:6px;">' +
               '<button onclick="window.__msLinkToRecordSubmit(\'' + escapeAttr(filePath) + '\', \'' + rowId + '\', \'' + formId + '\')" style="font-size:11px;padding:4px 10px;">Link &amp; file</button>' +
               '<button onclick="document.getElementById(\'' + formId + '\').remove();" style="font-size:11px;padding:4px 10px;">Cancel</button>' +
             '</div>';
         row.appendChild(form);
+        // Populate options now that the form is in the DOM
+        window.__msFilterLinkOptions(formId);
+        // Wire up selection-change handler to show the "current local" hint
+        var fieldSel = document.getElementById(formId + '_field');
+        if (fieldSel) {
+            fieldSel.onchange = function () { window.__msUpdateFieldHint(formId); };
+        }
+    };
+
+    window.__msToggleOnlyUnlinked = function (formId) {
+        var form = document.getElementById(formId);
+        var cb = document.getElementById(formId + '_onlyUnlinked');
+        if (!form || !cb) return;
+        form._showOnlyUnlinked = cb.checked;
+        window.__msFilterLinkOptions(formId);
+    };
+
+    window.__msUpdateFieldHint = function (formId) {
+        var form = document.getElementById(formId);
+        var sel = document.getElementById(formId + '_field');
+        var hint = document.getElementById(formId + '_fieldHint');
+        if (!form || !sel || !hint) return;
+        if (!sel.value) { hint.textContent = ''; return; }
+        var i = parseInt(sel.value, 10);
+        var fld = form._linkableFields[i];
+        if (!fld) { hint.textContent = ''; return; }
+        if (fld.already_has_local && fld.current_local) {
+            hint.innerHTML = '<span style="color:#fbbf24;">⚠ Already linked to: ' + escapeHtml(fld.current_local) + ' — picking will overwrite</span>';
+        } else {
+            hint.textContent = '';
+        }
     };
 
     window.__msFilterLinkOptions = function (formId) {
@@ -5430,15 +5498,23 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var form = document.getElementById(formId);
         if (!form || !form._linkableFields) return;
         var available = form._linkableFields;
-        // Rebuild options
+        var onlyUnlinked = !!form._showOnlyUnlinked;
+        // Rebuild options. Mark already-linked ones with a leading bullet.
         var html = '';
         for (var i = 0; i < available.length; i++) {
             var f = available[i];
-            if (!filter || f.label.toLowerCase().indexOf(filter) >= 0) {
-                html += '<option value="' + i + '">' + escapeHtml(f.label) + '</option>';
-            }
+            if (onlyUnlinked && f.already_has_local) continue;
+            if (filter && f.label.toLowerCase().indexOf(filter) < 0) continue;
+            var prefix = f.already_has_local ? '● ' : '○ ';
+            html += '<option value="' + i + '">' + prefix + escapeHtml(f.label) + '</option>';
+        }
+        if (!html) {
+            html = '<option disabled>(no matches)</option>';
         }
         sel.innerHTML = html;
+        // Clear hint when list changes
+        var hint = document.getElementById(formId + '_fieldHint');
+        if (hint) hint.textContent = '';
     };
 
     window.__msLinkToRecordSubmit = async function (filePath, rowId, formId) {
@@ -5482,6 +5558,212 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (statusEl) statusEl.textContent = 'Error: ' + e;
         }
     };
+
+    // ---- Local field status display (Build B-fix diagnostic) -----
+    window.__msRefreshStatus = async function () {
+        var box = document.getElementById('msLocalFieldStatus');
+        if (!box) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('get_local_field_status');
+            if (r && r.ok) {
+                var pct = r.total_fields > 0 ? Math.round((r.with_local / r.total_fields) * 100) : 0;
+                box.innerHTML = '<b>' + r.with_local + '</b> of <b>' + r.total_fields + '</b> CRM link fields have a local file (' + pct + '%). ' +
+                  '<span style="color:var(--text-dim);">' + r.without_local + ' still need linking.</span>';
+            } else {
+                box.textContent = 'Status check failed: ' + ((r && r.error) || 'unknown');
+            }
+        } catch (e) { box.textContent = 'Status error: ' + e; }
+    };
+
+    // Auto-load status on settings panel show
+    setTimeout(function () {
+        if (document.getElementById('msLocalFieldStatus')) {
+            window.__msRefreshStatus();
+        }
+    }, 500);
+
+    // ---- Product code aliases UI (Build B-fix) -----
+    window.__msLoadProductAliases = async function () {
+        var box = document.getElementById('msProductAliasesList');
+        if (!box) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('get_product_code_aliases');
+            var aliases = (r && r.ok && r.aliases) ? r.aliases : [];
+            window.__msProductAliasesCache = aliases;
+            if (aliases.length === 0) {
+                box.innerHTML = '<div style="color:var(--text-dim);font-style:italic;font-size:11px;">No aliases defined yet. Examples to add: <b>AGE</b> → DT Email, <b>EIS</b> → DT Network.</div>';
+                return;
+            }
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+              '<tr style="background:rgba(255,255,255,0.04);"><th style="text-align:left;padding:4px;">Code</th><th style="text-align:left;padding:4px;">Maps to product(s)</th><th style="padding:4px;width:50px;"></th></tr>';
+            for (var i = 0; i < aliases.length; i++) {
+                var a = aliases[i];
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.06);">' +
+                    '<td style="padding:4px;font-family:ui-monospace,monospace;font-weight:600;">' + escapeHtml(a.code) + '</td>' +
+                    '<td style="padding:4px;">' + a.products.map(escapeHtml).join(', ') + '</td>' +
+                    '<td style="padding:4px;text-align:right;"><button style="font-size:10px;padding:2px 6px;" onclick="window.__msRemoveProductAlias(' + i + ')">×</button></td>' +
+                  '</tr>';
+            }
+            html += '</table>';
+            box.innerHTML = html;
+        } catch (e) { box.textContent = 'Load error: ' + e; }
+    };
+
+    window.__msAddProductAlias = function () {
+        var code = window.prompt('Filename code (e.g. AGE):');
+        if (!code) return;
+        code = code.trim().toUpperCase();
+        if (!code.match(/^[A-Z0-9]{2,8}$/)) {
+            window.alert('Code must be 2-8 alphanumeric characters.');
+            return;
+        }
+        var prodInput = window.prompt('Product name(s) this code maps to (comma-separated, must match your CRM products):\n\nExamples: DT Email, DT Network');
+        if (!prodInput) return;
+        var products = prodInput.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+        if (products.length === 0) return;
+
+        var existing = (window.__msProductAliasesCache || []).slice();
+        // Replace if code already exists
+        var found = false;
+        for (var i = 0; i < existing.length; i++) {
+            if (existing[i].code === code) {
+                existing[i] = { code: code, products: products };
+                found = true;
+                break;
+            }
+        }
+        if (!found) existing.push({ code: code, products: products });
+
+        // Save: backend expects lowercase codes internally, accepts whatever case
+        var saveArr = existing.map(function (a) { return { code: a.code.toLowerCase(), products: a.products }; });
+        (async function () {
+            try {
+                var t = getTauri();
+                var r = await t.invoke('save_product_code_aliases', { aliases: saveArr });
+                if (r && r.ok) {
+                    showActionToast('Alias saved.', 'success');
+                    window.__msLoadProductAliases();
+                } else {
+                    showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+                }
+            } catch (e) { showActionToast('Save error: ' + e, 'error'); }
+        })();
+    };
+
+    window.__msRemoveProductAlias = async function (idx) {
+        var existing = (window.__msProductAliasesCache || []).slice();
+        if (idx < 0 || idx >= existing.length) return;
+        if (!window.confirm('Remove alias "' + existing[idx].code + '"?')) return;
+        existing.splice(idx, 1);
+        var saveArr = existing.map(function (a) { return { code: a.code.toLowerCase(), products: a.products }; });
+        try {
+            var t = getTauri();
+            var r = await t.invoke('save_product_code_aliases', { aliases: saveArr });
+            if (r && r.ok) {
+                showActionToast('Alias removed.', 'success');
+                window.__msLoadProductAliases();
+            } else {
+                showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+        } catch (e) { showActionToast('Save error: ' + e, 'error'); }
+    };
+
+    // ---- OEM aliases UI (Build B-fix) -----
+    window.__msLoadOemAliases = async function () {
+        var box = document.getElementById('msOemAliasesList');
+        if (!box) return;
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) return;
+            var r = await t.invoke('get_oem_aliases');
+            var aliases = (r && r.ok && r.aliases) ? r.aliases : {};
+            window.__msOemAliasesCache = aliases;
+            var keys = Object.keys(aliases);
+            if (keys.length === 0) {
+                box.innerHTML = '<div style="color:var(--text-dim);font-style:italic;font-size:11px;">No aliases defined yet. Defaults: DT → Darktrace, VRS → Varonis.</div>';
+                return;
+            }
+            keys.sort();
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+              '<tr style="background:rgba(255,255,255,0.04);"><th style="text-align:left;padding:4px;">Code</th><th style="text-align:left;padding:4px;">OEM</th><th style="padding:4px;width:50px;"></th></tr>';
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i];
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.06);">' +
+                    '<td style="padding:4px;font-family:ui-monospace,monospace;font-weight:600;">' + escapeHtml(k) + '</td>' +
+                    '<td style="padding:4px;">' + escapeHtml(aliases[k]) + '</td>' +
+                    '<td style="padding:4px;text-align:right;"><button style="font-size:10px;padding:2px 6px;" onclick="window.__msRemoveOemAlias(\'' + escapeAttr(k) + '\')">×</button></td>' +
+                  '</tr>';
+            }
+            html += '</table>';
+            box.innerHTML = html;
+        } catch (e) { box.textContent = 'Load error: ' + e; }
+    };
+
+    window.__msAddOemAlias = function () {
+        var code = window.prompt('Short code in filenames (e.g. DT):');
+        if (!code) return;
+        code = code.trim().toUpperCase();
+        if (!code.match(/^[A-Z0-9]{2,12}$/)) {
+            window.alert('Code must be 2-12 alphanumeric characters.');
+            return;
+        }
+        var oem = window.prompt('OEM name this code maps to (must match an OEM name in your OEM master, e.g. Darktrace):');
+        if (!oem) return;
+        oem = oem.trim();
+        if (!oem) return;
+
+        var existing = Object.assign({}, window.__msOemAliasesCache || {});
+        existing[code] = oem;
+
+        // Lowercase keys for backend
+        var saveObj = {};
+        Object.keys(existing).forEach(function (k) { saveObj[k.toLowerCase()] = existing[k]; });
+
+        (async function () {
+            try {
+                var t = getTauri();
+                var r = await t.invoke('save_oem_aliases', { aliases: saveObj });
+                if (r && r.ok) {
+                    showActionToast('OEM alias saved.', 'success');
+                    window.__msLoadOemAliases();
+                } else {
+                    showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+                }
+            } catch (e) { showActionToast('Save error: ' + e, 'error'); }
+        })();
+    };
+
+    window.__msRemoveOemAlias = async function (code) {
+        if (!window.confirm('Remove OEM alias "' + code + '"?')) return;
+        var existing = Object.assign({}, window.__msOemAliasesCache || {});
+        delete existing[code];
+        var saveObj = {};
+        Object.keys(existing).forEach(function (k) { saveObj[k.toLowerCase()] = existing[k]; });
+        try {
+            var t = getTauri();
+            var r = await t.invoke('save_oem_aliases', { aliases: saveObj });
+            if (r && r.ok) {
+                showActionToast('Alias removed.', 'success');
+                window.__msLoadOemAliases();
+            } else {
+                showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+        } catch (e) { showActionToast('Save error: ' + e, 'error'); }
+    };
+
+    // Auto-load aliases when settings panel is opened
+    setTimeout(function loadAliasesIfPanelExists() {
+        if (document.getElementById('msProductAliasesList')) {
+            window.__msLoadProductAliases();
+        }
+        if (document.getElementById('msOemAliasesList')) {
+            window.__msLoadOemAliases();
+        }
+    }, 600);
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
