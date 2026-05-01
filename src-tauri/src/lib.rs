@@ -2296,13 +2296,17 @@ const FY_FOLDERS: &[&str] = &[
 
 /// Default document categories seeded on first initialization.
 /// Each tuple = (key, display_name, path_segments).
+///
+/// As of Build B-fix-2 the destination path uses category-first hierarchy:
+///   Files/{category}/{FY}/file.pdf
+/// (was Files/{FY}/{category}/file.pdf in earlier builds — auto-migrated)
 fn default_categories() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     vec![
-        ("proposals",       "Proposals",       vec!["Proposals"]),
-        ("pos_internal",    "POs / Internal",  vec!["POs", "Internal"]),
-        ("pos_client",      "POs / Client",    vec!["POs", "Client"]),
-        ("invoices_client", "Invoices / Client", vec!["Invoices", "Client"]),
-        ("invoices_oem",    "Invoices / OEM",  vec!["Invoices", "OEM"]),
+        ("proposals",         "Proposals",         vec!["Proposals"]),
+        ("pos_internal",      "POs / Internal",    vec!["POs", "Internal"]),
+        ("pos_client",        "POs / Client",      vec!["POs", "Client"]),
+        ("sales_invoices",    "Sales Invoices",    vec!["Sales Invoices"]),
+        ("purchase_invoices", "Purchase Invoices", vec!["Purchase Invoices"]),
     ]
 }
 
@@ -2330,6 +2334,10 @@ struct DocumentCategory {
 
 /// Load the configured document categories from app_settings.
 /// On first run (no setting present), returns the seeded default list.
+///
+/// As of Build B-fix-2: if stored categories use the old keys
+/// (invoices_client, invoices_oem), they are auto-migrated to the new
+/// keys/names/paths in memory. The next save persists the migration.
 fn load_document_categories() -> Vec<DocumentCategory> {
     let path = match db_path() {
         Some(p) => p,
@@ -2350,10 +2358,27 @@ fn load_document_categories() -> Vec<DocumentCategory> {
         Ok(v) => v,
         Err(_) => return seed_default_categories(),
     };
-    match serde_json::from_str::<Vec<DocumentCategory>>(&raw) {
+    let mut list: Vec<DocumentCategory> = match serde_json::from_str::<Vec<DocumentCategory>>(&raw) {
         Ok(list) if !list.is_empty() => list,
-        _ => seed_default_categories(),
+        _ => return seed_default_categories(),
+    };
+    // Build B-fix-2 in-memory migration: rename old keys to new ones.
+    for cat in list.iter_mut() {
+        match cat.key.as_str() {
+            "invoices_client" => {
+                cat.key = "sales_invoices".to_string();
+                cat.display_name = "Sales Invoices".to_string();
+                cat.path_segments = vec!["Sales Invoices".to_string()];
+            }
+            "invoices_oem" => {
+                cat.key = "purchase_invoices".to_string();
+                cat.display_name = "Purchase Invoices".to_string();
+                cat.path_segments = vec!["Purchase Invoices".to_string()];
+            }
+            _ => {}
+        }
     }
+    list
 }
 
 fn seed_default_categories() -> Vec<DocumentCategory> {
@@ -2485,14 +2510,16 @@ fn initialize_files_folders() -> InitFoldersResult {
         if existed { skipped += 1; } else { created += 1; }
     }
 
-    // 3. Create FY × category folders.
-    for fy in FY_FOLDERS {
-        for cat in &categories {
+    // 3. Create category × FY folders (category first, FY second).
+    //    Layout: Files/{category-path}/{FY}/
+    //    e.g. Files/Sales Invoices/FY24-25/, Files/POs/Internal/FY24-25/
+    for cat in &categories {
+        for fy in FY_FOLDERS {
             let mut p = files.clone();
-            p.push(fy);
             for seg in &cat.path_segments {
                 p.push(seg);
             }
+            p.push(fy);
             let existed = p.exists();
             if let Err(e) = std::fs::create_dir_all(&p) {
                 return InitFoldersResult {
@@ -3155,7 +3182,7 @@ fn score_field_match(
             }).unwrap_or_default();
             let url = by.map(|b| jstr(b, "clientInvoiceLink")).unwrap_or_default();
             (dt, num, "Client Invoice".to_string(),
-             vec!["Invoices".to_string(), "Client".to_string()], url)
+             vec!["Sales Invoices".to_string()], url)
         }
         FieldKind::OemInvoice(y_idx) => {
             let arr = contract.get("billingYears").and_then(|v| v.as_array());
@@ -3167,7 +3194,7 @@ fn score_field_match(
             }).unwrap_or_default();
             let url = by.map(|b| jstr(b, "oemInvoiceLink")).unwrap_or_default();
             (dt, num, "OEM Invoice".to_string(),
-             vec!["Invoices".to_string(), "OEM".to_string()], url)
+             vec!["Purchase Invoices".to_string()], url)
         }
     };
 
@@ -3636,9 +3663,10 @@ fn apply_file_assignment(
             destination: None, record_updated: false,
         },
     };
+    // Build B-fix-2: Layout is Files/{category-path}/{FY}/file.pdf
     let mut dest_dir = files.clone();
-    dest_dir.push(&fy_str);
     for seg in &cat { dest_dir.push(seg); }
+    dest_dir.push(&fy_str);
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         return ApplyResult {
             ok: false, error: Some(format!("Could not create destination: {e}")),
@@ -4014,6 +4042,363 @@ fn get_oem_aliases() -> serde_json::Value {
 }
 
 
+// ============================================================================
+// Build B-fix-2: Folder hierarchy auto-migration
+//
+// Earlier builds put files at Files/{FY}/{category}/file.pdf.
+// Build B-fix-2 inverts this to Files/{category}/{FY}/file.pdf.
+// This command walks the existing Files/ tree, moves every file to its new
+// location, and updates every contract _local field that pointed to the
+// old path. Idempotent — re-running is safe.
+//
+// Old → new category-segment translation:
+//   Invoices/Client/  →  Sales Invoices/
+//   Invoices/OEM/     →  Purchase Invoices/
+//   POs/Internal/     →  POs/Internal/    (unchanged)
+//   POs/Client/       →  POs/Client/      (unchanged)
+//   Proposals/        →  Proposals/       (unchanged)
+//   <other>           →  <other>          (preserved verbatim)
+// ============================================================================
+
+#[derive(Serialize)]
+struct RearrangeResult {
+    ok: bool,
+    error: Option<String>,
+    moved: usize,
+    updated_records: usize,
+    skipped_already_correct: usize,
+    skipped_unrecognized: usize,
+    errors: Vec<String>,
+}
+
+/// Translate a category-segment list from the OLD layout to the NEW layout.
+/// Returns None if the segments don't look like a known category (skipped).
+fn translate_category_segments(old_segs: &[String]) -> Option<Vec<String>> {
+    if old_segs.is_empty() { return None; }
+    match old_segs.first().map(|s| s.as_str()) {
+        Some("Invoices") => {
+            match old_segs.get(1).map(|s| s.as_str()) {
+                Some("Client") => Some(vec!["Sales Invoices".to_string()]),
+                Some("OEM") => Some(vec!["Purchase Invoices".to_string()]),
+                _ => None, // Unknown Invoices subfolder
+            }
+        }
+        Some("POs") => {
+            // POs/Internal and POs/Client unchanged
+            match old_segs.get(1).map(|s| s.as_str()) {
+                Some("Internal") | Some("Client") => Some(old_segs.to_vec()),
+                _ => None,
+            }
+        }
+        Some("Proposals") => Some(vec!["Proposals".to_string()]),
+        _ => {
+            // User-added custom category — keep verbatim
+            Some(old_segs.to_vec())
+        }
+    }
+}
+
+/// Returns true if a path looks like a FY folder (e.g. "FY24-25").
+fn is_fy_folder(name: &str) -> bool {
+    FY_FOLDERS.iter().any(|f| **f == *name)
+}
+
+#[tauri::command]
+fn rearrange_files_to_new_structure(state: tauri::State<DbState>) -> RearrangeResult {
+    let mut result = RearrangeResult {
+        ok: true, error: None, moved: 0, updated_records: 0,
+        skipped_already_correct: 0, skipped_unrecognized: 0,
+        errors: Vec::new(),
+    };
+
+    let files = match files_root() {
+        Some(p) => p,
+        None => {
+            result.ok = false;
+            result.error = Some("Could not resolve Files root.".into());
+            return result;
+        }
+    };
+    if !files.exists() {
+        result.ok = false;
+        result.error = Some("Files folder does not exist. Initialize first.".into());
+        return result;
+    }
+
+    // Collect all files first (snapshot — don't iterate while moving)
+    let mut all_files: Vec<PathBuf> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![files.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e, Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue; };
+            if name == ".DS_Store" || name.starts_with("._") { continue; }
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(path),
+                Ok(ft) if ft.is_file() => all_files.push(path),
+                _ => {}
+            }
+        }
+    }
+
+    // For each file, parse its current path under Files/ and determine if it
+    // needs to move. Build a list of (src, dst) pairs.
+    let mut moves: Vec<(PathBuf, PathBuf, Vec<String>, String)> = Vec::new();
+    // ^ (src_abs, dst_abs, new_category_segs, fy)
+
+    for f in &all_files {
+        let rel = match f.strip_prefix(&files) {
+            Ok(r) => r, Err(_) => { result.skipped_unrecognized += 1; continue; }
+        };
+        let segs: Vec<String> = rel.iter()
+            .filter_map(|os| os.to_str().map(String::from))
+            .collect();
+        // Need at least: <fy>/<cat-seg1>/...<file>
+        if segs.len() < 3 {
+            result.skipped_unrecognized += 1; continue;
+        }
+        let first = segs[0].as_str();
+
+        // Detect already-new layout: first is a category, last-but-one is a FY
+        if !is_fy_folder(first) {
+            // Already in new layout? Last-but-one segment should be a FY.
+            let last_but_one = &segs[segs.len() - 2];
+            if is_fy_folder(last_but_one) {
+                // Already in new structure. Verify category translation gives
+                // same path; if so, skip.
+                let cat_segs: Vec<String> = segs[..segs.len()-2].to_vec();
+                // Translate (in case it's old "Invoices/Client" already at new layer)
+                if let Some(new_cat) = translate_category_segments(&cat_segs) {
+                    if new_cat == cat_segs {
+                        result.skipped_already_correct += 1;
+                        continue;
+                    }
+                    // Old name in new layout — translate
+                    let mut dst = files.clone();
+                    for s in &new_cat { dst.push(s); }
+                    dst.push(last_but_one);
+                    dst.push(&segs[segs.len()-1]);
+                    if dst == *f {
+                        result.skipped_already_correct += 1;
+                        continue;
+                    }
+                    moves.push((f.clone(), dst, new_cat, last_but_one.clone()));
+                    continue;
+                } else {
+                    result.skipped_already_correct += 1;
+                    continue;
+                }
+            }
+            result.skipped_unrecognized += 1;
+            continue;
+        }
+
+        // Old layout: segs[0] = FY, segs[1..len-1] = category, segs[len-1] = filename
+        let fy = segs[0].clone();
+        let filename = segs[segs.len() - 1].clone();
+        let old_cat: Vec<String> = segs[1..segs.len() - 1].to_vec();
+        if old_cat.is_empty() {
+            // File directly under FY folder, no category — skip
+            result.skipped_unrecognized += 1;
+            continue;
+        }
+
+        // Translate
+        let new_cat = match translate_category_segments(&old_cat) {
+            Some(c) => c,
+            None => { result.skipped_unrecognized += 1; continue; }
+        };
+
+        let mut dst = files.clone();
+        for s in &new_cat { dst.push(s); }
+        dst.push(&fy);
+        dst.push(&filename);
+
+        if dst == *f {
+            result.skipped_already_correct += 1;
+            continue;
+        }
+        moves.push((f.clone(), dst, new_cat, fy));
+    }
+
+    // Build a mapping of old absolute path → new absolute path for record updates.
+    let mut path_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for (src, dst, _new_cat, _fy) in &moves {
+        // Make sure parent exists.
+        if let Some(parent) = dst.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                result.errors.push(format!("mkdir {}: {}", parent.display(), e));
+                continue;
+            }
+        }
+        // If destination already exists, append number.
+        let mut final_dst = dst.clone();
+        let mut counter = 1;
+        while final_dst.exists() {
+            let stem_ext = match final_dst.file_name().and_then(|s| s.to_str()) {
+                Some(n) => match n.rsplit_once('.') {
+                    Some((s, e)) => (s.to_string(), format!(".{e}")),
+                    None => (n.to_string(), String::new()),
+                },
+                None => break,
+            };
+            if let Some(parent) = dst.parent() {
+                final_dst = parent.join(format!("{} ({}){}", stem_ext.0, counter, stem_ext.1));
+            }
+            counter += 1;
+            if counter > 999 {
+                result.errors.push(format!("Too many collisions for {}", dst.display()));
+                break;
+            }
+        }
+        if counter > 999 { continue; }
+
+        match std::fs::rename(src, &final_dst) {
+            Ok(_) => {}
+            Err(_) => {
+                if let Err(e) = std::fs::copy(src, &final_dst) {
+                    result.errors.push(format!("copy {}: {}", src.display(), e));
+                    continue;
+                }
+                if let Err(e) = std::fs::remove_file(src) {
+                    result.errors.push(format!("rm orig {}: {}", src.display(), e));
+                    continue;
+                }
+            }
+        }
+        result.moved += 1;
+        path_map.insert(
+            src.to_string_lossy().to_string(),
+            final_dst.to_string_lossy().to_string(),
+        );
+    }
+
+    // Update _local fields in every contract that points to a moved file.
+    if !path_map.is_empty() {
+        match update_local_paths_in_contracts(&state, &path_map) {
+            Ok(n) => result.updated_records = n,
+            Err(e) => result.errors.push(format!("contract update: {e}")),
+        }
+    }
+
+    // Mark migration done in app_settings (idempotent — won't break re-runs).
+    let _ = with_writer(&state, |con| {
+        con.execute(
+            "INSERT INTO app_settings (key, value, modified_at)
+             VALUES ('ms_app__files_rearranged_v1', '1', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, modified_at = excluded.modified_at",
+            params![now_iso()],
+        )?;
+        Ok(1usize)
+    });
+
+    // Try to clean up now-empty old FY directories at the top level.
+    if let Ok(entries) = std::fs::read_dir(&files) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if is_fy_folder(name) {
+                        prune_empty_dirs(&path);
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Recursively delete empty directories, walking back up.
+fn prune_empty_dirs(start: &PathBuf) {
+    if !start.is_dir() { return; }
+    // First recurse into children
+    if let Ok(entries) = std::fs::read_dir(start) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() { prune_empty_dirs(&p); }
+        }
+    }
+    // Then try removing this if empty
+    let _ = std::fs::remove_dir(start); // fails silently if not empty
+}
+
+/// Walk every contract and update any _local field whose value matches a key
+/// in path_map, replacing it with the corresponding new value. Returns the
+/// number of contracts whose data was rewritten.
+fn update_local_paths_in_contracts(
+    state: &tauri::State<DbState>,
+    path_map: &std::collections::HashMap<String, String>,
+) -> Result<usize, String> {
+    with_writer(state, |con| {
+        // Collect all contract rows first
+        let mut to_update: Vec<(i64, String)> = Vec::new();
+        {
+            let mut stmt = con.prepare("SELECT legacy_idx, raw_data FROM contracts ORDER BY legacy_idx ASC")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows.flatten() {
+                let (idx, raw) = row;
+                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let mut changed = false;
+                    rewrite_local_paths(&mut v, path_map, &mut changed);
+                    if changed {
+                        to_update.push((idx, v.to_string()));
+                    }
+                }
+            }
+        }
+        let n = to_update.len();
+        for (idx, new_raw) in to_update {
+            con.execute(
+                "UPDATE contracts SET raw_data = ?1, modified_at = ?2 WHERE legacy_idx = ?3",
+                params![new_raw, now_iso(), idx],
+            )?;
+        }
+        Ok(n)
+    })
+}
+
+/// Recursively walk a JSON value, replacing any string ending with
+/// "Local" → key whose value matches a key in path_map.
+fn rewrite_local_paths(
+    v: &mut serde_json::Value,
+    path_map: &std::collections::HashMap<String, String>,
+    changed: &mut bool,
+) {
+    match v {
+        serde_json::Value::Object(obj) => {
+            // Mutate in place: walk keys, find *Local string values
+            let keys: Vec<String> = obj.keys().cloned().collect();
+            for k in keys {
+                if k.ends_with("Local") {
+                    if let Some(s) = obj.get(&k).and_then(|x| x.as_str()) {
+                        if let Some(new) = path_map.get(s) {
+                            obj.insert(k.clone(), serde_json::Value::String(new.clone()));
+                            *changed = true;
+                        }
+                    }
+                } else {
+                    // Recurse into nested objects/arrays
+                    if let Some(child) = obj.get_mut(&k) {
+                        rewrite_local_paths(child, path_map, changed);
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                rewrite_local_paths(item, path_map, changed);
+            }
+        }
+        _ => {}
+    }
+}
+
+
 
 
 // ============================================================================
@@ -4072,6 +4457,8 @@ pub fn run() {
             save_product_code_aliases,
             get_oem_aliases,
             save_oem_aliases,
+            // Build B-fix-2: folder structure auto-migration
+            rearrange_files_to_new_structure,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

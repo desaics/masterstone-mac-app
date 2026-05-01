@@ -4594,7 +4594,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     '<summary style="cursor:pointer;">Advanced — Files &amp; folders</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Sets up the folder structure for storing local copies of your contract documents (POs, invoices, proposals, etc.). ' +
-                      'After initialization, drop your existing files into the <b>Migration</b> folder; the matching tool (next build) will assign each one to its CRM record and move it to the right place.<br/><br/>' +
+                      'New layout (Build B-fix-2): <code style="font-size:11px;">Files/{Category}/{FY}/file.pdf</code> — category first, FY second. ' +
+                      'After initialization, drop your existing files into the <b>Migration</b> folder; the matching tool will assign each one to its CRM record and move it to the right place.<br/><br/>' +
                       '<div id="msFilesStatusBox" style="margin:8px 0;padding:10px 12px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:12px;">' +
                         '<div id="msFilesStatusBody">Loading status…</div>' +
                       '</div>' +
@@ -4606,16 +4607,23 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
                       '<div><b>Document categories</b></div>' +
                       '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
-                        'Each category becomes a sub-folder under every FY (e.g. FY24-25 / Proposals). ' +
+                        'Each category becomes a top-level folder; FY sub-folders go inside. ' +
                         'Default categories cannot be removed; user-added ones can.' +
                       '</div>' +
                       '<div id="msCategoriesList">Loading categories…</div>' +
                       '<button onclick="window.__msAddCategory()" id="msAddCategoryBtn" style="margin-top:8px;">+ Add document category</button>' +
+                      '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
+                      '<div><b>Re-arrange existing files (one-time migration)</b></div>' +
+                      '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
+                        'If you have files from a previous version (FY-first layout), this moves them to the new category-first layout and updates every CRM record link. Safe to re-run — already-correct files are skipped.' +
+                      '</div>' +
+                      '<button onclick="window.__msRearrangeFiles()" id="msRearrangeBtn">Re-arrange files into new structure</button>' +
+                      '<div id="msRearrangeStatus" style="margin-top:6px;font-size:11px;"></div>' +
                     '</div>' +
                   '</details>' +
 
                   '<hr/>' +
-                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                  '<details ontoggle="if(this.open){window.__msRefreshStatus();}" style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
                     '<summary style="cursor:pointer;">Advanced — Match Migration files to records</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Scans the Migration folder and proposes which CRM record each file should attach to. ' +
@@ -4631,7 +4639,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                   '</details>' +
 
                   '<hr/>' +
-                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                  '<details ontoggle="if(this.open){window.__msLoadProductAliases();}" style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
                     '<summary style="cursor:pointer;">Advanced — Filename product code aliases (AGE, EIS, etc.)</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Teach the matcher about short codes used in your filenames. ' +
@@ -4643,7 +4651,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                   '</details>' +
 
                   '<hr/>' +
-                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
+                  '<details ontoggle="if(this.open){window.__msLoadOemAliases();}" style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
                     '<summary style="cursor:pointer;">Advanced — Filename OEM aliases (DT, VRS, etc.)</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Teach the matcher about OEM short codes in filenames. ' +
@@ -5559,6 +5567,64 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // ---- Re-arrange files to new structure (Build B-fix-2) -----
+    window.__msRearrangeFiles = async function () {
+        if (!window.confirm(
+            'This will move every file currently under Files/FY-XX/.../ to the new layout: Files/{Category}/FY-XX/file.pdf\n\n' +
+            'It will also update every CRM record link to point to the new path.\n\n' +
+            'Already-correct files are skipped. Safe to run multiple times.\n\n' +
+            'Proceed?'
+        )) return;
+
+        var btn = document.getElementById('msRearrangeBtn');
+        var status = document.getElementById('msRearrangeStatus');
+        if (btn) { btn.disabled = true; btn.textContent = 'Re-arranging…'; }
+        if (status) status.textContent = 'Working… (this may take a moment for large folders)';
+
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                if (status) status.textContent = 'Tauri runtime unavailable';
+                return;
+            }
+            var r = await t.invoke('rearrange_files_to_new_structure');
+            if (!r.ok) {
+                if (status) status.innerHTML = '<span style="color:#f87171;">✗ Failed: ' + escapeHtml(r.error || 'unknown') + '</span>';
+                return;
+            }
+            var lines = [
+                '<span style="color:#34d399;">✓ Done.</span>',
+                'Moved: <b>' + r.moved + '</b>',
+                'Updated CRM record links: <b>' + r.updated_records + '</b>',
+                'Already in new layout: <b>' + r.skipped_already_correct + '</b>',
+                'Unrecognized (left alone): <b>' + r.skipped_unrecognized + '</b>',
+            ];
+            if (r.errors && r.errors.length > 0) {
+                lines.push('<span style="color:#f87171;">' + r.errors.length + ' error(s):</span>');
+                for (var i = 0; i < Math.min(r.errors.length, 5); i++) {
+                    lines.push('  • ' + escapeHtml(r.errors[i]));
+                }
+                if (r.errors.length > 5) {
+                    lines.push('  • … and ' + (r.errors.length - 5) + ' more (see console)');
+                    console.error('[ms] rearrange errors:', r.errors);
+                }
+            }
+            if (status) status.innerHTML = lines.join('<br/>');
+
+            // Refresh in-memory cache so CRM picks up updated _local fields
+            try {
+                var loadResult = await t.invoke('storage_load_all');
+                if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                    realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+                }
+            } catch (e2) { console.error('[ms] cache refresh failed:', e2); }
+        } catch (e) {
+            if (status) status.innerHTML = '<span style="color:#f87171;">✗ Error: ' + escapeHtml(String(e)) + '</span>';
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Re-arrange files into new structure'; }
+        }
+    };
+
     // ---- Local field status display (Build B-fix diagnostic) -----
     window.__msRefreshStatus = async function () {
         var box = document.getElementById('msLocalFieldStatus');
@@ -5577,12 +5643,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) { box.textContent = 'Status error: ' + e; }
     };
 
-    // Auto-load status on settings panel show
-    setTimeout(function () {
-        if (document.getElementById('msLocalFieldStatus')) {
-            window.__msRefreshStatus();
-        }
-    }, 500);
+    // Status auto-loads via the matcher section's <details> ontoggle handler.
 
     // ---- Product code aliases UI (Build B-fix) -----
     window.__msLoadProductAliases = async function () {
@@ -5755,15 +5816,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) { showActionToast('Save error: ' + e, 'error'); }
     };
 
-    // Auto-load aliases when settings panel is opened
-    setTimeout(function loadAliasesIfPanelExists() {
-        if (document.getElementById('msProductAliasesList')) {
-            window.__msLoadProductAliases();
-        }
-        if (document.getElementById('msOemAliasesList')) {
-            window.__msLoadOemAliases();
-        }
-    }, 600);
+    // Note: Aliases auto-load via the <details> ontoggle handlers (see Settings
+    // markup). The earlier setTimeout-based loader was unreliable because the
+    // Settings modal is built lazily on gear-icon click.
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
