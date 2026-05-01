@@ -3688,6 +3688,32 @@ body.tauri-runtime .main-content {
     -webkit-backdrop-filter: blur(6px);
 }
 .ms-floating-sync .sync-indicator { margin-left: 0; background: transparent; border: none; }
+
+/* Bug fix #48 (Session 5 hotfix v1) — banner-action toast for snapshot/reveal
+   feedback. Reuses the bottom-right placement from Session 3's read-only toast
+   but with state-coloured borders for success/error/info. */
+.ms-action-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 100002;
+    background: #1a1f2e;
+    color: #f0f3f8;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid #6366f1;
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    max-width: 480px;
+    line-height: 1.45;
+    animation: msToastIn 0.2s ease-out;
+    word-break: break-word;
+}
+.ms-action-toast-success { border-left-color: #34d399; }
+.ms-action-toast-error   { border-left-color: #f87171; }
+.ms-action-toast-info    { border-left-color: #6366f1; }
 </style>
 </head>
 <body>
@@ -3734,7 +3760,9 @@ body.tauri-runtime .main-content {
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
             '</span>' +
-            '<button onclick="window.__msShowDbInfo()">DB info</button>' +
+            '<button onclick="window.__msSnapshot()" title="Generate iPhone snapshot to OneDrive now">📸 Snapshot</button>' +
+            '<button onclick="window.__msReveal()" title="Open ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone in Finder">📁 OneDrive</button>' +
+            '<button onclick="window.__msShowDbInfo()" title="Show database connection details">DB info</button>' +
             '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
         document.body.appendChild(banner);
     });
@@ -3999,68 +4027,106 @@ body.tauri-runtime .main-content {
     }, true /* capture */);
 
     // ------------------------------------------------------------------------
-    // Banner / DB info / dismiss handlers.
+    // Banner action handlers.
+    //
+    // Bug fix #48 (Session 5 hotfix v1) — replaced the previous async menu
+    // (prompt() inside an async function awaiting get_snapshot_status) with
+    // three separate, simple, defensive functions. The previous implementation
+    // could hang silently if get_snapshot_status threw, leaving the user with
+    // no indication anything had happened (and no way to recover without
+    // restarting). Now each action is independent, fully wrapped in try/catch,
+    // and surfaces success/failure via a visible toast.
     // ------------------------------------------------------------------------
-    window.__msShowDbInfo = async function () {
-        var dbPath = window.localStorage.getItem('__ms_db_path__') || '(unknown)';
-        var errs = Object.keys(lastErrorByBucket);
-        var errStr = errs.length === 0 ? 'None' :
-            errs.map(function (k) { return '• ' + k + ': ' + lastErrorByBucket[k]; }).join('\n');
 
-        // Session 5 — also pull snapshot status if available
-        var snapInfo = '';
+    function showActionToast(text, kind) {
+        var existing = document.querySelector('.ms-action-toast');
+        if (existing) existing.remove();
+        var t = document.createElement('div');
+        t.className = 'ms-action-toast ms-action-toast-' + (kind || 'info');
+        t.textContent = text;
+        document.body.appendChild(t);
+        setTimeout(function () {
+            if (t.parentNode) t.parentNode.removeChild(t);
+        }, 5000);
+    }
+
+    function getTauri() {
+        return (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+    }
+
+    // ── Snapshot ─────────────────────────────────────────────────────────
+    window.__msSnapshot = async function () {
+        showActionToast('Generating snapshot…', 'info');
         try {
-            var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
-            if (t && t.invoke) {
-                var snap = await t.invoke('get_snapshot_status');
-                if (snap) {
-                    if (!snap.onedrive_available) {
-                        snapInfo = '\nSnapshots: OneDrive folder not found at ~/OneDrive — snapshots disabled.';
-                    } else if (snap.last_snapshot_path) {
-                        var when = snap.last_snapshot_mtime ?
-                            new Date(snap.last_snapshot_mtime * 1000).toLocaleString() : 'unknown';
-                        snapInfo = '\nLast snapshot: ' + when + '\nFolder: ' + (snap.snapshot_dir || '');
-                    } else {
-                        snapInfo = '\nSnapshots: enabled, none generated yet.\nFolder: ' + (snap.snapshot_dir || '');
-                    }
-                }
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Error: Tauri runtime not available.', 'error');
+                return;
             }
-        } catch (e) { /* ignore */ }
+            var r = await t.invoke('generate_snapshot', { force: true });
+            if (!r) {
+                showActionToast('Snapshot returned no result.', 'error');
+                return;
+            }
+            if (r.ok && !r.skipped) {
+                showActionToast(
+                    'Snapshot saved to: ' + (r.path || 'unknown') +
+                    (r.purged_count > 0 ? ' (purged ' + r.purged_count + ' old)' : ''),
+                    'success');
+            } else if (r.skipped) {
+                showActionToast('Snapshot skipped: ' + (r.skip_reason || 'no changes'), 'info');
+            } else {
+                showActionToast('Snapshot failed: ' + (r.error || 'unknown error'), 'error');
+            }
+        } catch (e) {
+            showActionToast('Snapshot error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('Snapshot error:', e);
+        }
+    };
 
-        var actions = '\n\nActions:\n' +
-            '  [1] Open OneDrive folder in Finder\n' +
-            '  [2] Generate snapshot now\n' +
-            '  [Cancel] Just close';
-        var choice = prompt(
-            'Masterstone Mac App — Session 5 (Live mode)\n\n' +
-            'Database: ' + dbPath + '\n\n' +
-            'Pending writes: ' + (Object.keys(pendingByBucket).length + Object.keys(pendingSettings).length) + '\n' +
-            'In-flight writes: ' + inflightCount + '\n\n' +
-            'Recent errors:\n' + errStr +
-            snapInfo +
-            actions + '\n\nEnter 1 or 2:'
-        );
-        if (choice === '1') {
-            try {
-                var t = window.__TAURI__.core;
-                var r = await t.invoke('reveal_onedrive_folder');
-                if (!r || !r.ok) {
-                    alert('Could not open OneDrive folder.\n\n' + ((r && r.error) || 'unknown error'));
-                }
-            } catch (e) { alert('Error: ' + e); }
-        } else if (choice === '2') {
-            try {
-                var t = window.__TAURI__.core;
-                var r = await t.invoke('generate_snapshot', { force: true });
-                if (r && r.ok) {
-                    alert('Snapshot written:\n' + r.path + '\n\nBytes: ' + (r.bytes_written || '?') +
-                        (r.purged_count > 0 ? '\nPurged ' + r.purged_count + ' old snapshot(s).' : ''));
-                } else if (r && r.skipped) {
-                    alert('Snapshot skipped: ' + (r.skip_reason || 'no changes'));
-                } else {
-                    alert('Snapshot failed:\n' + ((r && r.error) || 'unknown error'));
-                }
-            } catch (e) { alert('Error: ' + e); }
+    // ── Reveal OneDrive folder in Finder ─────────────────────────────────
+    window.__msReveal = async function () {
+        showActionToast('Opening OneDrive folder in Finder…', 'info');
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Error: Tauri runtime not available.', 'error');
+                return;
+            }
+            var r = await t.invoke('reveal_onedrive_folder');
+            if (!r) {
+                showActionToast('Reveal returned no result.', 'error');
+                return;
+            }
+            if (r.ok) {
+                showActionToast('Opened: ' + (r.path || 'OneDrive/Masterstone'), 'success');
+            } else {
+                showActionToast('Could not open: ' + (r.error || 'unknown error'), 'error');
+            }
+        } catch (e) {
+            showActionToast('Reveal error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('Reveal error:', e);
+        }
+    };
+
+    // ── DB info (sync alert, no async chain that can hang) ───────────────
+    window.__msShowDbInfo = function () {
+        try {
+            var dbPath = window.localStorage.getItem('__ms_db_path__') || '(unknown)';
+            var errs = Object.keys(lastErrorByBucket);
+            var errStr = errs.length === 0 ? 'None' :
+                errs.map(function (k) { return '• ' + k + ': ' + lastErrorByBucket[k]; }).join('\n');
+            alert(
+                'Masterstone Mac App — Session 5 (Live mode)\n\n' +
+                'Database: ' + dbPath + '\n\n' +
+                'Pending writes: ' + (Object.keys(pendingByBucket).length + Object.keys(pendingSettings).length) + '\n' +
+                'In-flight writes: ' + inflightCount + '\n\n' +
+                'Recent errors:\n' + errStr +
+                '\n\nUse the 📸 and 📁 banner buttons for snapshot and OneDrive actions.'
+            );
+        } catch (e) {
+            showActionToast('DB info error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('DB info error:', e);
         }
     };
 

@@ -37,15 +37,44 @@ fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
-/// Path to the OneDrive snapshot folder. Returns None if ~/OneDrive itself
-/// doesn't exist (i.e., OneDrive client not installed).
+/// Path to the OneDrive snapshot folder. Returns None if no usable OneDrive
+/// folder can be found on the user's Mac.
+///
+/// Bug fix #49 (Session 5 hotfix v1) — modern macOS OneDrive client (especially
+/// multi-account setups) installs to ~/Library/CloudStorage/OneDrive-* rather
+/// than the legacy ~/OneDrive symlink. The original implementation only looked
+/// for ~/OneDrive, which caused snapshot generation to fail silently on
+/// machines with three OneDrive accounts.
+///
+/// User has three OneDrive accounts: ACAPartnersLLP, Masterstone, Personal.
+/// Snapshots target the **Masterstone** business account so the data lives
+/// alongside other Masterstone artefacts. The "Masterstone" subfolder name is
+/// kept under the OneDrive-Masterstone root just for tidiness (snapshots in
+/// their own subfolder rather than mixed with other root-level files).
+///
+/// Resolution priority:
+///   1. ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone/  ← target
+///   2. ~/OneDrive/Masterstone/   (legacy symlink fallback)
+///   3. None — surfaced to the user as "OneDrive folder not found"
 fn snapshot_dir() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    let onedrive = home.join("OneDrive");
-    if !onedrive.exists() {
-        return None;
+
+    // 1. Modern multi-account macOS layout — preferred.
+    let cloud_target = home
+        .join("Library")
+        .join("CloudStorage")
+        .join("OneDrive-Masterstone");
+    if cloud_target.is_dir() {
+        return Some(cloud_target.join("Masterstone"));
     }
-    Some(onedrive.join("Masterstone"))
+
+    // 2. Legacy symlink fallback (single-account installs, older macOS).
+    let legacy = home.join("OneDrive");
+    if legacy.is_dir() {
+        return Some(legacy.join("Masterstone"));
+    }
+
+    None
 }
 
 // ============================================================================
