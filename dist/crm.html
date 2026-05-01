@@ -3729,7 +3729,7 @@ body.tauri-runtime .main-content {
         banner.className = 'mac-app-banner mac-app-banner-live';
         banner.id = 'macAppBanner';
         banner.innerHTML =
-            '<strong>Mac app · Session 4 · Live mode</strong> &nbsp;·&nbsp; ' +
+            '<strong>Mac app · Session 5 · Live mode</strong> &nbsp;·&nbsp; ' +
             'Edits save to your local database. ' +
             '<span id="msSyncIndicator" class="sync-indicator sync-idle" title="Click for details">' +
             '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
@@ -3949,26 +3949,119 @@ body.tauri-runtime .main-content {
     // Flush pending writes when the window is about to close. beforeunload
     // doesn't allow async, but we can fire the invokes synchronously and they
     // queue in Tauri's runtime even if the page goes away.
+    //
+    // Session 5 also fires a snapshot generation on close (best-effort —
+    // beforeunload doesn't await anything, but Tauri queues the command and
+    // executes it before the runtime fully shuts down).
     window.addEventListener('beforeunload', function () {
         Object.keys(pendingByBucket).forEach(function (b) { flushBucket(b); });
         Object.keys(pendingSettings).forEach(function (k) { flushSetting(k); });
+        try {
+            var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+            if (t && t.invoke) { t.invoke('generate_snapshot', { force: false }); }
+        } catch (e) {}
     });
+
+    // ------------------------------------------------------------------------
+    // Session 5 — external link interception.
+    //
+    // Tauri's WebKit doesn't open `<a target="_blank">` in the default browser
+    // by default; clicks either silently fail or try to navigate inline. The
+    // CRM has 100+ OneDrive links across contracts (POs, invoices, etc.) that
+    // all use `target="_blank"`, so without this they're effectively dead.
+    //
+    // Capture phase listener catches every click on <a href> with an external
+    // http(s) URL, prevents default navigation, and routes it through the
+    // Rust opener plugin instead. URLs starting with anything other than
+    // http:// or https:// are left alone (mailto:, tel:, javascript:, etc.).
+    // ------------------------------------------------------------------------
+    document.addEventListener('click', function (e) {
+        var anchor = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (!anchor) return;
+        var href = anchor.getAttribute('href') || '';
+        if (!/^https?:\/\//i.test(href)) return;
+        // Internal refs to current host (rare in this app) — leave alone
+        try {
+            var u = new URL(href, window.location.href);
+            if (u.protocol === 'tauri:' || u.protocol === 'asset:') return;
+        } catch (err) { /* ignore — fall through */ }
+
+        e.preventDefault();
+        e.stopPropagation();
+        var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!t || !t.invoke) {
+            console.error('Cannot open URL — Tauri runtime missing:', href);
+            return;
+        }
+        t.invoke('open_external_url', { url: href }).catch(function (err) {
+            console.error('Failed to open URL:', href, err);
+        });
+    }, true /* capture */);
 
     // ------------------------------------------------------------------------
     // Banner / DB info / dismiss handlers.
     // ------------------------------------------------------------------------
-    window.__msShowDbInfo = function () {
+    window.__msShowDbInfo = async function () {
         var dbPath = window.localStorage.getItem('__ms_db_path__') || '(unknown)';
         var errs = Object.keys(lastErrorByBucket);
         var errStr = errs.length === 0 ? 'None' :
             errs.map(function (k) { return '• ' + k + ': ' + lastErrorByBucket[k]; }).join('\n');
-        alert(
-            'Masterstone Mac App — Session 4 (Live mode)\n\n' +
+
+        // Session 5 — also pull snapshot status if available
+        var snapInfo = '';
+        try {
+            var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+            if (t && t.invoke) {
+                var snap = await t.invoke('get_snapshot_status');
+                if (snap) {
+                    if (!snap.onedrive_available) {
+                        snapInfo = '\nSnapshots: OneDrive folder not found at ~/OneDrive — snapshots disabled.';
+                    } else if (snap.last_snapshot_path) {
+                        var when = snap.last_snapshot_mtime ?
+                            new Date(snap.last_snapshot_mtime * 1000).toLocaleString() : 'unknown';
+                        snapInfo = '\nLast snapshot: ' + when + '\nFolder: ' + (snap.snapshot_dir || '');
+                    } else {
+                        snapInfo = '\nSnapshots: enabled, none generated yet.\nFolder: ' + (snap.snapshot_dir || '');
+                    }
+                }
+            }
+        } catch (e) { /* ignore */ }
+
+        var actions = '\n\nActions:\n' +
+            '  [1] Open OneDrive folder in Finder\n' +
+            '  [2] Generate snapshot now\n' +
+            '  [Cancel] Just close';
+        var choice = prompt(
+            'Masterstone Mac App — Session 5 (Live mode)\n\n' +
             'Database: ' + dbPath + '\n\n' +
             'Pending writes: ' + (Object.keys(pendingByBucket).length + Object.keys(pendingSettings).length) + '\n' +
             'In-flight writes: ' + inflightCount + '\n\n' +
-            'Recent errors:\n' + errStr
+            'Recent errors:\n' + errStr +
+            snapInfo +
+            actions + '\n\nEnter 1 or 2:'
         );
+        if (choice === '1') {
+            try {
+                var t = window.__TAURI__.core;
+                var r = await t.invoke('reveal_onedrive_folder');
+                if (!r || !r.ok) {
+                    alert('Could not open OneDrive folder.\n\n' + ((r && r.error) || 'unknown error'));
+                }
+            } catch (e) { alert('Error: ' + e); }
+        } else if (choice === '2') {
+            try {
+                var t = window.__TAURI__.core;
+                var r = await t.invoke('generate_snapshot', { force: true });
+                if (r && r.ok) {
+                    alert('Snapshot written:\n' + r.path + '\n\nBytes: ' + (r.bytes_written || '?') +
+                        (r.purged_count > 0 ? '\nPurged ' + r.purged_count + ' old snapshot(s).' : ''));
+                } else if (r && r.skipped) {
+                    alert('Snapshot skipped: ' + (r.skip_reason || 'no changes'));
+                } else {
+                    alert('Snapshot failed:\n' + ((r && r.error) || 'unknown error'));
+                }
+            } catch (e) { alert('Error: ' + e); }
+        }
     };
 
     window.__msDismissBanner = function () {

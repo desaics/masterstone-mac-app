@@ -19,9 +19,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
-
-# Session 4 additions:
-# - chrono: timestamp generation for modified_at columns
-# - tauri-plugin-dialog: native file/save dialogs (first-launch wizard)
 chrono = "0.4"
 tauri-plugin-dialog = "2"
+
+# Session 5 additions:
+# - tauri-plugin-opener: opens URLs in the default browser, reveals files
+#   in Finder. Replaces the broken `<a target="_blank">` behavior.
+tauri-plugin-opener = "2"
