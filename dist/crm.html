@@ -242,8 +242,6 @@ body.nav-collapsed nav #themeToggleBtn {
 body.nav-collapsed nav #themeToggleBtn i {
     font-size: 14px;
 }
-body.nav-collapsed nav #storageStatus { font-size: 0; }
-body.nav-collapsed nav #storageStatus i { font-size: 13px; }
 
 #sidebarCollapseBtn {
     position: absolute;
@@ -967,15 +965,6 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 ::-webkit-scrollbar-thumb { background: var(--glass-border-strong); border-radius: 999px; border: 2px solid var(--bg-deep); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-
-/* STORAGE STATUS BADGE */
-#storageStatus {
-    font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 6px;
-    display: inline-flex; align-items: center; gap: 8px;
-    border: 1px solid transparent; width: fit-content;
-}
-.storage-browser { background: rgba(245, 158, 11, 0.1); color: var(--warning); border-color: rgba(245, 158, 11, 0.2); }
-.storage-disk { background: rgba(16, 185, 129, 0.1); color: var(--success); border-color: rgba(16, 185, 129, 0.2); }
 
 /* CONTROLS GRID */
 .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -3745,6 +3734,30 @@ body.tauri-runtime .main-content {
     background: rgba(34, 197, 94, 0.25);
     color: #86efac;
 }
+/* Phase B-fix-8-D — small local-file shortcut icon shown inline in the
+   AR / AP / PO register rows next to the OneDrive link. Renders only when
+   a localPath is attached to the row. Matches the green has-attached
+   styling of the form-level paperclip toggle so the affordance is
+   visually consistent across edit forms and registers. */
+.register-localfile-icon {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    color: #4ade80;
+    font-size: 10px;
+    line-height: 1.2;
+    cursor: pointer;
+    text-decoration: none;
+    vertical-align: baseline;
+    transition: background 0.15s, color 0.15s;
+}
+.register-localfile-icon:hover {
+    background: rgba(34, 197, 94, 0.28);
+    color: #86efac;
+}
 .local-file-panel {
     display: flex;
     gap: 6px;
@@ -4902,6 +4915,32 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // Phase B-fix-8-D — Returns inline HTML for a small green paperclip icon
+    // that opens a local file directly. Used by the AR / AP / PO register
+    // rows to surface the local-file affordance without requiring the user
+    // to drill into the edit form.
+    //   path         — the localPath string from the record
+    //   stopProp     — true when the surrounding row has a row-level click
+    //                  handler that needs to be suppressed (PO register
+    //                  rows are clickable; AR / AP register rows are not)
+    // Returns '' when path is empty/missing — caller can concatenate
+    // unconditionally. The path travels through a data-path attribute so
+    // there is no JS-in-HTML nesting to escape; only HTML escaping applies.
+    window.__msRegisterLocalFileIcon = function (path, stopProp) {
+        var trimmed = (path || '').trim();
+        if (!trimmed) return '';
+        var safe = trimmed
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        var stop = stopProp ? 'event.stopPropagation(); ' : '';
+        return '<span class="register-localfile-icon" title="Open local file: '
+            + safe + '" data-path="' + safe + '" onclick="' + stop
+            + 'window.__msOpenLocalFile(this.dataset.path);"><i class="fas fa-paperclip"></i></span>';
+    };
+
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
@@ -4996,12 +5035,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <div class="nav-item" id="themeToggleBtn" onclick="toggleTheme()" style="margin-bottom: 24px; justify-content:center; background: var(--hover-bg); border: 1px solid var(--glass-border);">
       <i class="fas fa-sun"></i> Light Mode
-  </div>
-
-  <div style="padding-top: 24px; border-top: 1px solid var(--glass-border); display:flex; justify-content:center;">
-      <div id="storageStatus" class="storage-browser">
-          <i class="fas fa-exclamation-triangle"></i> Browser Storage
-      </div>
   </div>
 </nav>
 
@@ -6095,27 +6128,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <button class="btn btn-primary" onclick="exportBackup()" style="width:100%"><i class="fas fa-download"></i> Download Complete Backup</button>
             <div class="control-status-bar" id="status-backup"></div>
             <div id="schemaMetaInfo" style="margin-top:10px; font-size:10.5px; color:var(--text-subtle); line-height:1.6;"></div>
-        </div>
-
-        <div class="card" data-syscat="storage" style="margin-bottom:0;">
-            <h3><i class="fas fa-folder-open"></i> 1. Project Workspace</h3>
-            <p class="control-info-text">
-                Select a local folder on your computer. This allows the system to save backups and data directly to a trusted location.
-            </p>
-            <div style="display:flex; align-items:center; justify-content:space-between;">
-                <button class="btn btn-ghost" onclick="setProjectFolder()" style="background:var(--input-bg);"><i class="fas fa-compass"></i> Set Folder</button>
-                <span id="projectFolderStatus" style="font-size:13px; color:var(--success); display:none;"><i class="fas fa-check-circle"></i> Linked</span>
-            </div>
-            <div class="control-status-bar" id="status-folder"></div>
-        </div>
-
-        <div class="card" data-syscat="storage" style="margin-bottom:0;">
-            <h3><i class="fas fa-link"></i> 2. Direct Disk Sync</h3>
-            <p class="control-info-text">
-                Link a specific .json database file. Once linked, any changes you make in the app will automatically save to this file.
-            </p>
-            <button class="btn btn-ghost" onclick="connectLocalFile()" style="width:100%; background:var(--input-bg);"><i class="fas fa-link"></i> Link Database File</button>
-            <div class="control-status-bar" id="status-link"></div>
         </div>
 
         <div class="card" data-syscat="diagnostics" style="margin-bottom:0;">
@@ -13507,101 +13519,12 @@ function deleteMasterProduct(oem, idx) {
 let growthChartInstance = null;
 let debounceTimer;
 
-let fileHandle = null;
-let dirHandle = null; 
-
-const dbName = "MasterstoneDB";
-const storeName = "config";
-let db;
-
-const initDB = () => {
-    return new Promise((resolve) => {
-        const request = indexedDB.open(dbName, 1);
-        request.onupgradeneeded = (event) => {
-            db = event.target.result;
-            db.createObjectStore(storeName);
-        };
-        request.onsuccess = (event) => {
-            db = event.target.result;
-            resolve(db);
-        };
-    });
-};
-
-const getDirHandle = async () => {
-    if(!db) await initDB();
-    return new Promise((resolve) => {
-        const tx = db.transaction(storeName, "readonly");
-        const store = tx.objectStore(storeName);
-        const req = store.get("projectDir");
-        req.onsuccess = () => resolve(req.result);
-    });
-};
-
-const saveDirHandle = async (handle) => {
-    if(!db) await initDB();
-    const tx = db.transaction(storeName, "readwrite");
-    const store = tx.objectStore(storeName);
-    store.put(handle, "projectDir");
-};
-
-async function setProjectFolder() {
-    if (!('showDirectoryPicker' in window)) {
-        alert("Your browser does not support folder access. Please use Chrome or Edge.");
-        return;
-    }
-    try {
-        const handle = await window.showDirectoryPicker();
-        await saveDirHandle(handle);
-        dirHandle = handle;
-        document.getElementById('projectFolderStatus').style.display = 'inline-block';
-        showStatus('status-folder', 'Folder linked successfully.');
-    } catch(err) {
-        console.log("Folder selection cancelled");
-    }
-}
-
-async function connectLocalFile() {
-    if (!('showOpenFilePicker' in window)) {
-        alert("Your browser does not support direct file linking. Changes will save to Browser Storage only.");
-        return;
-    }
-    try {
-        showStatus('status-link', 'Connecting...', 'pending');
-        let options = {
-            types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-            multiple: false
-        };
-        
-        if (!dirHandle) { dirHandle = await getDirHandle(); }
-        if (dirHandle) {
-            const perm = await dirHandle.requestPermission({ mode: 'readwrite' });
-            if (perm === 'granted') { options.startIn = dirHandle; }
-        }
-
-        [fileHandle] = await window.showOpenFilePicker(options);
-        const file = await fileHandle.getFile();
-        const content = await file.text();
-        
-        try {
-            contracts = JSON.parse(content);
-            if (!Array.isArray(contracts)) throw new Error("Invalid format");
-            safeSetStorage(JSON.stringify(contracts)); 
-            
-            document.getElementById('storageStatus').className = 'storage-disk';
-            document.getElementById('storageStatus').innerHTML = '<i class="fas fa-hard-drive"></i> Linked to Disk';
-            
-            showStatus('status-link', 'Database Linked & Synced.');
-            renderContracts();
-            debouncedCalcDashboard();
-        } catch(e) {
-            alert("File is empty or invalid. Starting with current browser data.");
-            saveToDisk(); 
-        }
-    } catch(err) {
-        console.error(err);
-    }
-}
+// Phase B-fix-8-D: legacy File System Access API path retired.
+// In the Tauri Mac app all persistence flows through Rust + SQLite, so the
+// browser-era dirHandle/fileHandle, "Project Workspace", and "Direct Disk
+// Sync" surfaces were dormant. Removed: fileHandle, dirHandle, the
+// MasterstoneDB IndexedDB, initDB, getDirHandle, saveDirHandle,
+// setProjectFolder, connectLocalFile, and the storageStatus badge.
 
 function safeSetStorage(dataStr) {
     try {
@@ -13618,20 +13541,7 @@ function safeSetStorage(dataStr) {
 
 async function saveToDisk() {
     const dataStr = JSON.stringify(contracts);
-    safeSetStorage(dataStr); 
-    
-    if (fileHandle) {
-        try {
-            const writable = await fileHandle.createWritable();
-            await writable.write(JSON.stringify(contracts, null, 2));
-            await writable.close();
-            console.log("Auto-saved to disk.");
-        } catch(e) {
-            console.error("Auto-save failed", e);
-            document.getElementById('storageStatus').className = 'storage-browser';
-            document.getElementById('storageStatus').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Save Failed (Re-link)';
-        }
-    }
+    safeSetStorage(dataStr);
 }
 
 function persistData() {
@@ -13726,25 +13636,6 @@ async function exportBackup() {
     const sizeKB = Math.round(dataStr.length / 1024);
     const counts = envelope._recordCounts;
     const summary = `${counts.contracts} contracts · ${counts.prospects} prospects · ${counts.proposals} proposals · ${counts.purchaseOrders} POs · ${counts.invoices} invoices · ${counts.clients} clients · ${counts.attachments} attachments · ${sizeKB} KB`;
-
-    if (dirHandle) {
-        try {
-            const opts = { mode: 'readwrite' };
-            if ((await dirHandle.queryPermission(opts)) !== 'granted') {
-                if ((await dirHandle.requestPermission(opts)) !== 'granted') throw new Error("Permission denied");
-            }
-            const fileName = `Masterstone_Backup_${new Date().toISOString().slice(0,10)}.json`;
-            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(dataStr);
-            await writable.close();
-            showStatus('status-backup', `Saved to folder: ${fileName} (${summary})`);
-            if (typeof renderBackupSnapshot === 'function') renderBackupSnapshot();
-            return;
-        } catch (err) {
-            console.warn("Folder save failed, falling back to download:", err);
-        }
-    }
 
     const blob = new Blob([dataStr], {type: 'application/json'});
     const a = document.createElement('a');
@@ -21387,7 +21278,7 @@ function renderPOsListView(filtered) {
         const totals = computePOTotals(po.lineItems, gst.mode);
         const foreign = isOemForeign(po.oem);
         return `<tr class="clickable-row" onclick="openPODetail('${po.id}')">
-            <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}</td>
+            <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(po.externalLinkLocalPath, true)}</td>
             <td style="font-weight:600;">${pEsc(po.oem || '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(po.subject || '')}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
@@ -31003,7 +30894,7 @@ function renderARApPage() {
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
                 ? `${getClientDisplayHtml(r.client)}<div style="font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; font-style:italic;">via ${pEsc(r.sourcedViaResellerKey)}</div>`
                 : getClientDisplayHtml(r.client);
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${pEsc(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${pEsc(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         arRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
@@ -31096,7 +30987,7 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${pEsc(r.product)}</div></td><td>${pEsc(r.oem || '—')}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${pEsc(r.product)}</div></td><td>${pEsc(r.oem || '—')}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }

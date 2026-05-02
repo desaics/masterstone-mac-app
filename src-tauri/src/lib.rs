@@ -1,13 +1,37 @@
 // Masterstone CRM — Tauri runtime entry.
 //
-// Session 5 scope:
-//   1. Replace broken `<a target=_blank>` behavior with the opener plugin.
-//      JS intercepts OneDrive link clicks and routes them through
-//      `open_external_url` (Rust → opener::open_url → default browser).
-//   2. iPhone read-only HTML snapshot generator. Writes to
-//      ~/OneDrive/Masterstone/Masterstone_Snapshot_YYYY-MM-DD.html on quit
-//      (only if data changed since last snapshot). Keeps last 7, auto-purges.
-//   3. Reveal-in-Finder helper for the OneDrive folder.
+// Capabilities provided here, by session:
+//
+// Session 4 — SQLite persistence:
+//   - storage_load_all + per-bucket savers (clients, resellers, oems,
+//     contracts, prospects, proposals, purchase_orders, invoices,
+//     commissions, company_profile, attachments, settings).
+//   - install_db_from_path for restoring a backup database on top of
+//     the live one.
+//
+// Session 5 — OneDrive / external opening + snapshots:
+//   - open_external_url routes OneDrive (and any URL) clicks to the
+//     OS default browser via the opener plugin.
+//   - reveal_onedrive_folder opens the Masterstone folder in Finder.
+//   - generate_snapshot writes a read-only iPhone-friendly HTML
+//     snapshot to ~/OneDrive/Masterstone/ on quit; keeps last 7.
+//
+// Session 6 — settings page + auto-backup:
+//   - get_app_settings / save_app_setting for the Mac App Settings sub-tab.
+//   - pick_folder for choosing the backup destination.
+//   - run_backup_check / check_db_conflict / acknowledge_db_conflict
+//     handle scheduled auto-backups and external-DB-modified detection.
+//   - extract_attachments / load_attachments_into_data_urls hydrate the
+//     company logo + signature for snapshots.
+//
+// Session 8 / B-fix-8:
+//   - Phase A: file-linking matcher subsystem fully removed
+//     (PDF text extraction, category folders, filename aliases,
+//     migration UI — all gone). The user opted out in favour of
+//     manual linking.
+//   - Phase 8C: open_local_file + pick_file — simple "open exact path"
+//     and "show file picker" wrappers used by the paperclip toggle
+//     next to every OneDrive URL field.
 
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
