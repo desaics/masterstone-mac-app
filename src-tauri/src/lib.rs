@@ -2295,19 +2295,27 @@ const FY_FOLDERS: &[&str] = &[
 ];
 
 /// Default document categories seeded on first initialization.
-/// Each tuple = (key, display_name, path_segments).
+/// Each tuple = (key, display_name, path_segments, uses_fy).
 ///
-/// As of Build B-fix-2 the destination path uses category-first hierarchy:
-///   Files/{category}/{FY}/file.pdf
-/// (was Files/{FY}/{category}/file.pdf in earlier builds — auto-migrated)
-fn default_categories() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
+/// As of Build B-fix-6, only Sales Invoices and Purchase Invoices use
+/// FY subfolders. POs and Proposals are flat — files go directly under
+/// the category folder with no FY layer.
+fn default_categories() -> Vec<(&'static str, &'static str, Vec<&'static str>, bool)> {
     vec![
-        ("proposals",         "Proposals",         vec!["Proposals"]),
-        ("pos_internal",      "POs / Internal",    vec!["POs", "Internal"]),
-        ("pos_client",        "POs / Client",      vec!["POs", "Client"]),
-        ("sales_invoices",    "Sales Invoices",    vec!["Sales Invoices"]),
-        ("purchase_invoices", "Purchase Invoices", vec!["Purchase Invoices"]),
+        ("proposals",         "Proposals",         vec!["Proposals"],         false),
+        ("pos_internal",      "POs / Internal",    vec!["POs", "Internal"],   false),
+        ("pos_client",        "POs / Client",      vec!["POs", "Client"],     false),
+        ("sales_invoices",    "Sales Invoices",    vec!["Sales Invoices"],    true),
+        ("purchase_invoices", "Purchase Invoices", vec!["Purchase Invoices"], true),
     ]
+}
+
+/// Returns true if this category's path segments should have FY subfolders
+/// inside them. As of Build B-fix-6: only Sales Invoices and Purchase
+/// Invoices use FY. Custom user categories default to false (flat layout).
+fn category_uses_fy(path_segments: &[String]) -> bool {
+    let first = path_segments.first().map(|s| s.as_str()).unwrap_or("");
+    matches!(first, "Sales Invoices" | "Purchase Invoices")
 }
 
 /// Resolve the configured files root. Defaults to
@@ -2382,7 +2390,7 @@ fn load_document_categories() -> Vec<DocumentCategory> {
 }
 
 fn seed_default_categories() -> Vec<DocumentCategory> {
-    default_categories().into_iter().map(|(k, n, p)| DocumentCategory {
+    default_categories().into_iter().map(|(k, n, p, _uses_fy)| DocumentCategory {
         key: k.to_string(),
         display_name: n.to_string(),
         path_segments: p.iter().map(|s| s.to_string()).collect(),
@@ -2511,15 +2519,24 @@ fn initialize_files_folders() -> InitFoldersResult {
     }
 
     // 3. Create category × FY folders (category first, FY second).
-    //    Layout: Files/{category-path}/{FY}/
-    //    e.g. Files/Sales Invoices/FY24-25/, Files/POs/Internal/FY24-25/
+    //    Build B-fix-6: only Sales Invoices and Purchase Invoices use FY
+    //    subfolders. Other categories (POs, Proposals, custom) are flat.
+    //    e.g. Files/Sales Invoices/FY24-25/, Files/POs/Internal/, Files/Proposals/
     for cat in &categories {
-        for fy in FY_FOLDERS {
+        let uses_fy = category_uses_fy(&cat.path_segments);
+        let fys: Vec<&str> = if uses_fy {
+            FY_FOLDERS.iter().copied().collect()
+        } else {
+            vec![""] // sentinel — single iteration, no FY suffix appended
+        };
+        for fy in fys {
             let mut p = files.clone();
             for seg in &cat.path_segments {
                 p.push(seg);
             }
-            p.push(fy);
+            if !fy.is_empty() {
+                p.push(fy);
+            }
             let existed = p.exists();
             if let Err(e) = std::fs::create_dir_all(&p) {
                 return InitFoldersResult {
@@ -3856,11 +3873,12 @@ impl ProposeResult {
     }
 }
 
-// Build B-fix-4: thresholds adjusted for PDF-augmented scoring.
-// Auto raised to 0.95 — we have higher-quality signals (GSTIN, doc#-in-body,
-// dates-in-body), so higher confidence required for silent auto-apply.
+// Build B-fix-6: thresholds adjusted to surface more candidates.
+// Auto = 0.95 (high signal-to-noise from PDF body matches required for
+// silent auto-apply). Review = 0.10 (lowered from 0.20 — better to show
+// weak matches in review than hide them as unmatched).
 const AUTO_THRESHOLD: f64 = 0.95;
-const REVIEW_THRESHOLD: f64 = 0.20;
+const REVIEW_THRESHOLD: f64 = 0.10;
 
 /// Tauri command. Async wrapper that runs the heavy sync work on a
 /// blocking thread pool, so the WebView's main thread (and the IPC
@@ -4054,7 +4072,10 @@ fn propose_file_matches_inner() -> ProposeResult {
 
         // Sort by confidence descending
         deduped.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
-        deduped.truncate(8);
+        // Build B-fix-6: keep up to 20 candidates per file (was 8) so the
+        // user can see more alternatives in the review dropdown when many
+        // contracts share a client (e.g. 5 CAMS contracts).
+        deduped.truncate(20);
 
         let bucket = if deduped.is_empty() {
             "unmatched".to_string()
@@ -4142,14 +4163,11 @@ fn apply_file_assignment(
             destination: None, record_updated: false,
         };
     }
-    let fy_str = match fy.as_ref() {
-        Some(s) if !s.is_empty() => s.clone(),
-        _ => return ApplyResult {
-            ok: false, error: Some("FY is required.".into()),
-            destination: None, record_updated: false,
-        },
-    };
-    if !FY_FOLDERS.iter().any(|f| **f == fy_str) {
+    // FY is optional now: required only for categories that use FY
+    // (Sales Invoices, Purchase Invoices). Other categories ignore FY
+    // even if provided.
+    let fy_str: String = fy.as_deref().unwrap_or("").to_string();
+    if !fy_str.is_empty() && !FY_FOLDERS.iter().any(|f| **f == fy_str) {
         return ApplyResult {
             ok: false, error: Some(format!("Unknown FY: {fy_str}")),
             destination: None, record_updated: false,
@@ -4176,10 +4194,23 @@ fn apply_file_assignment(
             destination: None, record_updated: false,
         },
     };
-    // Build B-fix-2: Layout is Files/{category-path}/{FY}/file.pdf
+    // Build B-fix-6: Layout is Files/{category-path}/[{FY}/]file.pdf
+    // FY only appended for Sales Invoices / Purchase Invoices.
+    let cat_strings: Vec<String> = cat.clone();
+    let needs_fy = category_uses_fy(&cat_strings);
+    if needs_fy && fy_str.is_empty() {
+        return ApplyResult {
+            ok: false,
+            error: Some("FY is required for this category (Sales/Purchase Invoices).".into()),
+            destination: None, record_updated: false,
+        };
+    }
+
     let mut dest_dir = files.clone();
     for seg in &cat { dest_dir.push(seg); }
-    dest_dir.push(&fy_str);
+    if needs_fy {
+        dest_dir.push(&fy_str);
+    }
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         return ApplyResult {
             ok: false, error: Some(format!("Could not create destination: {e}")),
@@ -4349,6 +4380,11 @@ fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) ->
 /// Returns ALL contract link fields. The JS side decides whether to
 /// filter by `already_has_local`. Includes a flag so the picker can
 /// optionally show fields that already have a local file (for re-linking).
+///
+/// Build B-fix-6: labels now include client short name in brackets so
+/// users can type the short name (e.g. "CAMS", "APB") in the filter and
+/// find their contracts. Previously labels only had the full name and
+/// users couldn't find them by short name.
 #[tauri::command]
 fn list_linkable_record_fields() -> serde_json::Value {
     let dbp = match db_path() {
@@ -4358,6 +4394,24 @@ fn list_linkable_record_fields() -> serde_json::Value {
     let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c, Err(e) => return serde_json::json!({"ok": false, "error": format!("open: {e}")}),
     };
+
+    // Load client master for short names
+    let mut client_short: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Ok(mut stmt) = con.prepare("SELECT name, raw_data FROM clients") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.1) {
+                    let s = jstr(&v, "shortName");
+                    if !s.is_empty() {
+                        client_short.insert(row.0, s);
+                    }
+                }
+            }
+        }
+    }
+
     let mut stmt = match con.prepare("SELECT legacy_idx, raw_data FROM contracts ORDER BY legacy_idx ASC") {
         Ok(s) => s, Err(e) => return serde_json::json!({"ok": false, "error": format!("prepare: {e}")}),
     };
@@ -4373,6 +4427,13 @@ fn list_linkable_record_fields() -> serde_json::Value {
         };
         let client = jstr(&v, "client");
         let product = jstr(&v, "product");
+        // Build the client display: "Full Name [Short]" if short name exists
+        let short = client_short.get(&client).cloned().unwrap_or_default();
+        let client_disp = if !short.is_empty() && short.to_lowercase() != client.to_lowercase() {
+            format!("{client} [{short}]")
+        } else {
+            client.clone()
+        };
 
         let push = |entries: &mut Vec<serde_json::Value>, fp: String, label: String, has_local: bool, current_local: String| {
             entries.push(serde_json::json!({
@@ -4387,14 +4448,14 @@ fn list_linkable_record_fields() -> serde_json::Value {
             let local = jstr(&v, "internalPOLinkLocal");
             push(&mut entries,
                 format!("contracts[{idx}].internalPOLink"),
-                format!("{client} — {product} — Internal PO"),
+                format!("{client_disp} — {product} — Internal PO"),
                 !local.is_empty(), local);
         }
         if !jstr(&v, "clientPOLink").is_empty() {
             let local = jstr(&v, "clientPOLinkLocal");
             push(&mut entries,
                 format!("contracts[{idx}].clientPOLink"),
-                format!("{client} — {product} — Client PO (legacy)"),
+                format!("{client_disp} — {product} — Client PO (legacy)"),
                 !local.is_empty(), local);
         }
         if let Some(arr) = v.get("clientPOs").and_then(|x| x.as_array()) {
@@ -4404,7 +4465,7 @@ fn list_linkable_record_fields() -> serde_json::Value {
                     let no = jstr(po, "poNo");
                     push(&mut entries,
                         format!("contracts[{idx}].clientPOs[{po_idx}].poLink"),
-                        format!("{client} — {product} — Client PO #{no}"),
+                        format!("{client_disp} — {product} — Client PO #{no}"),
                         !local.is_empty(), local);
                 }
             }
@@ -4416,7 +4477,7 @@ fn list_linkable_record_fields() -> serde_json::Value {
                     let no = jstr(by, "clientInvoiceNo");
                     push(&mut entries,
                         format!("contracts[{idx}].billingYears[{y_idx}].clientInvoiceLink"),
-                        format!("{client} — {product} — Client Invoice #{no} (Y{y_idx})"),
+                        format!("{client_disp} — {product} — Client Invoice #{no} (Y{y_idx})"),
                         !local.is_empty(), local);
                 }
                 if !jstr(by, "oemInvoiceLink").is_empty() {
@@ -4424,7 +4485,7 @@ fn list_linkable_record_fields() -> serde_json::Value {
                     let no = jstr(by, "oemInvoiceNo");
                     push(&mut entries,
                         format!("contracts[{idx}].billingYears[{y_idx}].oemInvoiceLink"),
-                        format!("{client} — {product} — OEM Invoice #{no} (Y{y_idx})"),
+                        format!("{client_disp} — {product} — OEM Invoice #{no} (Y{y_idx})"),
                         !local.is_empty(), local);
                 }
             }
@@ -4659,8 +4720,24 @@ fn rearrange_files_to_new_structure(state: tauri::State<DbState>) -> RearrangeRe
 
     // For each file, parse its current path under Files/ and determine if it
     // needs to move. Build a list of (src, dst) pairs.
-    let mut moves: Vec<(PathBuf, PathBuf, Vec<String>, String)> = Vec::new();
-    // ^ (src_abs, dst_abs, new_category_segs, fy)
+    //
+    // Build B-fix-6 target layout:
+    //   Sales Invoices/{FY}/file.pdf       (FY required)
+    //   Purchase Invoices/{FY}/file.pdf    (FY required)
+    //   POs/Internal/file.pdf              (no FY)
+    //   POs/Client/file.pdf                (no FY)
+    //   Proposals/file.pdf                 (no FY)
+    //   <custom>/file.pdf                  (custom — no FY by default)
+    //
+    // Old layouts to migrate FROM:
+    //   FY{XX}/Invoices/Client/file        →  Sales Invoices/FY{XX}/file
+    //   FY{XX}/Invoices/OEM/file           →  Purchase Invoices/FY{XX}/file
+    //   FY{XX}/POs/Internal/file           →  POs/Internal/file (FY dropped)
+    //   FY{XX}/POs/Client/file             →  POs/Client/file (FY dropped)
+    //   FY{XX}/Proposals/file              →  Proposals/file (FY dropped)
+    //   POs/Internal/FY{XX}/file (B-fix-2) →  POs/Internal/file (FY dropped)
+    //   Proposals/FY{XX}/file (B-fix-2)    →  Proposals/file (FY dropped)
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new(); // (src, dst)
 
     for f in &all_files {
         let rel = match f.strip_prefix(&files) {
@@ -4669,78 +4746,64 @@ fn rearrange_files_to_new_structure(state: tauri::State<DbState>) -> RearrangeRe
         let segs: Vec<String> = rel.iter()
             .filter_map(|os| os.to_str().map(String::from))
             .collect();
-        // Need at least: <fy>/<cat-seg1>/...<file>
-        if segs.len() < 3 {
+        if segs.len() < 2 {
             result.skipped_unrecognized += 1; continue;
         }
+
         let first = segs[0].as_str();
-
-        // Detect already-new layout: first is a category, last-but-one is a FY
-        if !is_fy_folder(first) {
-            // Already in new layout? Last-but-one segment should be a FY.
-            let last_but_one = &segs[segs.len() - 2];
-            if is_fy_folder(last_but_one) {
-                // Already in new structure. Verify category translation gives
-                // same path; if so, skip.
-                let cat_segs: Vec<String> = segs[..segs.len()-2].to_vec();
-                // Translate (in case it's old "Invoices/Client" already at new layer)
-                if let Some(new_cat) = translate_category_segments(&cat_segs) {
-                    if new_cat == cat_segs {
-                        result.skipped_already_correct += 1;
-                        continue;
-                    }
-                    // Old name in new layout — translate
-                    let mut dst = files.clone();
-                    for s in &new_cat { dst.push(s); }
-                    dst.push(last_but_one);
-                    dst.push(&segs[segs.len()-1]);
-                    if dst == *f {
-                        result.skipped_already_correct += 1;
-                        continue;
-                    }
-                    moves.push((f.clone(), dst, new_cat, last_but_one.clone()));
-                    continue;
-                } else {
-                    result.skipped_already_correct += 1;
-                    continue;
-                }
-            }
-            result.skipped_unrecognized += 1;
-            continue;
-        }
-
-        // Old layout: segs[0] = FY, segs[1..len-1] = category, segs[len-1] = filename
-        let fy = segs[0].clone();
         let filename = segs[segs.len() - 1].clone();
-        let old_cat: Vec<String> = segs[1..segs.len() - 1].to_vec();
-        if old_cat.is_empty() {
-            // File directly under FY folder, no category — skip
-            result.skipped_unrecognized += 1;
-            continue;
+
+        // Identify the file's current category and FY (if any)
+        let (old_cat_segs, fy_opt): (Vec<String>, Option<String>) = if is_fy_folder(first) {
+            // FY-first old layout: FY{XX}/<cat-segs>/<file>
+            if segs.len() < 3 {
+                result.skipped_unrecognized += 1; continue;
+            }
+            let oc: Vec<String> = segs[1..segs.len()-1].to_vec();
+            (oc, Some(segs[0].clone()))
+        } else if segs.len() >= 3 && is_fy_folder(&segs[segs.len() - 2]) {
+            // Category-first WITH FY: <cat-segs>/{FY}/file (B-fix-2 layout)
+            let oc: Vec<String> = segs[..segs.len()-2].to_vec();
+            (oc, Some(segs[segs.len() - 2].clone()))
+        } else {
+            // Category-first without FY: <cat-segs>/file (already-flat layout)
+            let oc: Vec<String> = segs[..segs.len()-1].to_vec();
+            (oc, None)
+        };
+
+        if old_cat_segs.is_empty() {
+            result.skipped_unrecognized += 1; continue;
         }
 
-        // Translate
-        let new_cat = match translate_category_segments(&old_cat) {
+        // Translate old-style category names to new-style
+        let new_cat = match translate_category_segments(&old_cat_segs) {
             Some(c) => c,
             None => { result.skipped_unrecognized += 1; continue; }
         };
 
+        let needs_fy = category_uses_fy(&new_cat);
+
         let mut dst = files.clone();
         for s in &new_cat { dst.push(s); }
-        dst.push(&fy);
+        if needs_fy {
+            if let Some(fy) = &fy_opt {
+                dst.push(fy);
+            }
+            // Else: file ends up at top of category — caller can sort manually
+        }
         dst.push(&filename);
 
         if dst == *f {
             result.skipped_already_correct += 1;
             continue;
         }
-        moves.push((f.clone(), dst, new_cat, fy));
+        moves.push((f.clone(), dst));
     }
 
     // Build a mapping of old absolute path → new absolute path for record updates.
     let mut path_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    for (src, dst, _new_cat, _fy) in &moves {
+    for (src, dst) in &moves {
         // Make sure parent exists.
         if let Some(parent) = dst.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {

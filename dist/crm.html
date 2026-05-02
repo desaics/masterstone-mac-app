@@ -5417,6 +5417,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         // function is async because it shows a confirmation form
     };
 
+    // Returns true if the chosen category needs FY (Sales Invoices,
+    // Purchase Invoices). Other categories are flat and don't ask for FY.
+    function __msCategoryUsesFY(pathSegments) {
+        if (!pathSegments || pathSegments.length === 0) return false;
+        var first = pathSegments[0];
+        return first === 'Sales Invoices' || first === 'Purchase Invoices';
+    }
+
     async function __msOpenFileOnlyForm(filePath, rowId) {
         // Get the categories list to populate the dropdown
         var t = getTauri();
@@ -5455,16 +5463,28 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         form.style.background = 'rgba(0,0,0,0.2)';
         form.style.borderRadius = '4px';
         form.innerHTML =
-            '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
-            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fyHtml + '</select>' +
             '<div style="font-size:11px;margin-bottom:4px;">Category:</div>' +
-            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + catHtml + '</select>' +
+            '<select id="' + formId + '_cat" oninput="window.__msSyncFyVisibility(\'' + formId + '\')" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + catHtml + '</select>' +
+            '<div id="' + formId + '_fyWrap">' +
+              '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
+              '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;">' + fyHtml + '</select>' +
+            '</div>' +
             '<div style="display:flex;gap:6px;">' +
               '<button onclick="window.__msFileOnlySubmit(\'' + escapeAttr(filePath) + '\', \'' + rowId + '\', \'' + formId + '\')" style="font-size:11px;padding:4px 10px;">File now</button>' +
               '<button onclick="document.getElementById(\'' + formId + '\').remove();" style="font-size:11px;padding:4px 10px;">Cancel</button>' +
             '</div>';
         row.appendChild(form);
+        // Set initial FY visibility based on default-selected category
+        window.__msSyncFyVisibility(formId);
     }
+
+    window.__msSyncFyVisibility = function (formId) {
+        var catSel = document.getElementById(formId + '_cat');
+        var fyWrap = document.getElementById(formId + '_fyWrap');
+        if (!catSel || !fyWrap) return;
+        var pathSegs = (catSel.value || '').split('/').filter(function (s) { return s.length > 0; });
+        fyWrap.style.display = __msCategoryUsesFY(pathSegs) ? '' : 'none';
+    };
 
     window.__msFileOnlySubmit = async function (filePath, rowId, formId) {
         var fy = document.getElementById(formId + '_fy').value;
@@ -5561,10 +5581,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
               'style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:4px;box-sizing:border-box;" />' +
             '<select id="' + formId + '_field" size="6" style="width:100%;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;"></select>' +
             '<div id="' + formId + '_fieldHint" style="font-size:10px;color:var(--text-dim);margin-top:-4px;margin-bottom:6px;min-height:14px;"></div>' +
-            '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
-            '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + fyHtml + '</select>' +
             '<div style="font-size:11px;margin-bottom:4px;">Category:</div>' +
-            '<select id="' + formId + '_cat" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + catHtml + '</select>' +
+            '<select id="' + formId + '_cat" oninput="window.__msSyncFyVisibility(\'' + formId + '\')" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + catHtml + '</select>' +
+            '<div id="' + formId + '_fyWrap">' +
+              '<div style="font-size:11px;margin-bottom:4px;">FY:</div>' +
+              '<select id="' + formId + '_fy" style="width:100%;padding:4px;background:rgba(0,0,0,0.25);color:var(--text-bright);border:1px solid var(--border-soft);border-radius:3px;font-size:11px;margin-bottom:6px;box-sizing:border-box;">' + fyHtml + '</select>' +
+            '</div>' +
             '<div style="display:flex;gap:6px;">' +
               '<button onclick="window.__msLinkToRecordSubmit(\'' + escapeAttr(filePath) + '\', \'' + rowId + '\', \'' + formId + '\')" style="font-size:11px;padding:4px 10px;">Link &amp; file</button>' +
               '<button onclick="document.getElementById(\'' + formId + '\').remove();" style="font-size:11px;padding:4px 10px;">Cancel</button>' +
@@ -5572,6 +5594,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         row.appendChild(form);
         // Populate options now that the form is in the DOM
         window.__msFilterLinkOptions(formId);
+        window.__msSyncFyVisibility(formId);
         // Wire up selection-change handler to show the "current local" hint
         var fieldSel = document.getElementById(formId + '_field');
         if (fieldSel) {
