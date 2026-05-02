@@ -5524,7 +5524,9 @@ fn rebuild_folder_structure(state: tauri::State<DbState>) -> RebuildResult {
             result.errors.push(format!("initialize folders: {e}"));
         }
     }
-    result.folders_created = init.category_folders_total.saturating_sub(init.category_folders_present);
+    // initialize_files_folders returns created_count = newly-created dirs and
+    // skipped_count = dirs that already existed. We report the new ones.
+    result.folders_created = init.created_count;
 
     result
 }
