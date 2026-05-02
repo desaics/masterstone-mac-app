@@ -4618,123 +4618,64 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // ---- 4. Settings modal -------------------------------------------------
-    window.__msOpenSettings = async function () {
+    // Phase B (B-fix-8) — load saved Mac App settings into the page form.
+    // Called when the Mac App sub-tab is opened, and also from
+    // __msOpenSettings (the indigo banner gear icon) after navigating there.
+    window.__msLoadMacAppSettings = async function () {
         try {
             var t = getTauri();
-            if (!t || !t.invoke) {
-                showActionToast('Tauri runtime unavailable', 'error');
-                return;
-            }
+            if (!t || !t.invoke) return;
             var settings = await t.invoke('get_app_settings');
             var s = (settings && settings.ok && settings.settings) ? settings.settings : {};
 
-            var snapshotFolder = s['ms_app__snapshot_folder'] || '';
-            var snapshotRetention = s['ms_app__snapshot_retention'] || '7';
-            var backupFolder = s['ms_app__backup_folder'] || '';
-            var backupMode = s['ms_app__backup_destination_mode'] || 'local';
-            var backupRetention = s['ms_app__backup_retention'] || '14';
-            var conflictGuard = s['ms_app__conflict_guard_enabled'] !== '0'; // default on
+            var snapshotFolder    = s['ms_app__snapshot_folder']           || '';
+            var snapshotRetention = s['ms_app__snapshot_retention']        || '7';
+            var backupFolder      = s['ms_app__backup_folder']             || '';
+            var backupMode        = s['ms_app__backup_destination_mode']  || 'local';
+            var backupRetention   = s['ms_app__backup_retention']          || '14';
+            var conflictGuard     = s['ms_app__conflict_guard_enabled']  !== '0'; // default on
 
-            var existing = document.getElementById('msSettingsModal');
-            if (existing) existing.remove();
-            var bg = document.createElement('div');
-            bg.id = 'msSettingsModal';
-            bg.className = 'ms-modal-bg';
-            bg.innerHTML =
-                '<div class="ms-modal" style="max-width:560px;">' +
-                  '<h3>⚙️ Mac App Settings</h3>' +
+            var setVal = function (id, v) {
+                var el = document.getElementById(id);
+                if (el) el.value = v;
+            };
+            setVal('msSetSnapshotFolder',    snapshotFolder);
+            setVal('msSetSnapshotRetention', snapshotRetention);
+            setVal('msSetBackupFolder',      backupFolder);
+            setVal('msSetBackupRetention',   backupRetention);
 
-                  '<div class="ms-setting-block">' +
-                    '<label>Snapshot folder</label>' +
-                    '<div class="ms-setting-row">' +
-                      '<input type="text" id="msSetSnapshotFolder" value="' + escapeAttr(snapshotFolder) +
-                      '" placeholder="(default: ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone)" />' +
-                      '<button onclick="window.__msPickFolder(\'msSetSnapshotFolder\')">Browse…</button>' +
-                    '</div>' +
-                    '<div class="ms-setting-help">Empty = use default. Snapshots written here on quit.</div>' +
-                  '</div>' +
+            var cg = document.getElementById('msSetConflictGuard');
+            if (cg) cg.checked = !!conflictGuard;
 
-                  '<div class="ms-setting-block">' +
-                    '<label>Snapshot retention</label>' +
-                    '<input type="number" id="msSetSnapshotRetention" value="' + escapeAttr(snapshotRetention) +
-                      '" min="1" max="365" style="width:80px;" /> snapshots (oldest auto-purged)' +
-                  '</div>' +
-
-                  '<hr/>' +
-
-                  '<div class="ms-setting-block">' +
-                    '<label>Auto-backup destination</label>' +
-                    '<div>' +
-                      '<label class="ms-radio"><input type="radio" name="msSetBackupMode" value="local"' +
-                        (backupMode === 'local' ? ' checked' : '') + ' /> Local only ' +
-                        '<span class="ms-setting-help">~/Library/Application Support/com.masterstone.crm/backups/</span></label>' +
-                      '<label class="ms-radio"><input type="radio" name="msSetBackupMode" value="onedrive"' +
-                        (backupMode === 'onedrive' ? ' checked' : '') + ' /> OneDrive ' +
-                        '<span class="ms-setting-help">alongside snapshots, in OneDrive-Masterstone/Masterstone/backups/</span></label>' +
-                    '</div>' +
-                  '</div>' +
-
-                  '<div class="ms-setting-block">' +
-                    '<label>Backup folder (override)</label>' +
-                    '<div class="ms-setting-row">' +
-                      '<input type="text" id="msSetBackupFolder" value="' + escapeAttr(backupFolder) +
-                      '" placeholder="(use default for selected destination above)" />' +
-                      '<button onclick="window.__msPickFolder(\'msSetBackupFolder\')">Browse…</button>' +
-                    '</div>' +
-                  '</div>' +
-
-                  '<div class="ms-setting-block">' +
-                    '<label>Backup retention</label>' +
-                    '<input type="number" id="msSetBackupRetention" value="' + escapeAttr(backupRetention) +
-                      '" min="1" max="365" style="width:80px;" /> daily backups' +
-                  '</div>' +
-
-                  '<hr/>' +
-
-                  '<div class="ms-setting-block">' +
-                    '<label class="ms-checkbox"><input type="checkbox" id="msSetConflictGuard"' +
-                      (conflictGuard ? ' checked' : '') + ' /> Enable conflict guard ' +
-                      '<span class="ms-setting-help">Warn if migrate.py or another tool modifies the database while the app is open.</span></label>' +
-                  '</div>' +
-
-                  // Build B-fix-7 (#58) — explicit way to bring the indigo top
-                  // banner back from inside Settings, in case the floating
-                  // bottom-right widget is missed or somehow not visible.
-                  '<div class="ms-setting-block">' +
-                    '<button type="button" onclick="window.__msCloseSettings(); window.__msRestoreBanner();">Show top banner</button>' +
-                    '<span class="ms-setting-help" style="margin-left:8px;">Brings the indigo Mac-app banner back if you closed it.</span>' +
-                  '</div>' +
-
-                  '<div class="ms-modal-actions">' +
-                    '<button class="primary" onclick="window.__msSaveSettings()">Save</button>' +
-                    '<button onclick="window.__msCloseSettings()">Cancel</button>' +
-                  '</div>' +
-
-                  '<hr/>' +
-                  '<details style="margin-top:8px;font-size:12px;color:var(--text-dim);">' +
-                    '<summary style="cursor:pointer;">Advanced — Production cutover</summary>' +
-                    '<div style="padding-top:8px;line-height:1.55;">' +
-                      'When you\'re ready to switch from the HTML CRM to the Mac app permanently:<br/>' +
-                      '<ol style="padding-left:20px;margin:6px 0;">' +
-                        '<li>Open the HTML CRM, Settings → Backup → Export full backup as JSON</li>' +
-                        '<li>Run <code>migrate.py</code> on that JSON to produce a fresh masterstone.db</li>' +
-                        '<li>In the Mac app, replace the database via the first-launch wizard (delete the old file at ~/Library/Application Support/com.masterstone.crm/masterstone.db first, restart, point picker at the new file)</li>' +
-                        '<li>Archive the HTML version (zip Masterstone_CRM.html + the JSON, label with today\'s date)</li>' +
-                      '</ol>' +
-                      '<button onclick="window.__msMarkProductionCutover()" style="margin-top:6px;">' +
-                        'Mark cutover complete (dismiss reminder banner)' +
-                      '</button>' +
-                    '</div>' +
-                  '</details>' +
-
-                '</div>';
-            document.body.appendChild(bg);
+            var radios = document.querySelectorAll('input[name="msSetBackupMode"]');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (radios[i].value === backupMode);
+            }
         } catch (e) {
-            showActionToast('Settings open error: ' + e, 'error');
-            console.error('[ms] settings error:', e);
+            console.error('[ms] load mac app settings error:', e);
         }
     };
 
+    // Phase B (B-fix-8) — the indigo banner's gear icon now navigates to the
+    // System Controls → Mac App page instead of opening a modal. The page
+    // is the canonical entry point for these settings.
+    window.__msOpenSettings = async function () {
+        try {
+            // Navigate to System Controls
+            if (typeof showTab === 'function') showTab('backupTab');
+            // Switch to the Mac App sub-tab (this also calls __msLoadMacAppSettings)
+            if (typeof showSysCtrlSubTab === 'function') showSysCtrlSubTab('macapp');
+            // Scroll to top so the user lands on the form, not mid-page
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch (e) {
+            showActionToast('Settings open error: ' + e, 'error');
+            console.error('[ms] settings open error:', e);
+        }
+    };
+
+    // Legacy: __msCloseSettings used to remove the modal. The page version
+    // doesn't need closing — kept as a no-op so any leftover handlers don't
+    // throw.
     window.__msCloseSettings = function () {
         var m = document.getElementById('msSettingsModal');
         if (m) m.remove();
@@ -5584,6 +5525,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div id="sysCtrlTabBtn_templates"   class="arap-subtab"        onclick="showSysCtrlSubTab('templates')"><i class="fas fa-file-contract" style="color:var(--accent-cyan);"></i> Templates</div>
       <div id="sysCtrlTabBtn_oem"         class="arap-subtab"        onclick="showSysCtrlSubTab('oem')"><i class="fas fa-database" style="color:var(--success);"></i> OEM &amp; Product Master</div>
       <div id="sysCtrlTabBtn_storage"     class="arap-subtab"        onclick="showSysCtrlSubTab('storage')"><i class="fas fa-hdd" style="color:var(--warning);"></i> Storage &amp; Backup</div>
+      <div id="sysCtrlTabBtn_macapp"      class="arap-subtab"        onclick="showSysCtrlSubTab('macapp')"><i class="fas fa-cog" style="color:var(--purple);"></i> Mac App</div>
       <div id="sysCtrlTabBtn_diagnostics" class="arap-subtab"        onclick="showSysCtrlSubTab('diagnostics')"><i class="fas fa-tools" style="color:var(--danger);"></i> Migration &amp; Diagnostics</div>
     </div>
 
@@ -6034,6 +5976,113 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             </div>
             <div class="control-status-bar" id="status-restore"></div>
         </div>
+    </div>
+
+    <!-- Phase B (B-fix-8) — Mac App Settings sub-tab content. Replaces the
+         old indigo-banner gear modal. The form field IDs are kept identical
+         so the existing __msSaveSettings handler reads them unchanged. -->
+    <div class="card" data-syscat="macapp" style="margin-top:24px; margin-bottom:0; border-top:3px solid var(--purple);">
+        <h3><i class="fas fa-cog" style="color:var(--purple);"></i> Mac App Settings</h3>
+        <div style="font-size:12.5px; color:var(--text-dim); margin-bottom:18px; line-height:1.6;">
+            Mac-app-specific behaviour: where iPhone snapshots and database backups go, how many to keep, the conflict guard, and the indigo top banner. These settings are stored in the app's own settings store, separate from your CRM data.
+        </div>
+
+        <!-- Snapshot configuration -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--accent-cyan); border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:10px;"><i class="fas fa-mobile-alt" style="color:var(--accent-cyan);"></i> iPhone Snapshot</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Snapshot folder</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="msSetSnapshotFolder" placeholder="(default: ~/Library/CloudStorage/OneDrive-Masterstone/Masterstone)" style="flex:1; font-size:12px;" />
+                        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msPickFolder('msSetSnapshotFolder')" style="background:var(--input-bg);">Browse…</button>
+                    </div>
+                    <div style="font-size:10.5px; color:var(--text-subtle); margin-top:4px;">Empty = use default. Snapshots written here on app quit.</div>
+                </div>
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Snapshot retention</label>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="number" id="msSetSnapshotRetention" min="1" max="365" style="width:80px; font-size:12px;" />
+                        <span style="font-size:12px; color:var(--text-dim);">snapshots (oldest auto-purged)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auto-backup configuration -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--success); border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:10px;"><i class="fas fa-database" style="color:var(--success);"></i> Auto-backup</div>
+            <div style="margin-bottom:12px;">
+                <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:6px;">Destination</label>
+                <label style="display:block; font-size:12.5px; color:var(--text-main); margin-bottom:4px;">
+                    <input type="radio" name="msSetBackupMode" value="local" /> Local only
+                    <span style="color:var(--text-subtle); font-size:11px; margin-left:6px;">~/Library/Application Support/com.masterstone.crm/backups/</span>
+                </label>
+                <label style="display:block; font-size:12.5px; color:var(--text-main);">
+                    <input type="radio" name="msSetBackupMode" value="onedrive" /> OneDrive
+                    <span style="color:var(--text-subtle); font-size:11px; margin-left:6px;">alongside snapshots, in OneDrive-Masterstone/Masterstone/backups/</span>
+                </label>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Backup folder (override)</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="msSetBackupFolder" placeholder="(use default for selected destination above)" style="flex:1; font-size:12px;" />
+                        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msPickFolder('msSetBackupFolder')" style="background:var(--input-bg);">Browse…</button>
+                    </div>
+                    <div style="font-size:10.5px; color:var(--text-subtle); margin-top:4px;">Empty = use the destination's default location.</div>
+                </div>
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Backup retention</label>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="number" id="msSetBackupRetention" min="1" max="365" style="width:80px; font-size:12px;" />
+                        <span style="font-size:12px; color:var(--text-dim);">daily backups</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Conflict guard -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--warning); border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:6px;"><i class="fas fa-shield-alt" style="color:var(--warning);"></i> Conflict Guard</div>
+            <label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; color:var(--text-main); cursor:pointer;">
+                <input type="checkbox" id="msSetConflictGuard" style="margin-top:3px;" />
+                <span>Enable conflict guard
+                    <span style="display:block; font-size:11px; color:var(--text-subtle); font-weight:400; margin-top:2px;">Warn if migrate.py or another tool modifies the database file while the app is open.</span>
+                </span>
+            </label>
+        </div>
+
+        <!-- Top banner recovery -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid #6366f1; border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:240px;">
+                    <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:4px;"><i class="fas fa-grip-lines" style="color:#a5b4fc;"></i> Top Banner Recovery</div>
+                    <div style="font-size:11.5px; color:var(--text-dim);">Brings back the indigo Mac-app banner at the top of the window if you closed it.</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msRestoreBanner()" style="background:var(--input-bg);"><i class="fas fa-arrow-up"></i> Show top banner</button>
+            </div>
+        </div>
+
+        <!-- Save row -->
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+            <button class="btn btn-primary" type="button" onclick="window.__msSaveSettings()"><i class="fas fa-save"></i> Save Mac App Settings</button>
+        </div>
+
+        <!-- Production cutover (advanced, collapsed) -->
+        <details style="margin-top:18px; font-size:12px; color:var(--text-dim); border-top:1px solid var(--glass-border); padding-top:14px;">
+            <summary style="cursor:pointer; font-weight:600; color:var(--text-main);"><i class="fas fa-flag-checkered"></i> Advanced — Production cutover</summary>
+            <div style="padding-top:10px; line-height:1.55;">
+                When you're ready to switch from the HTML CRM to the Mac app permanently:
+                <ol style="padding-left:20px; margin:6px 0;">
+                    <li>Open the HTML CRM, Settings → Backup → Export full backup as JSON</li>
+                    <li>Run <code>migrate.py</code> on that JSON to produce a fresh masterstone.db</li>
+                    <li>In the Mac app, replace the database via the first-launch wizard (delete the old file at ~/Library/Application Support/com.masterstone.crm/masterstone.db first, restart, point picker at the new file)</li>
+                    <li>Archive the HTML version (zip Masterstone_CRM.html + the JSON, label with today's date)</li>
+                </ol>
+                <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msMarkProductionCutover()" style="background:var(--input-bg); margin-top:6px;">Mark cutover complete (dismiss reminder banner)</button>
+            </div>
+        </details>
     </div>
 
     <!-- Phase 4A — Advanced section (re-trigger migration) -->
@@ -30303,7 +30352,7 @@ function showARSubTab(tab) {
 // show only elements whose data-syscat list contains the selected sub-tab.
 function showSysCtrlSubTab(cat) {
     if (!cat) cat = 'company';
-    const validCats = ['company', 'templates', 'oem', 'storage', 'diagnostics'];
+    const validCats = ['company', 'templates', 'oem', 'storage', 'diagnostics', 'macapp'];
     if (!validCats.includes(cat)) cat = 'company';
 
     // Toggle visibility of all tagged elements inside backupTab
@@ -30320,6 +30369,13 @@ function showSysCtrlSubTab(cat) {
         const btn = document.getElementById('sysCtrlTabBtn_' + c);
         if (btn) btn.classList.toggle('active', c === cat);
     });
+
+    // Phase B (B-fix-8) — when the Mac App sub-tab is opened, reload the
+    // current settings into the form fields so the user always sees the
+    // saved values (they may have been changed via the indigo banner gear).
+    if (cat === 'macapp' && typeof window.__msLoadMacAppSettings === 'function') {
+        window.__msLoadMacAppSettings();
+    }
 
     // Persist last-selected sub-tab
     try { localStorage.setItem('ms_sysctrl_subtab', cat); } catch (_) {}
