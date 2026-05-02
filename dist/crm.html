@@ -4704,6 +4704,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '</div>' +
                       '<button onclick="window.__msRearrangeFiles()" id="msRearrangeBtn">Re-arrange files into new structure</button>' +
                       '<div id="msRearrangeStatus" style="margin-top:6px;font-size:11px;"></div>' +
+                      '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
+                      '<div><b>Reset all file assignments</b></div>' +
+                      '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
+                        '<span style="color:#fbbf24;">⚠ Destructive.</span> Strips every <code>_local</code> field from every contract record, and moves every file currently under <code>Files/</code> back to <code>Migration/</code>. Use this if the matcher made too many wrong assignments and you want to start clean. Original OneDrive URL fields are preserved — only the local paths are cleared.' +
+                      '</div>' +
+                      '<button onclick="window.__msResetAllAssignments()" id="msResetBtn">Reset all assignments &amp; move files back to Migration</button>' +
+                      '<div id="msResetStatus" style="margin-top:6px;font-size:11px;"></div>' +
                     '</div>' +
                   '</details>' +
 
@@ -4712,7 +4719,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     '<summary style="cursor:pointer;">Advanced — Match Migration files to records</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Scans the Migration folder and proposes which CRM record each file should attach to. ' +
-                      'High-confidence matches (≥85%) can be auto-applied. Medium-confidence matches need your review. ' +
+                      'Build B-fix-4 reads the actual PDF content (not just filenames) and matches against client GSTIN, PAN, doc numbers, dates, and more. ' +
+                      'High-confidence matches (≥95%) can be auto-applied. Medium-confidence matches need your review. ' +
                       'Files with no match show in an "Unmatched" list where you can file them by hand or link to a CRM record.<br/><br/>' +
                       '<button onclick="window.__msStartMatcher()" id="msMatcherStartBtn">Scan &amp; propose matches</button>' +
                       '<button onclick="window.__msApplyAllAuto()" id="msApplyAutoBtn" style="display:none;margin-left:6px;">Apply all auto-matches</button>' +
@@ -5109,10 +5117,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
     window.__msStartMatcher = async function () {
         var btn = document.getElementById('msMatcherStartBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Scanning… (reading PDFs, may take 30-60s)'; }
         var summary = document.getElementById('msMatcherSummary');
         var section = document.getElementById('msMatcherSection');
-        if (section) section.innerHTML = '';
+        if (section) section.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-style:italic;">Reading PDF content from each file in Migration/ — this scans the actual document body (not just filenames) for client GSTIN, doc numbers, dates, etc. Please wait…</div>';
         if (summary) { summary.style.display = 'none'; summary.innerHTML = ''; }
         try {
             var t = getTauri();
@@ -5709,6 +5717,74 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (status) status.innerHTML = '<span style="color:#f87171;">✗ Error: ' + escapeHtml(String(e)) + '</span>';
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = 'Re-arrange files into new structure'; }
+        }
+    };
+
+    // ---- Reset all assignments (Build B-fix-4) -----
+    window.__msResetAllAssignments = async function () {
+        var ok = await window.__msConfirm(
+            '⚠ Destructive action — read carefully.\n\n' +
+            'This will:\n' +
+            '  • Strip every _local field from every contract record (clears local file links)\n' +
+            '  • Move every file currently under Files/ back to Migration/\n' +
+            '  • Reset the rearrange-completed flag\n\n' +
+            'Original OneDrive URL fields are preserved — only the local paths and physical file locations change.\n\n' +
+            'Use this to start the matching process over with the new PDF reader.\n\n' +
+            'Proceed?'
+        );
+        if (!ok) return;
+
+        // Second confirmation for the truly destructive bit
+        var ok2 = await window.__msConfirm(
+            'Last chance. This will move every file and clear every local link.\n\n' +
+            'Proceed?'
+        );
+        if (!ok2) return;
+
+        var btn = document.getElementById('msResetBtn');
+        var status = document.getElementById('msResetStatus');
+        if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+        if (status) status.textContent = 'Working… (moving files and clearing records)';
+
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                if (status) status.textContent = 'Tauri runtime unavailable';
+                return;
+            }
+            var r = await t.invoke('reset_all_assignments');
+            if (!r.ok) {
+                if (status) status.innerHTML = '<span style="color:#f87171;">✗ Failed: ' + escapeHtml(r.error || 'unknown') + '</span>';
+                return;
+            }
+            var lines = [
+                '<span style="color:#34d399;">✓ Reset complete.</span>',
+                'Records cleared: <b>' + r.records_reset + '</b>',
+                'Files moved back to Migration: <b>' + r.files_moved_back + '</b>',
+            ];
+            if (r.errors && r.errors.length > 0) {
+                lines.push('<span style="color:#f87171;">' + r.errors.length + ' error(s):</span>');
+                for (var i = 0; i < Math.min(r.errors.length, 5); i++) {
+                    lines.push('  • ' + escapeHtml(r.errors[i]));
+                }
+                if (r.errors.length > 5) {
+                    lines.push('  • … and ' + (r.errors.length - 5) + ' more (see console)');
+                    console.error('[ms] reset errors:', r.errors);
+                }
+            }
+            if (status) status.innerHTML = lines.join('<br/>');
+
+            // Refresh in-memory cache
+            try {
+                var loadResult = await t.invoke('storage_load_all');
+                if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                    realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+                }
+            } catch (e2) { console.error('[ms] cache refresh failed:', e2); }
+        } catch (e) {
+            if (status) status.innerHTML = '<span style="color:#f87171;">✗ Error: ' + escapeHtml(String(e)) + '</span>';
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Reset all assignments & move files back to Migration'; }
         }
     };
 

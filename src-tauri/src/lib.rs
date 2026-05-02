@@ -3027,8 +3027,387 @@ fn default_oem_aliases() -> Vec<(String, String)> {
     ]
 }
 
-/// Score one filename against one record + field pairing. Returns a
-/// MatchCandidate if the score is above zero.
+// ============================================================================
+// Build B-fix-4: PDF text extraction
+//
+// Uses the pdf-extract crate to pull body text from PDF files. Returns None
+// for scanned (image-only) PDFs where text extraction yields effectively
+// nothing. The extracted text is then used by the matcher to find:
+//   - exact doc numbers (PO numbers, invoice numbers)
+//   - client GSTIN / PAN
+//   - dates in the body
+//   - OEM references
+// These are dramatically more reliable than filename-only matching.
+// ============================================================================
+
+/// Try to extract text from a PDF file. Returns lowercased text on success,
+/// or None if the file is unreadable or appears to be image-only (very
+/// short text or whitespace-only).
+fn extract_pdf_text(path: &std::path::Path) -> Option<String> {
+    // pdf-extract::extract_text reads a PDF and returns its text content.
+    // It's synchronous and CPU-bound. On failure (corrupt PDF, password-
+    // protected, etc.) it returns an Err which we map to None.
+    let text = match pdf_extract::extract_text(path) {
+        Ok(t) => t,
+        Err(_) => return None,
+    };
+    let trimmed = text.trim();
+    // Heuristic: if the extracted text is shorter than 50 chars, it's
+    // probably a scanned PDF (we got page numbers and footer text only).
+    if trimmed.len() < 50 { return None; }
+    Some(trimmed.to_lowercase())
+}
+
+/// Compact a string for substring matching: lowercase + collapse whitespace
+/// to single spaces. Different from normalize_for_match which strips ALL
+/// non-alphanumerics — for PDFs we want to preserve word boundaries because
+/// we're searching for things like "GSTIN: 27AAACF5737C1ZV" where the
+/// alphanumeric run is the meaningful unit.
+fn compact_pdf_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !last_was_ws { out.push(' '); }
+            last_was_ws = true;
+        } else {
+            out.push(c.to_ascii_lowercase());
+            last_was_ws = false;
+        }
+    }
+    out
+}
+
+/// Cached per-file PDF text. Computed on first need, reused for every
+/// contract scoring pass. Returns the compacted lowercase text or None.
+struct PdfTextCache<'a> {
+    files: &'a mut std::collections::HashMap<String, Option<String>>,
+}
+impl<'a> PdfTextCache<'a> {
+    fn get_or_extract(&mut self, abs_path: &str) -> Option<&str> {
+        if !self.files.contains_key(abs_path) {
+            let path = std::path::Path::new(abs_path);
+            // Only attempt PDF extraction for .pdf files
+            let is_pdf = abs_path.to_lowercase().ends_with(".pdf");
+            let text = if is_pdf {
+                extract_pdf_text(path).map(|s| compact_pdf_text(&s))
+            } else {
+                None
+            };
+            self.files.insert(abs_path.to_string(), text);
+        }
+        self.files.get(abs_path).and_then(|o| o.as_deref())
+    }
+}
+
+/// Per-client metadata used during matching. Built once from the clients
+/// table; passed to scorer for substring checks against PDF body text.
+#[derive(Clone)]
+struct ClientMatchData {
+    /// Display name (key in clients table, e.g. "63 Moons Technologies Limited")
+    full_name: String,
+    /// Lowercase short name ("63 moons")
+    short_name_lc: String,
+    /// Lowercase GSTIN (15 chars, e.g. "27aaacf5737c1zv"). Empty if missing.
+    gstin_lc: String,
+    /// Lowercase PAN (10 chars, e.g. "aaacf5737c"). Empty if missing.
+    pan_lc: String,
+    /// Lowercase vendor code (used in OEM invoices to identify the client
+    /// in the OEM's accounting system).
+    vendor_code_lc: String,
+    /// Lowercase CIN (corporate identification number).
+    cin_lc: String,
+}
+
+/// Read client master (ms_client_master_v1) from app_settings or the clients
+/// table and build a HashMap: client_name -> ClientMatchData.
+fn build_client_match_data(con: &Connection) -> std::collections::HashMap<String, ClientMatchData> {
+    let mut out = std::collections::HashMap::new();
+    if let Ok(mut stmt) = con.prepare("SELECT name, raw_data FROM clients") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                let (name, raw) = row;
+                let v: serde_json::Value = match serde_json::from_str(&raw) {
+                    Ok(v) => v, Err(_) => continue,
+                };
+                let cmd = ClientMatchData {
+                    full_name: name.clone(),
+                    short_name_lc: jstr(&v, "shortName").to_lowercase(),
+                    gstin_lc: jstr(&v, "gstin").to_lowercase(),
+                    pan_lc: jstr(&v, "pan").to_lowercase(),
+                    vendor_code_lc: jstr(&v, "vendorCode").to_lowercase(),
+                    cin_lc: jstr(&v, "cin").to_lowercase(),
+                };
+                out.insert(name, cmd);
+            }
+        }
+    }
+    out
+}
+
+/// Score the *PDF body content* against a contract+field. Returns extra
+/// score points and reasons that should be ADDED to the filename-based
+/// score. Returns (0.0, []) if no PDF text was extracted.
+///
+/// Why separate from score_field_match? Two reasons:
+///   - PDF text extraction is expensive (100-300ms per file). We only want
+///     to do it once per file, then re-use the cached text across all
+///     contracts.
+///   - PDF signals are stronger than filename signals. They get higher
+///     individual weights and need their own scoring rationale in the
+///     "Why?" diagnostic.
+#[allow(clippy::too_many_arguments)]
+fn score_pdf_body(
+    pdf_text: Option<&str>,
+    contract: &serde_json::Value,
+    client_data: Option<&ClientMatchData>,
+    field_kind: &FieldKind,
+) -> (f64, Vec<String>) {
+    let text = match pdf_text {
+        Some(t) => t,
+        None => return (0.0, Vec::new()),
+    };
+    let mut score: f64 = 0.0;
+    let mut reasons: Vec<String> = Vec::new();
+
+    // ---- GSTIN / PAN match (very strong client identification) ----
+    if let Some(cd) = client_data {
+        if cd.gstin_lc.len() >= 10 && text.contains(&cd.gstin_lc) {
+            score += 0.50;
+            reasons.push(format!("GSTIN '{}'", cd.gstin_lc.to_uppercase()));
+        } else if cd.pan_lc.len() >= 8 && text.contains(&cd.pan_lc) {
+            // PAN is embedded in GSTIN, so don't double-count, but if GSTIN
+            // wasn't present we still credit PAN.
+            score += 0.40;
+            reasons.push(format!("PAN '{}'", cd.pan_lc.to_uppercase()));
+        }
+        // CIN is rarer but still a strong signal
+        if cd.cin_lc.len() >= 10 && text.contains(&cd.cin_lc) {
+            score += 0.20;
+            reasons.push(format!("CIN '{}'", cd.cin_lc.to_uppercase()));
+        }
+        // Vendor code (used by OEMs to identify the client in their accounting)
+        // Only credit for OEM invoices; a numeric code is too noisy elsewhere.
+        if matches!(field_kind, FieldKind::OemInvoice(_))
+            && cd.vendor_code_lc.len() >= 4
+            && text.contains(&cd.vendor_code_lc) {
+            score += 0.18;
+            reasons.push(format!("vendor code '{}'", cd.vendor_code_lc));
+        }
+
+        // Full client name in body (more reliable than filename match)
+        let full_lc = cd.full_name.to_lowercase();
+        if !full_lc.is_empty() && text.contains(&full_lc) {
+            score += 0.15;
+            reasons.push("client name in body".to_string());
+        } else if !cd.short_name_lc.is_empty()
+            && cd.short_name_lc.len() >= 4
+            && text.contains(&cd.short_name_lc) {
+            score += 0.10;
+            reasons.push(format!("client short '{}' in body", cd.short_name_lc));
+        }
+    }
+
+    // ---- Doc number in body (the strongest possible signal) ----
+    let doc_number = match field_kind {
+        FieldKind::InternalPO => jstr(contract, "internalPO"),
+        FieldKind::ClientPOLegacy => jstr(contract, "clientPO"),
+        FieldKind::ClientPOArr(po_idx) => {
+            contract.get("clientPOs").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*po_idx))
+                .map(|po| jstr(po, "poNo")).unwrap_or_default()
+        }
+        FieldKind::ClientInvoice(y_idx) => {
+            contract.get("billingYears").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*y_idx))
+                .map(|by| jstr(by, "clientInvoiceNo")).unwrap_or_default()
+        }
+        FieldKind::OemInvoice(y_idx) => {
+            contract.get("billingYears").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*y_idx))
+                .map(|by| jstr(by, "oemInvoiceNo")).unwrap_or_default()
+        }
+    };
+    if !doc_number.is_empty() {
+        let dn_lc = doc_number.to_lowercase();
+        if dn_lc.len() >= 4 && text.contains(&dn_lc) {
+            score += 0.70;
+            reasons.push(format!("doc# '{doc_number}' in body"));
+        } else {
+            // Try alternative forms — separators stripped, or just the suffix
+            // (e.g. "21-22/DT102" → also try "21-22dt102" and "DT102").
+            let stripped = dn_lc.replace(['-', '/', ' ', '_'], "");
+            if stripped.len() >= 4 && text.replace([' ', '-', '_', '/'], "").contains(&stripped) {
+                score += 0.65;
+                reasons.push(format!("doc# '{doc_number}' (compact match)"));
+            } else {
+                let parts: Vec<&str> = dn_lc.split(['/', '-', '_', ' ']).filter(|s| !s.is_empty()).collect();
+                for part in parts.iter().rev() {
+                    if part.len() >= 4 && text.contains(*part) {
+                        score += 0.50;
+                        reasons.push(format!("doc# part '{part}' in body"));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Date in body matching the record date (within ±2 days) ----
+    let record_date = match field_kind {
+        FieldKind::InternalPO => jstr(contract, "internalPODate"),
+        FieldKind::ClientPOLegacy => jstr(contract, "clientPODate"),
+        FieldKind::ClientPOArr(po_idx) => {
+            contract.get("clientPOs").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*po_idx))
+                .map(|po| jstr(po, "poDate")).unwrap_or_default()
+        }
+        FieldKind::ClientInvoice(y_idx) => {
+            contract.get("billingYears").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*y_idx)).map(|by| {
+                    let d = jstr(by, "actualInvoiceDate");
+                    if !d.is_empty() { d } else { jstr(by, "billDate") }
+                }).unwrap_or_default()
+        }
+        FieldKind::OemInvoice(y_idx) => {
+            contract.get("billingYears").and_then(|v| v.as_array())
+                .and_then(|a| a.get(*y_idx)).map(|by| {
+                    let d = jstr(by, "oemInvoiceDate");
+                    if !d.is_empty() { d } else { jstr(by, "billDate") }
+                }).unwrap_or_default()
+        }
+    };
+    if record_date.len() >= 10 {
+        // Build several common formats to look for.
+        let y = &record_date[0..4];
+        let m: i32 = record_date[5..7].parse().unwrap_or(0);
+        let d: i32 = record_date[8..10].parse().unwrap_or(0);
+        let month_names_short = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+        let month_names_long = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+        let mname_short = if (1..=12).contains(&m) { month_names_short[(m-1) as usize] } else { "" };
+        let mname_long = if (1..=12).contains(&m) { month_names_long[(m-1) as usize] } else { "" };
+
+        let cands = [
+            format!("{:02}/{:02}/{}", d, m, y),     // 04/04/2025
+            format!("{:02}-{:02}-{}", d, m, y),     // 04-04-2025
+            format!("{:02}.{:02}.{}", d, m, y),     // 04.04.2025
+            format!("{}/{:02}/{:02}", y, m, d),     // 2025/04/04
+            format!("{}-{:02}-{:02}", y, m, d),     // 2025-04-04
+            format!("{} {} {}", d, mname_short, y), // 4 apr 2025
+            format!("{} {} {}", d, mname_long, y),  // 4 april 2025
+            format!("{:02} {} {}", d, mname_short, y), // 04 apr 2025
+            format!("{:02} {} {}", d, mname_long, y),  // 04 april 2025
+            format!("{}{}{}", d, mname_short, y),
+            format!("{} {}, {}", mname_long, d, y), // april 4, 2025
+        ];
+        let mut date_matched = false;
+        for c in &cands {
+            let cl = c.to_lowercase();
+            if !cl.is_empty() && text.contains(&cl) {
+                score += 0.25;
+                reasons.push(format!("date '{c}' in body"));
+                date_matched = true;
+                break;
+            }
+        }
+        if !date_matched {
+            // Fall back: at least the year + month name
+            if !mname_short.is_empty() {
+                let probe = format!("{mname_short} {y}");
+                if text.contains(&probe) {
+                    score += 0.10;
+                    reasons.push(format!("month/year '{probe}' in body"));
+                }
+            }
+        }
+    }
+
+    (score, reasons)
+}
+
+/// Build a minimal MatchCandidate from contract+field, with confidence 0.0
+/// and no reasons. Used when filename scoring rejected the file but PDF
+/// body content gave a strong match (e.g. filename has zero overlap but
+/// body contains GSTIN + doc number).
+fn build_bare_candidate(
+    contract: &serde_json::Value,
+    contract_idx: usize,
+    field_kind: &FieldKind,
+) -> Option<MatchCandidate> {
+    let (record_date, doc_number, doc_type, category_segs, original_url) = match field_kind {
+        FieldKind::InternalPO => {
+            let url = jstr(contract, "internalPOLink");
+            if url.is_empty() { return None; }
+            (jstr(contract, "internalPODate"), jstr(contract, "internalPO"),
+             "Internal PO".to_string(),
+             vec!["POs".to_string(), "Internal".to_string()], url)
+        }
+        FieldKind::ClientPOLegacy => {
+            let url = jstr(contract, "clientPOLink");
+            if url.is_empty() { return None; }
+            (jstr(contract, "clientPODate"), jstr(contract, "clientPO"),
+             "Client PO".to_string(),
+             vec!["POs".to_string(), "Client".to_string()], url)
+        }
+        FieldKind::ClientPOArr(po_idx) => {
+            let arr = contract.get("clientPOs").and_then(|v| v.as_array());
+            let po = arr.and_then(|a| a.get(*po_idx))?;
+            let url = jstr(po, "poLink");
+            if url.is_empty() { return None; }
+            (jstr(po, "poDate"), jstr(po, "poNo"),
+             "Client PO".to_string(),
+             vec!["POs".to_string(), "Client".to_string()], url)
+        }
+        FieldKind::ClientInvoice(y_idx) => {
+            let arr = contract.get("billingYears").and_then(|v| v.as_array());
+            let by = arr.and_then(|a| a.get(*y_idx))?;
+            let url = jstr(by, "clientInvoiceLink");
+            if url.is_empty() { return None; }
+            let dt = jstr(by, "actualInvoiceDate");
+            let dt = if !dt.is_empty() { dt } else { jstr(by, "billDate") };
+            (dt, jstr(by, "clientInvoiceNo"),
+             "Client Invoice".to_string(),
+             vec!["Sales Invoices".to_string()], url)
+        }
+        FieldKind::OemInvoice(y_idx) => {
+            let arr = contract.get("billingYears").and_then(|v| v.as_array());
+            let by = arr.and_then(|a| a.get(*y_idx))?;
+            let url = jstr(by, "oemInvoiceLink");
+            if url.is_empty() { return None; }
+            let dt = jstr(by, "oemInvoiceDate");
+            let dt = if !dt.is_empty() { dt } else { jstr(by, "billDate") };
+            (dt, jstr(by, "oemInvoiceNo"),
+             "OEM Invoice".to_string(),
+             vec!["Purchase Invoices".to_string()], url)
+        }
+    };
+
+    let client = jstr(contract, "client");
+    let product = jstr(contract, "product");
+    let label = if !doc_number.is_empty() {
+        format!("{client} — {product} — {doc_type} #{doc_number} ({record_date})")
+    } else {
+        format!("{client} — {product} — {doc_type} ({record_date})")
+    };
+    let suggested_fy = if !record_date.is_empty() { date_to_fy(&record_date) } else { None };
+
+    let field_path = match field_kind {
+        FieldKind::InternalPO => format!("contracts[{contract_idx}].internalPOLink"),
+        FieldKind::ClientPOLegacy => format!("contracts[{contract_idx}].clientPOLink"),
+        FieldKind::ClientPOArr(po_idx) => format!("contracts[{contract_idx}].clientPOs[{po_idx}].poLink"),
+        FieldKind::ClientInvoice(y_idx) => format!("contracts[{contract_idx}].billingYears[{y_idx}].clientInvoiceLink"),
+        FieldKind::OemInvoice(y_idx) => format!("contracts[{contract_idx}].billingYears[{y_idx}].oemInvoiceLink"),
+    };
+
+    Some(MatchCandidate {
+        field_path, label, confidence: 0.0, reasons: Vec::new(),
+        original_url, category_path: category_segs, suggested_fy,
+        document_type: doc_type,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn score_field_match(
     filename: &str,
@@ -3405,7 +3784,10 @@ struct ProposeResult {
     total_files: usize,
 }
 
-const AUTO_THRESHOLD: f64 = 0.85;
+// Build B-fix-4: thresholds adjusted for PDF-augmented scoring.
+// Auto raised to 0.95 — we have higher-quality signals (GSTIN, doc#-in-body,
+// dates-in-body), so higher confidence required for silent auto-apply.
+const AUTO_THRESHOLD: f64 = 0.95;
 const REVIEW_THRESHOLD: f64 = 0.20;
 
 #[tauri::command]
@@ -3445,20 +3827,12 @@ fn propose_file_matches() -> ProposeResult {
         }
     }
 
-    // Client master — for short names
+    // Client master — for short names AND full match data (Build B-fix-4)
     let mut client_short_map: BTreeMap<String, String> = BTreeMap::new();
-    if let Ok(mut stmt) = con.prepare("SELECT name, raw_data FROM clients") {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        }) {
-            for row in rows.flatten() {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.1) {
-                    let short = jstr(&v, "shortName");
-                    if !short.is_empty() {
-                        client_short_map.insert(row.0, short);
-                    }
-                }
-            }
+    let client_match_data = build_client_match_data(&con);
+    for (name, cmd) in &client_match_data {
+        if !cmd.short_name_lc.is_empty() {
+            client_short_map.insert(name.clone(), cmd.short_name_lc.clone());
         }
     }
 
@@ -3474,12 +3848,25 @@ fn propose_file_matches() -> ProposeResult {
     };
 
     // 3. For each file, score against every contract field.
+    //    Per-file PDF text is extracted on first need and cached, so each
+    //    file is parsed at most once even though it's compared against
+    //    many contracts.
+    let mut pdf_cache: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
     let mut results: Vec<FileWithMatches> = Vec::new();
 
     for f in &files {
         let filename_norm = normalize_for_match(&f.filename_lc);
         let file_date = extract_filename_date(&f.filename);
         let file_date_ref: Option<&str> = file_date.as_deref();
+
+        // Extract PDF text once for this file.
+        let pdf_text: Option<String> = {
+            let mut cache = PdfTextCache { files: &mut pdf_cache };
+            cache.get_or_extract(&f.abs_path).map(String::from)
+        };
+        let pdf_text_ref: Option<&str> = pdf_text.as_deref();
+
         let mut candidates: Vec<MatchCandidate> = Vec::new();
 
         for (idx, contract) in contracts.iter().enumerate() {
@@ -3522,20 +3909,42 @@ fn propose_file_matches() -> ProposeResult {
                 }
             }
 
+            // Look up client match data for PDF scoring (used below)
+            let client_data_for_pdf = client_match_data.get(&client);
+
             for k in &kinds {
-                if let Some(c) = score_field_match(
+                // Filename-based scoring (existing behavior)
+                let mut maybe_cand = score_field_match(
                     &f.filename, &f.filename_lc, &filename_norm, file_date_ref,
                     contract, idx, k,
                     &client_norm, &client_short_norm, &client_toks,
                     &product, &oem_aliases, &product_code_aliases,
                     &contract_oem,
-                ) {
+                );
+
+                // PDF body scoring layered on top, if PDF text was extractable.
+                // Even if filename scoring rejected this candidate, a strong
+                // PDF body match can revive it (e.g. filename has no info but
+                // body has GSTIN + doc number + dates).
+                let (pdf_score, pdf_reasons) = score_pdf_body(
+                    pdf_text_ref, contract, client_data_for_pdf, k,
+                );
+
+                if pdf_score >= 0.40 && maybe_cand.is_none() {
+                    // Strong PDF match but filename scorer rejected. Build a
+                    // bare candidate and add the PDF score.
+                    maybe_cand = build_bare_candidate(contract, idx, k);
+                }
+
+                if let Some(mut c) = maybe_cand {
+                    c.confidence = (c.confidence + pdf_score).min(1.0);
+                    for r in pdf_reasons { c.reasons.push(r); }
                     candidates.push(c);
                 }
             }
         }
 
-        // Dedupe candidates that share the same field_path (shouldn't happen but defensive)
+        // Dedupe candidates that share the same field_path
         let mut seen = BTreeMap::new();
         for c in candidates.into_iter() {
             seen.entry(c.field_path.clone())
@@ -3548,7 +3957,7 @@ fn propose_file_matches() -> ProposeResult {
 
         // Sort by confidence descending
         deduped.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
-        deduped.truncate(8); // a bit more breathing room than before
+        deduped.truncate(8);
 
         let bucket = if deduped.is_empty() {
             "unmatched".to_string()
@@ -4399,6 +4808,199 @@ fn rewrite_local_paths(
 }
 
 
+// ============================================================================
+// Build B-fix-4: Reset all assignments
+//
+// Undoes everything that prior auto-applies and manual links did:
+//   - Strips every *Local field from every contract record
+//   - Moves every file currently under Files/{category}/{FY}/ back to
+//     Migration/ (and from the old layout Files/{FY}/{category}/ too,
+//     for safety)
+//   - Removes the rearrange-completed flag so re-running the rearrange
+//     button later still works
+//   - Empty Files/ subdirectories are pruned
+//
+// After this runs, the user can re-scan with the new PDF reader and start
+// fresh. Idempotent — re-running on an already-reset state is a no-op.
+// ============================================================================
+
+#[derive(Serialize)]
+struct ResetResult {
+    ok: bool,
+    error: Option<String>,
+    records_reset: usize,
+    files_moved_back: usize,
+    errors: Vec<String>,
+}
+
+#[tauri::command]
+fn reset_all_assignments(state: tauri::State<DbState>) -> ResetResult {
+    let mut result = ResetResult {
+        ok: true, error: None,
+        records_reset: 0, files_moved_back: 0,
+        errors: Vec::new(),
+    };
+
+    // 1. Walk every file under Files/ and move back to Migration/.
+    let files = match files_root() {
+        Some(p) => p,
+        None => {
+            result.ok = false;
+            result.error = Some("Could not resolve Files root.".into());
+            return result;
+        }
+    };
+    let migration = match migration_root() {
+        Some(p) => p,
+        None => {
+            result.ok = false;
+            result.error = Some("Could not resolve Migration root.".into());
+            return result;
+        }
+    };
+
+    if !files.exists() {
+        // Nothing to move; just clear records and return.
+    } else {
+        if !migration.exists() {
+            if let Err(e) = std::fs::create_dir_all(&migration) {
+                result.errors.push(format!("create Migration: {e}"));
+            }
+        }
+        let mut stack: Vec<PathBuf> = vec![files.clone()];
+        let mut all_files: Vec<PathBuf> = Vec::new();
+        while let Some(dir) = stack.pop() {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue; };
+                    if name == ".DS_Store" || name.starts_with("._") { continue; }
+                    match entry.file_type() {
+                        Ok(ft) if ft.is_dir() => stack.push(path),
+                        Ok(ft) if ft.is_file() => all_files.push(path),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for src in &all_files {
+            let fname = src.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            let mut dest = migration.join(fname);
+            // Avoid collision
+            let mut counter = 1;
+            while dest.exists() {
+                let (stem, ext) = match fname.rsplit_once('.') {
+                    Some((s, e)) => (s.to_string(), format!(".{e}")),
+                    None => (fname.to_string(), String::new()),
+                };
+                dest = migration.join(format!("{stem} ({counter}){ext}"));
+                counter += 1;
+                if counter > 999 {
+                    result.errors.push(format!("Too many collisions for {fname}"));
+                    break;
+                }
+            }
+            if counter > 999 { continue; }
+            match std::fs::rename(src, &dest) {
+                Ok(_) => { result.files_moved_back += 1; }
+                Err(_) => {
+                    if let Err(e) = std::fs::copy(src, &dest) {
+                        result.errors.push(format!("copy {}: {}", src.display(), e));
+                        continue;
+                    }
+                    if let Err(e) = std::fs::remove_file(src) {
+                        result.errors.push(format!("rm {}: {}", src.display(), e));
+                        continue;
+                    }
+                    result.files_moved_back += 1;
+                }
+            }
+        }
+        // Prune empty subdirs of Files/
+        if let Ok(entries) = std::fs::read_dir(&files) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() { prune_empty_dirs(&path); }
+            }
+        }
+    }
+
+    // 2. Strip *Local fields from every contract.
+    match strip_all_local_fields_from_contracts(&state) {
+        Ok(n) => result.records_reset = n,
+        Err(e) => {
+            result.errors.push(format!("strip locals: {e}"));
+            result.ok = false;
+        }
+    }
+
+    // 3. Clear the rearrange-completed flag so a future re-arrange can run.
+    let _ = with_writer(&state, |con| {
+        con.execute(
+            "DELETE FROM app_settings WHERE key = 'ms_app__files_rearranged_v1'",
+            [],
+        )?;
+        Ok(1usize)
+    });
+
+    result
+}
+
+/// Strip every field whose name ends in "Local" from every contract's
+/// raw_data. Returns the number of contracts whose data was rewritten.
+fn strip_all_local_fields_from_contracts(state: &tauri::State<DbState>) -> Result<usize, String> {
+    with_writer(state, |con| {
+        let mut to_update: Vec<(i64, String)> = Vec::new();
+        {
+            let mut stmt = con.prepare("SELECT legacy_idx, raw_data FROM contracts ORDER BY legacy_idx ASC")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows.flatten() {
+                let (idx, raw) = row;
+                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let mut changed = false;
+                    strip_local_keys_in_place(&mut v, &mut changed);
+                    if changed {
+                        to_update.push((idx, v.to_string()));
+                    }
+                }
+            }
+        }
+        let n = to_update.len();
+        for (idx, new_raw) in to_update {
+            con.execute(
+                "UPDATE contracts SET raw_data = ?1, modified_at = ?2 WHERE legacy_idx = ?3",
+                params![new_raw, now_iso(), idx],
+            )?;
+        }
+        Ok(n)
+    })
+}
+
+/// Recursively walk a JSON value, removing any object key ending in "Local".
+fn strip_local_keys_in_place(v: &mut serde_json::Value, changed: &mut bool) {
+    match v {
+        serde_json::Value::Object(obj) => {
+            // Collect keys to remove first to avoid mutation-during-iteration.
+            let to_remove: Vec<String> = obj.keys()
+                .filter(|k| k.ends_with("Local"))
+                .cloned().collect();
+            for k in to_remove {
+                obj.remove(&k);
+                *changed = true;
+            }
+            // Recurse into remaining values
+            for (_, child) in obj.iter_mut() {
+                strip_local_keys_in_place(child, changed);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                strip_local_keys_in_place(item, changed);
+            }
+        }
+        _ => {}
+    }
+}
 
 
 // ============================================================================
@@ -4459,6 +5061,8 @@ pub fn run() {
             save_oem_aliases,
             // Build B-fix-2: folder structure auto-migration
             rearrange_files_to_new_structure,
+            // Build B-fix-4: PDF reader + reset
+            reset_all_assignments,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
