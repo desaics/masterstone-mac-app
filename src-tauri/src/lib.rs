@@ -1000,6 +1000,53 @@ fn open_external_url<R: tauri::Runtime>(app: tauri::AppHandle<R>, url: String) -
 }
 
 // ============================================================================
+// Phase 8C — Local file attachment opener
+//
+// Companion to the existing OneDrive URL fields on contracts / invoices / POs
+// / proposals. The user pastes or picks a local file path, the path is stored
+// alongside the URL on the record, and clicking "Open" launches the file in
+// the OS default application (Preview for PDF, Excel for XLSX, etc.).
+//
+// This is NOT the matcher subsystem (removed in Phase A). It does no folder
+// management, no PDF parsing, no auto-discovery — just "open this exact path".
+// ============================================================================
+
+#[tauri::command]
+fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) -> serde_json::Value {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({"ok": false, "error": "No file path provided"});
+    }
+    let p = std::path::Path::new(trimmed);
+    if !p.exists() {
+        return serde_json::json!({
+            "ok": false,
+            "error": format!("File not found: {trimmed}. The file may have been moved, renamed, or deleted.")
+        });
+    }
+    match app.opener().open_path(trimmed.to_string(), None::<&str>) {
+        Ok(_) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{e}")}),
+    }
+}
+
+#[tauri::command]
+async fn pick_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, title: Option<String>) -> serde_json::Value {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file();
+    if let Some(t) = title.as_ref() {
+        builder = builder.set_title(t);
+    }
+    match builder.blocking_pick_file() {
+        Some(fp) => match fp.into_path() {
+            Ok(path) => serde_json::json!({"ok": true, "path": path.to_string_lossy()}),
+            Err(e) => serde_json::json!({"ok": false, "error": format!("path conversion: {e}")}),
+        },
+        None => serde_json::json!({"ok": false, "cancelled": true}),
+    }
+}
+
+// ============================================================================
 // Session 5 — reveal OneDrive folder in Finder
 // ============================================================================
 
@@ -2303,6 +2350,9 @@ pub fn run() {
             acknowledge_db_conflict,
             extract_attachments,
             load_attachments_into_data_urls,
+            // Phase 8C: local file attachments (companion to OneDrive URLs)
+            pick_file,
+            open_local_file,
             // Session 8 / B-fix-8: file-linking subsystem removed.
             // The user opted out of the matcher / migration / category
             // workflow in favour of manual linking via OneDrive URLs in

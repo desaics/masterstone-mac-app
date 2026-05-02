@@ -3715,6 +3715,67 @@ body.tauri-runtime .main-content {
     color: #ffffff;
 }
 
+/* Phase 8C — local-file attachment UI: a small paperclip toggle next to
+   any URL input that opens a panel for entering / picking / opening a
+   local file path on disk. Lives alongside the OneDrive URL, never
+   replaces it. */
+.with-local-file { display: block; }
+.local-file-toggle {
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 7px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    line-height: 1;
+}
+.local-file-toggle:hover {
+    background: var(--hover-bg);
+    color: var(--text-main);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.local-file-toggle.has-attached {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.5);
+    color: #4ade80;
+}
+.local-file-toggle.has-attached:hover {
+    background: rgba(34, 197, 94, 0.25);
+    color: #86efac;
+}
+.local-file-panel {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+    font-size: 11.5px;
+    flex-wrap: wrap;
+}
+.local-file-panel .panel-label {
+    color: var(--text-dim);
+    font-size: 11px;
+    white-space: nowrap;
+    font-weight: 500;
+}
+.local-file-panel input[type="text"] {
+    flex: 1;
+    min-width: 220px;
+    font-size: 11.5px;
+    padding: 6px 8px;
+    margin: 0;
+}
+.local-file-panel button {
+    font-size: 11px;
+    padding: 6px 10px;
+    white-space: nowrap;
+}
+
 /* Bug fix #48 (Session 5 hotfix v1) — banner-action toast for snapshot/reveal
    feedback. Reuses the bottom-right placement from Session 3's read-only toast
    but with state-coloured borders for success/error/info. */
@@ -4745,6 +4806,102 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // ========================================================================
+    // Phase 8C — Local file attachment helpers
+    //
+    // Companion to OneDrive URL fields on contracts/invoices/POs/proposals.
+    // Each URL input has a small paperclip toggle next to it; clicking the
+    // toggle opens a panel where the user can paste a path, browse to a
+    // file, or open the attached file in its OS default app (Preview for
+    // PDF, Excel for XLSX, etc.).
+    //
+    // Convention: the URL input + toggle live inside .with-local-file
+    //             the local-file-panel is a sibling of the URL input row
+    //             the local path input is inside the panel
+    // ========================================================================
+
+    window.__msPickLocalFile = async function (targetInput) {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                return;
+            }
+            var input = (typeof targetInput === 'string')
+                ? document.getElementById(targetInput) : targetInput;
+            if (!input) return;
+            var r = await t.invoke('pick_file', { title: 'Select local file' });
+            if (r && r.ok && r.path) {
+                input.value = r.path;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                window.__msUpdateLocalToggleState(input);
+            } else if (r && r.error) {
+                showActionToast('Pick file error: ' + r.error, 'error');
+            }
+        } catch (e) {
+            showActionToast('Pick file error: ' + e, 'error');
+        }
+    };
+
+    window.__msOpenLocalFile = async function (path) {
+        var trimmed = (path || '').trim();
+        if (!trimmed) {
+            showActionToast('No local file path attached. Click Browse to select one.', 'info');
+            return;
+        }
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                return;
+            }
+            var r = await t.invoke('open_local_file', { path: trimmed });
+            if (!r || !r.ok) {
+                showActionToast('Could not open file: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+        } catch (e) {
+            showActionToast('Open file error: ' + e, 'error');
+        }
+    };
+
+    // Toggles the visibility of the local-file panel for a given trigger button.
+    // Looks up the panel as a sibling element inside the same .with-local-file wrapper.
+    window.__msToggleLocalPanel = function (toggleBtn) {
+        var wrapper = toggleBtn.closest('.with-local-file');
+        if (!wrapper) return;
+        var panel = wrapper.querySelector('.local-file-panel');
+        if (!panel) return;
+        var isOpen = panel.style.display !== 'none';
+        panel.style.display = isOpen ? 'none' : '';
+        // Auto-focus the input when opening, for fast paste-and-go
+        if (!isOpen) {
+            var input = panel.querySelector('input[type="text"]');
+            if (input) setTimeout(function () { input.focus(); }, 30);
+        }
+    };
+
+    // Updates the toggle button's "has-attached" badge state based on whether
+    // the local-path input has a value. Called after pick/save/load.
+    window.__msUpdateLocalToggleState = function (localInput) {
+        var wrapper = localInput.closest('.with-local-file');
+        if (!wrapper) return;
+        var btn = wrapper.querySelector('.local-file-toggle');
+        if (!btn) return;
+        var v = (localInput.value || '').trim();
+        var hasPath = !!v;
+        btn.classList.toggle('has-attached', hasPath);
+        btn.title = hasPath ? ('Local file: ' + v) : 'Attach local file';
+    };
+
+    // Refreshes ALL local-file toggle badges currently in the DOM. Useful
+    // after a form has been programmatically populated with values.
+    window.__msRefreshAllLocalToggles = function () {
+        var inputs = document.querySelectorAll('.local-file-panel input[type="text"]');
+        for (var i = 0; i < inputs.length; i++) {
+            try { window.__msUpdateLocalToggleState(inputs[i]); } catch (_) {}
+        }
+    };
+
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
@@ -5336,7 +5493,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <div><label>Hardware Details</label><input type="text" id="hardware" placeholder="e.g. Dell Servers, Routers..."></div>
             <div><label>Other Services</label><input type="text" id="services" placeholder="e.g. Annual Maintenance..."></div>
             <div><label>Internal PO Date</label><input type="date" id="internalPODate"></div>
-            <div style="grid-column: span 3;"><label>OEM PO Link</label><input type="url" id="internalPOLink" placeholder="URL to OEM PO document"></div>
+            <div style="grid-column: span 3;" class="with-local-file"><label>OEM PO Link</label>
+                <div style="display:flex; gap:6px; align-items:stretch;">
+                    <input type="url" id="internalPOLink" placeholder="URL to OEM PO document" style="flex:1;">
+                    <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+                </div>
+                <div class="local-file-panel" style="display:none;">
+                    <span class="panel-label">Local file:</span>
+                    <input type="text" id="internalPOLink__local" placeholder="/path/to/oem-po.pdf (or paste a path)" oninput="window.__msUpdateLocalToggleState(this)">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile('internalPOLink__local')"><i class="fas fa-folder-open"></i> Browse…</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(document.getElementById('internalPOLink__local').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="var i=document.getElementById('internalPOLink__local'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+                </div>
+            </div>
         </div>
 
         <div class="kpi-section-title"><i class="fas fa-clipboard-list" style="color:var(--purple);"></i> Client Procurement Details</div>
@@ -7187,7 +7356,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.55;">
       If this proposal was originally generated outside the CRM (e.g. before you started using the tool) and the PDF is stored on OneDrive, Google Drive, or SharePoint, paste the shareable link here. When we migrate to the Mac app, the file will be downloaded and saved locally.
     </div>
-    <input type="url" id="proposalExternalLink" placeholder="https://..." style="width:100%;">
+    <div class="with-local-file">
+        <div style="display:flex; gap:6px; align-items:stretch;">
+            <input type="url" id="proposalExternalLink" placeholder="https://..." style="flex:1;">
+            <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+        </div>
+        <div class="local-file-panel" style="display:none;">
+            <span class="panel-label">Local file:</span>
+            <input type="text" id="proposalExternalLink__local" placeholder="/path/to/proposal.pdf (or paste a path)" oninput="window.__msUpdateLocalToggleState(this)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile('proposalExternalLink__local')"><i class="fas fa-folder-open"></i> Browse…</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(document.getElementById('proposalExternalLink__local').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="var i=document.getElementById('proposalExternalLink__local'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+        </div>
+    </div>
   </div>
 
   <!-- Bottom save bar (mirrors top) -->
@@ -7549,7 +7730,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.55;">
       If this PO was originally generated outside the CRM (e.g. before you started using the tool) and the PDF is stored on OneDrive, Google Drive, or SharePoint, paste the shareable link here. When we migrate to the Mac app, the file will be downloaded and saved locally.
     </div>
-    <input type="url" id="poExternalLink" placeholder="https://..." style="width:100%;">
+    <div class="with-local-file">
+        <div style="display:flex; gap:6px; align-items:stretch;">
+            <input type="url" id="poExternalLink" placeholder="https://..." style="flex:1;">
+            <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+        </div>
+        <div class="local-file-panel" style="display:none;">
+            <span class="panel-label">Local file:</span>
+            <input type="text" id="poExternalLink__local" placeholder="/path/to/po.pdf (or paste a path)" oninput="window.__msUpdateLocalToggleState(this)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile('poExternalLink__local')"><i class="fas fa-folder-open"></i> Browse…</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(document.getElementById('poExternalLink__local').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="var i=document.getElementById('poExternalLink__local'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+        </div>
+    </div>
   </div>
 
   <!-- Bottom save bar (mirrors top) -->
@@ -14094,22 +14287,33 @@ function generateYearlyInputs() {
 }
 
 // --- MULTIPLE CLIENT PO UI ---
-function addClientPORow(poNo = '', link = '', date = '') {
+function addClientPORow(poNo = '', link = '', date = '', localPath = '') {
     const container = document.getElementById('clientPOContainer');
     const row = document.createElement('div');
-    row.className = 'client-po-row';
-    row.style.display = 'grid';
-    row.style.gridTemplateColumns = '1fr 1fr 1fr auto';
-    row.style.gap = '10px';
-    row.style.alignItems = 'end';
-    
+    row.className = 'client-po-row with-local-file';
+    row.style.marginBottom = '6px';
+
     row.innerHTML = `
-        <div><label>PO No</label><input type="text" class="c-po-no" value="${poNo}"></div>
-        <div><label>PO Link</label><input type="url" class="c-po-link" value="${link}" placeholder="Paste URL"></div>
-        <div><label>PO Date</label><input type="date" class="c-po-date" value="${date}"></div>
-        <button type="button" class="btn btn-danger btn-sm" style="height:38px; border-radius:6px;" onclick="this.parentElement.remove()"><i class="fas fa-trash"></i></button>
+        <div class="client-po-row-main" style="display:grid; grid-template-columns:1fr 1fr 1fr auto auto; gap:10px; align-items:end;">
+            <div><label>PO No</label><input type="text" class="c-po-no" value="${poNo}"></div>
+            <div><label>PO Link</label><input type="url" class="c-po-link" value="${link}" placeholder="Paste URL"></div>
+            <div><label>PO Date</label><input type="date" class="c-po-date" value="${date}"></div>
+            <button type="button" class="local-file-toggle" style="height:38px;" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+            <button type="button" class="btn btn-danger btn-sm" style="height:38px; border-radius:6px;" onclick="this.closest('.client-po-row').remove()"><i class="fas fa-trash"></i></button>
+        </div>
+        <div class="local-file-panel" style="display:none;">
+            <span class="panel-label">Local file:</span>
+            <input type="text" class="c-po-localpath" placeholder="/path/to/po.pdf (or paste a path)" value="${localPath ? localPath.replace(/"/g, '&quot;') : ''}" oninput="window.__msUpdateLocalToggleState(this)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile(this.parentElement.querySelector('.c-po-localpath'))"><i class="fas fa-folder-open"></i> Browse…</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(this.parentElement.querySelector('.c-po-localpath').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="var i=this.parentElement.querySelector('.c-po-localpath'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+        </div>
     `;
     container.appendChild(row);
+    if (localPath && localPath.trim()) {
+        var lp = row.querySelector('.c-po-localpath');
+        if (lp) window.__msUpdateLocalToggleState(lp);
+    }
 }
 
 function updateClientAnalysisCharts(labels, revs, costs, margins, fxs, marginPcts) {
@@ -15035,12 +15239,14 @@ function saveContract() {
         let poNo = row.querySelector('.c-po-no').value.trim();
         let poLink = row.querySelector('.c-po-link').value.trim();
         let poDate = row.querySelector('.c-po-date').value;
-        if(poNo || poLink || poDate) {
-            newClientPOs.push({ poNo, poLink, poDate });
+        let lpEl = row.querySelector('.c-po-localpath');
+        let poLocalPath = lpEl ? (lpEl.value || '').trim() : '';
+        if(poNo || poLink || poDate || poLocalPath) {
+            newClientPOs.push({ poNo, poLink, poDate, localPath: poLocalPath });
         }
     });
 
-    const primaryPO = newClientPOs[0] || { poNo: '', poLink: '', poDate: '' };
+    const primaryPO = newClientPOs[0] || { poNo: '', poLink: '', poDate: '', localPath: '' };
 
     const data = { 
         client: clientEl.value, 
@@ -15051,10 +15257,12 @@ function saveContract() {
         
         internalPO: document.getElementById('internalPO').value,
         internalPOLink: document.getElementById('internalPOLink').value,
+        internalPOLocalPath: ((document.getElementById('internalPOLink__local') || {}).value || '').trim(),
         internalPODate: document.getElementById('internalPODate').value,
         
         clientPO: primaryPO.poNo,
         clientPOLink: primaryPO.poLink,
+        clientPOLocalPath: primaryPO.localPath || '',
         clientPODate: primaryPO.poDate,
         clientPOs: newClientPOs, 
         
@@ -15139,15 +15347,20 @@ function editContract(i) {
     document.getElementById('services').value = c.services || ''; 
     document.getElementById('internalPO').value = c.internalPO || '';
     document.getElementById('internalPOLink').value = c.internalPOLink || '';
+    var ipoLocalEl = document.getElementById('internalPOLink__local');
+    if (ipoLocalEl) {
+        ipoLocalEl.value = c.internalPOLocalPath || '';
+        try { window.__msUpdateLocalToggleState(ipoLocalEl); } catch (_) {}
+    }
     document.getElementById('internalPODate').value = c.internalPODate || '';
     
     // Handle Multiple Client POs
     const poContainer = document.getElementById('clientPOContainer');
     poContainer.innerHTML = '';
     if(c.clientPOs && c.clientPOs.length > 0) {
-        c.clientPOs.forEach(p => addClientPORow(p.poNo, p.poLink, p.poDate));
+        c.clientPOs.forEach(p => addClientPORow(p.poNo, p.poLink, p.poDate, p.localPath || ''));
     } else {
-        addClientPORow(c.clientPO || '', c.clientPOLink || '', c.clientPODate || '');
+        addClientPORow(c.clientPO || '', c.clientPOLink || '', c.clientPODate || '', c.clientPOLocalPath || '');
     }
 
     if (c.costCurrency) {
@@ -15762,27 +15975,40 @@ function renderActionableInvoices(fyRanges, isAllYears) {
 let currentUniCIdx = -1;
 let currentUniYIdx = -1;
 
-function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='') {
+function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='', localPath='') {
     const container = document.getElementById('arInvoicesContainer');
     const row = document.createElement('div');
-    row.className = 'ar-row';
-    row.style.display = 'grid';
-    row.style.gridTemplateColumns = '1.5fr 1.2fr 1.2fr 1.2fr 1.5fr auto';
-    row.style.gap = '10px';
-    row.style.alignItems = 'center';
+    row.className = 'ar-row with-local-file';
+    row.style.marginBottom = '6px';
+    // Outer block stacks the main grid + the (initially hidden) local-file panel
     row.innerHTML = `
-        <input type="text" class="ar-no" placeholder="Invoice #" value="${invNo}" style="font-size:12px; padding:8px;">
-        <input type="date" class="ar-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
-        <input type="number" class="ar-amt" placeholder="Amt (INR)" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
-        <input type="date" class="ar-paiddate" value="${paidDate}" style="font-size:12px; padding:8px;" title="Date Paid">
-        <input type="url" class="ar-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
-        <button class="btn btn-danger btn-sm" style="padding:8px;" onclick="this.parentElement.remove(); updateModalSums();"><i class="fas fa-trash"></i></button>
+        <div class="ar-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 1.2fr 1.5fr auto auto; gap:10px; align-items:center;">
+            <input type="text" class="ar-no" placeholder="Invoice #" value="${invNo}" style="font-size:12px; padding:8px;">
+            <input type="date" class="ar-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
+            <input type="number" class="ar-amt" placeholder="Amt (INR)" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
+            <input type="date" class="ar-paiddate" value="${paidDate}" style="font-size:12px; padding:8px;" title="Date Paid">
+            <input type="url" class="ar-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
+            <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+            <button class="btn btn-danger btn-sm" style="padding:8px;" onclick="this.closest('.ar-row').remove(); updateModalSums();"><i class="fas fa-trash"></i></button>
+        </div>
+        <div class="local-file-panel" style="display:none;">
+            <span class="panel-label">Local file:</span>
+            <input type="text" class="ar-localpath" placeholder="/path/to/file.pdf (or paste a path)" value="${localPath ? localPath.replace(/"/g, '&quot;') : ''}" oninput="window.__msUpdateLocalToggleState(this)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile(this.parentElement.querySelector('.ar-localpath'))"><i class="fas fa-folder-open"></i> Browse…</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(this.parentElement.querySelector('.ar-localpath').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="var i=this.parentElement.querySelector('.ar-localpath'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+        </div>
     `;
     container.appendChild(row);
+    // Reflect attachment state on the toggle badge if a path was loaded
+    if (localPath && localPath.trim()) {
+        var lp = row.querySelector('.ar-localpath');
+        if (lp) window.__msUpdateLocalToggleState(lp);
+    }
     updateModalSums();
 }
 
-function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='') {
+function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='', localPath='') {
     if (!currText) {
         if (currentUniCIdx > -1 && contracts[currentUniCIdx]) {
             currText = contracts[currentUniCIdx].costCurrency === 'INR' ? 'INR' : 'USD';
@@ -15792,21 +16018,32 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
     }
     const container = document.getElementById('apInvoicesContainer');
     const row = document.createElement('div');
-    row.className = 'ap-row';
-    row.style.display = 'grid';
-    row.style.gridTemplateColumns = '1.5fr 1.2fr 1.2fr 100px 1.2fr 1.5fr auto';
-    row.style.gap = '10px';
-    row.style.alignItems = 'center';
+    row.className = 'ap-row with-local-file';
+    row.style.marginBottom = '6px';
     row.innerHTML = `
-        <input type="text" class="ap-no" placeholder="OEM Inv #" value="${invNo}" style="font-size:12px; padding:8px;">
-        <input type="date" class="ap-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
-        <input type="number" class="ap-amt" placeholder="Amt (${currText})" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
-        <input type="number" class="ap-fx" placeholder="FX Rate" value="${fx}" style="font-size:12px; padding:8px;" title="Settled FX Rate" oninput="updateModalSums()">
-        <input type="date" class="ap-paydate" value="${payDate}" style="font-size:12px; padding:8px;" title="Date Paid">
-        <input type="url" class="ap-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
-        <button class="btn btn-danger btn-sm" style="padding:8px;" onclick="this.parentElement.remove(); updateModalSums();"><i class="fas fa-trash"></i></button>
+        <div class="ap-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 100px 1.2fr 1.5fr auto auto; gap:10px; align-items:center;">
+            <input type="text" class="ap-no" placeholder="OEM Inv #" value="${invNo}" style="font-size:12px; padding:8px;">
+            <input type="date" class="ap-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
+            <input type="number" class="ap-amt" placeholder="Amt (${currText})" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
+            <input type="number" class="ap-fx" placeholder="FX Rate" value="${fx}" style="font-size:12px; padding:8px;" title="Settled FX Rate" oninput="updateModalSums()">
+            <input type="date" class="ap-paydate" value="${payDate}" style="font-size:12px; padding:8px;" title="Date Paid">
+            <input type="url" class="ap-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
+            <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+            <button class="btn btn-danger btn-sm" style="padding:8px;" onclick="this.closest('.ap-row').remove(); updateModalSums();"><i class="fas fa-trash"></i></button>
+        </div>
+        <div class="local-file-panel" style="display:none;">
+            <span class="panel-label">Local file:</span>
+            <input type="text" class="ap-localpath" placeholder="/path/to/file.pdf (or paste a path)" value="${localPath ? localPath.replace(/"/g, '&quot;') : ''}" oninput="window.__msUpdateLocalToggleState(this)">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile(this.parentElement.querySelector('.ap-localpath'))"><i class="fas fa-folder-open"></i> Browse…</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(this.parentElement.querySelector('.ap-localpath').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="var i=this.parentElement.querySelector('.ap-localpath'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+        </div>
     `;
     container.appendChild(row);
+    if (localPath && localPath.trim()) {
+        var lp = row.querySelector('.ap-localpath');
+        if (lp) window.__msUpdateLocalToggleState(lp);
+    }
     updateModalSums();
 }
 
@@ -15919,7 +16156,7 @@ function openUnifiedModal(cIdx, yIdx) {
 
     document.getElementById('arInvoicesContainer').innerHTML = '';
     if (y.arInvoices && y.arInvoices.length > 0) {
-        y.arInvoices.forEach(inv => addArInvoiceRow(inv.invNo, inv.date, inv.amount, inv.paidDate, inv.link));
+        y.arInvoices.forEach(inv => addArInvoiceRow(inv.invNo, inv.date, inv.amount, inv.paidDate, inv.link, inv.localPath || ''));
     } else if (y.clientInvoiceNo || y.actualInvoiceDate) {
         addArInvoiceRow(y.clientInvoiceNo || '', y.actualInvoiceDate || '', cycleRev, y.paymentDate || '', y.clientInvoiceLink || '');
     } else {
@@ -15928,7 +16165,7 @@ function openUnifiedModal(cIdx, yIdx) {
 
     document.getElementById('apInvoicesContainer').innerHTML = '';
     if (y.apInvoices && y.apInvoices.length > 0) {
-        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD'));
+        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || ''));
     } else if (y.oemInvoiceNo || y.oemInvoiceDate) {
         addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD');
     } else {
@@ -15958,8 +16195,10 @@ function submitUnifiedModal() {
         let amt = parseFloat(row.querySelector('.ar-amt').value) || 0;
         let pd = row.querySelector('.ar-paiddate').value;
         let lk = row.querySelector('.ar-link').value;
+        let lpEl = row.querySelector('.ar-localpath');
+        let lp = lpEl ? (lpEl.value || '').trim() : '';
         if (no || dt || amt > 0) {
-            arInvoices.push({ invNo: no, date: dt, amount: amt, paidDate: pd, link: lk });
+            arInvoices.push({ invNo: no, date: dt, amount: amt, paidDate: pd, link: lk, localPath: lp });
         }
     });
     y.arInvoices = arInvoices;
@@ -15974,9 +16213,11 @@ function submitUnifiedModal() {
         let fx = parseFloat(row.querySelector('.ap-fx').value) || 0;
         let pd = row.querySelector('.ap-paydate').value;
         let lk = row.querySelector('.ap-link').value;
-        
+        let lpEl = row.querySelector('.ap-localpath');
+        let lp = lpEl ? (lpEl.value || '').trim() : '';
+
         if (no || dt || amt > 0) {
-            apInvoices.push({ invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk });
+            apInvoices.push({ invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp });
             apSumUSD += amt;
             apWeightedFXSum += (amt * fx);
         }
@@ -18552,6 +18793,8 @@ function openProposalForm(id) {
         val('proposalNotes', p.notes);
         val('proposalShowSignature', p.signatureShown === false ? 'false' : 'true');
         val('proposalExternalLink', p.externalLink || '');
+        val('proposalExternalLink__local', p.externalLinkLocalPath || '');
+        try { var __peLp = document.getElementById('proposalExternalLink__local'); if (__peLp) window.__msUpdateLocalToggleState(__peLp); } catch (_) {}
         // Phase 4B — commercial routing
         val('proposalCommercialModel', p.commercialModel || 'Direct');
         populateResellerDropdown('proposalSourcedViaResellerKey', p.sourcedViaResellerKey || '');
@@ -18584,6 +18827,8 @@ function openProposalForm(id) {
         val('proposalNotes', '');
         val('proposalShowSignature', 'true');
         val('proposalExternalLink', '');
+        val('proposalExternalLink__local', '');
+        try { var __peLp = document.getElementById('proposalExternalLink__local'); if (__peLp) window.__msUpdateLocalToggleState(__peLp); } catch (_) {}
         // Phase 4B — commercial routing defaults
         val('proposalCommercialModel', 'Direct');
         populateResellerDropdown('proposalSourcedViaResellerKey', '');
@@ -19397,6 +19642,7 @@ function saveProposalFromForm() {
     rec.notes = document.getElementById('proposalNotes').value;
     rec.signatureShown = document.getElementById('proposalShowSignature').value === 'true';
     rec.externalLink = (document.getElementById('proposalExternalLink').value || '').trim();
+    rec.externalLinkLocalPath = ((document.getElementById('proposalExternalLink__local') || {}).value || '').trim();
     rec.lineItems = proposalFormLineItems.map(li => ({ ...li }));
     // Phase 4B — commercial routing
     rec.commercialModel = document.getElementById('proposalCommercialModel').value || 'Direct';
@@ -21221,6 +21467,8 @@ function openPOForm(id) {
         val('poNotes', po.notes);
         val('poShowSignature', po.signatureShown === false ? 'false' : 'true');
         val('poExternalLink', po.externalLink || '');
+        val('poExternalLink__local', po.externalLinkLocalPath || '');
+        try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
         poFormLineItems = (po.lineItems || []).map(li => ({ ...li }));
         document.getElementById('poDeleteBtn').style.display = 'inline-flex';
     } else {
@@ -21252,6 +21500,8 @@ function openPOForm(id) {
         val('poNotes', '');
         val('poShowSignature', 'true');
         val('poExternalLink', '');
+        val('poExternalLink__local', '');
+        try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
         poFormLineItems = [poLineItemBlank()];
         document.getElementById('poDeleteBtn').style.display = 'none';
     }
@@ -21624,6 +21874,7 @@ function savePOFromForm() {
     rec.notes = document.getElementById('poNotes').value;
     rec.signatureShown = document.getElementById('poShowSignature').value === 'true';
     rec.externalLink = (document.getElementById('poExternalLink').value || '').trim();
+    rec.externalLinkLocalPath = ((document.getElementById('poExternalLink__local') || {}).value || '').trim();
     rec.isForeignOem = isOemForeign(oem);
     rec.lineItems = poFormLineItems.map(li => ({ ...li }));
     rec.updatedAt = now;
