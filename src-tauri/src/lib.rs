@@ -2297,22 +2297,32 @@ const FY_FOLDERS: &[&str] = &[
 /// Default document categories seeded on first initialization.
 /// Each tuple = (key, display_name, path_segments, uses_fy).
 ///
-/// As of Build B-fix-6, only Sales Invoices and Purchase Invoices use
-/// FY subfolders. POs and Proposals are flat — files go directly under
-/// the category folder with no FY layer.
+/// As of Build B-fix-6-v2, the layout is fully flat at the top level:
+///   Files/Sales Invoices/{FY}/file.pdf       (FY required)
+///   Files/Purchase Invoices/{FY}/file.pdf    (FY required)
+///   Files/Internal POs/file.pdf              (no FY)
+///   Files/Client POs/file.pdf                (no FY)
+///   Files/Proposals/file.pdf                 (no FY)
+/// Internal POs and Client POs are siblings of Sales/Purchase Invoices,
+/// not nested under a "POs/" parent.
+///
+/// Stable keys preserved across builds:
+///   pos_internal → "Internal POs" folder (was "POs/Internal" in B-fix-6)
+///   pos_client   → "Client POs"   folder (was "POs/Client" in B-fix-6)
 fn default_categories() -> Vec<(&'static str, &'static str, Vec<&'static str>, bool)> {
     vec![
         ("proposals",         "Proposals",         vec!["Proposals"],         false),
-        ("pos_internal",      "POs / Internal",    vec!["POs", "Internal"],   false),
-        ("pos_client",        "POs / Client",      vec!["POs", "Client"],     false),
+        ("pos_internal",      "Internal POs",      vec!["Internal POs"],      false),
+        ("pos_client",        "Client POs",        vec!["Client POs"],        false),
         ("sales_invoices",    "Sales Invoices",    vec!["Sales Invoices"],    true),
         ("purchase_invoices", "Purchase Invoices", vec!["Purchase Invoices"], true),
     ]
 }
 
 /// Returns true if this category's path segments should have FY subfolders
-/// inside them. As of Build B-fix-6: only Sales Invoices and Purchase
-/// Invoices use FY. Custom user categories default to false (flat layout).
+/// inside them. As of Build B-fix-6-v2: only Sales Invoices and Purchase
+/// Invoices use FY. Internal POs, Client POs, Proposals, and any user-added
+/// custom categories are flat (no FY layer).
 fn category_uses_fy(path_segments: &[String]) -> bool {
     let first = path_segments.first().map(|s| s.as_str()).unwrap_or("");
     matches!(first, "Sales Invoices" | "Purchase Invoices")
@@ -3414,14 +3424,14 @@ fn build_bare_candidate(
             if url.is_empty() { return None; }
             (jstr(contract, "internalPODate"), jstr(contract, "internalPO"),
              "Internal PO".to_string(),
-             vec!["POs".to_string(), "Internal".to_string()], url)
+             vec!["Internal POs".to_string()], url)
         }
         FieldKind::ClientPOLegacy => {
             let url = jstr(contract, "clientPOLink");
             if url.is_empty() { return None; }
             (jstr(contract, "clientPODate"), jstr(contract, "clientPO"),
              "Client PO".to_string(),
-             vec!["POs".to_string(), "Client".to_string()], url)
+             vec!["Client POs".to_string()], url)
         }
         FieldKind::ClientPOArr(po_idx) => {
             let arr = contract.get("clientPOs").and_then(|v| v.as_array());
@@ -3430,7 +3440,7 @@ fn build_bare_candidate(
             if url.is_empty() { return None; }
             (jstr(po, "poDate"), jstr(po, "poNo"),
              "Client PO".to_string(),
-             vec!["POs".to_string(), "Client".to_string()], url)
+             vec!["Client POs".to_string()], url)
         }
         FieldKind::ClientInvoice(y_idx) => {
             let arr = contract.get("billingYears").and_then(|v| v.as_array());
@@ -3480,6 +3490,225 @@ fn build_bare_candidate(
     })
 }
 
+// ============================================================================
+// Build B-fix-6-v2: Document-type detection from filename
+// ============================================================================
+//
+// The matcher used to score every contract field equally for every file —
+// so a "Tax Invoice" file could land in a Client PO folder if client +
+// product + OEM signals tilted toward a PO field. This enum + detector
+// classify the filename's document type and bias the per-field score
+// accordingly. The bias is strong (+0.30 / -0.40) but not absolute, so a
+// genuinely ambiguous file still surfaces in the review list.
+//
+// Naming conventions encoded (per Chintan's filename rules, 02 May 2026):
+//   "Tax Invoice_*"               → SalesInvoice
+//   "DT_*", "VRS_*", "PAN_*", …   → PurchaseInvoice (OEM code prefix)
+//   contains "_INV " or "_INV_"   → PurchaseInvoice
+//   "Proposal*", "Quote*"         → Proposal
+//   trailing 5+ digit token after
+//   stripping date "_DD_MM_YYYY"  → ClientPO (client-side PO number)
+//   anything else PO-shaped       → InternalPO
+//
+// Examples from the field:
+//   Tax Invoice_CAMS_262704001                    → SalesInvoice
+//   DT_MMT_10036690_29_08_2025                    → PurchaseInvoice
+//   RAH_63SATS_VARONIS_INV 25002763_17_12_2025    → PurchaseInvoice (INV signal)
+//   63 Moons_EIS_POF_27_09_2021                   → InternalPO  (no trailing #)
+//   CARE_AGE_28_04_2023                            → InternalPO
+//   PO_DT_JK Cement_31_03_2026                     → InternalPO
+//   CAMS_EIS_02_02_2023_00664                     → ClientPO   (00664 trailing)
+//   JKCL_EIS_15_03_2021_5600003929                → ClientPO   (5600003929)
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocTypeHint {
+    SalesInvoice,
+    PurchaseInvoice,
+    ClientPO,
+    InternalPO,
+    Proposal,
+    Unknown,
+}
+
+/// Detect the likely document type from the filename alone. Pass the OEM
+/// alias list so we can recognize OEM-code prefixes (DT_, VRS_, …) from
+/// the user's configured OEM aliases rather than a hardcoded list.
+fn detect_doc_type_from_filename(
+    filename: &str,
+    oem_aliases: &[(String, String)],
+) -> DocTypeHint {
+    // Strip the file extension (last '.xxx') for cleaner prefix tests.
+    let stem = match filename.rsplit_once('.') {
+        Some((s, ext)) if ext.len() <= 5 => s,
+        _ => filename,
+    };
+    let lc = stem.to_lowercase();
+    let trimmed = lc.trim_start_matches(|c: char| !c.is_alphanumeric());
+
+    // 1. Sales Invoice (highest-confidence signal — "Tax Invoice" prefix)
+    if trimmed.starts_with("tax invoice") || trimmed.starts_with("tax_invoice")
+        || trimmed.starts_with("taxinvoice") || trimmed.starts_with("sales invoice")
+        || trimmed.starts_with("sales_invoice")
+    {
+        return DocTypeHint::SalesInvoice;
+    }
+
+    // 2. Proposal / Quote
+    if trimmed.starts_with("proposal") || trimmed.starts_with("quote")
+        || trimmed.starts_with("quotation")
+    {
+        return DocTypeHint::Proposal;
+    }
+
+    // 3. Purchase Invoice — OEM-code prefix (must be followed by separator)
+    //    and the OEM code must be ≤ 5 chars (otherwise we'd false-positive on
+    //    a client name that starts with the same letters).
+    for (alias, _display) in oem_aliases {
+        if alias.is_empty() || alias.len() > 5 { continue; }
+        let needle = format!("{}_", alias.to_lowercase());
+        let needle_sp = format!("{} ", alias.to_lowercase());
+        if trimmed.starts_with(&needle) || trimmed.starts_with(&needle_sp) {
+            return DocTypeHint::PurchaseInvoice;
+        }
+    }
+
+    // 4. Purchase Invoice — explicit "INV" indicator anywhere in filename.
+    //    Bounded by underscore or space on both sides to avoid false-matches
+    //    inside words like "INVITE" or "INVENTORY".
+    let inv_token = filename_contains_inv_token(&lc);
+    if inv_token {
+        return DocTypeHint::PurchaseInvoice;
+    }
+
+    // 5. Explicit "PO_" prefix → some kind of PO.
+    let starts_with_po = trimmed.starts_with("po_") || trimmed.starts_with("po ");
+
+    // 6. Distinguish Client PO (has trailing PO#) from Internal PO (none).
+    //    Strip a trailing _DD_MM_YYYY date if present, then check the last
+    //    underscore-separated token for a 5+ digit numeric.
+    let no_date = strip_trailing_date(&lc);
+    let last_token: &str = no_date
+        .rsplit(|c: char| c == '_' || c == ' ' || c == '-')
+        .next()
+        .unwrap_or("");
+    let is_client_po_number = last_token.len() >= 5
+        && last_token.chars().all(|c| c.is_ascii_digit());
+
+    if is_client_po_number {
+        return DocTypeHint::ClientPO;
+    }
+
+    // PO_ prefix without trailing PO# → Internal PO (matches "PO_DT_JK Cement_31_03_2026")
+    if starts_with_po {
+        return DocTypeHint::InternalPO;
+    }
+
+    // 7. No clear marker — but if the filename contains date-shaped tokens
+    //    AND no INV indicator AND no trailing PO#, treat as Internal PO.
+    //    This catches "63 Moons_EIS_POF_27_09_2021" and "CARE_AGE_28_04_2023".
+    if has_date_pattern(&lc) {
+        return DocTypeHint::InternalPO;
+    }
+
+    DocTypeHint::Unknown
+}
+
+/// True if `lc` (already lowercased) contains "inv" as a standalone token.
+fn filename_contains_inv_token(lc: &str) -> bool {
+    let bytes = lc.as_bytes();
+    let needle = b"inv";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            let after_byte = bytes.get(i + needle.len()).copied();
+            let after_ok = match after_byte {
+                None => true,
+                Some(b) => !b.is_ascii_alphanumeric(),
+            };
+            if before_ok && after_ok { return true; }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Strip a trailing _DD_MM_YYYY (or _DD-MM-YYYY) date pattern from the end
+/// of a filename stem. Returns the stem with the date removed, or the
+/// original stem if no trailing date is found.
+fn strip_trailing_date(stem_lc: &str) -> String {
+    // Walk back from the end and look for the pattern: <sep>DD<sep>MM<sep>YYYY
+    let parts: Vec<&str> = stem_lc.split(|c: char| c == '_' || c == ' ' || c == '-').collect();
+    if parts.len() < 3 { return stem_lc.to_string(); }
+    let n = parts.len();
+    let last3 = &parts[n - 3..n];
+    let is_dd = last3[0].len() == 2 && last3[0].chars().all(|c| c.is_ascii_digit());
+    let is_mm = last3[1].len() == 2 && last3[1].chars().all(|c| c.is_ascii_digit());
+    let is_yyyy = last3[2].len() == 4 && last3[2].chars().all(|c| c.is_ascii_digit());
+    if is_dd && is_mm && is_yyyy {
+        // Re-join all but the last 3 parts using "_" as a canonical separator.
+        // (We're only using this to find the trailing token, so the exact
+        // separator doesn't matter.)
+        return parts[..n - 3].join("_");
+    }
+    stem_lc.to_string()
+}
+
+/// True if the filename looks like it embeds a date. Cheap substring check
+/// for any 4-consecutive-digit run that could be a year.
+fn has_date_pattern(lc: &str) -> bool {
+    let bytes = lc.as_bytes();
+    let mut run = 0usize;
+    for &b in bytes {
+        if b.is_ascii_digit() { run += 1; if run >= 4 { return true; } }
+        else { run = 0; }
+    }
+    false
+}
+
+/// Returns the per-field-kind score adjustment given a doc-type hint. The
+/// returned value is added to the raw score (can be negative). Bias is
+/// strong but not absolute — a strong client/OEM/doc-number match can
+/// still surface a candidate in the review pile.
+fn doc_type_bias(hint: DocTypeHint, kind: &FieldKind) -> (f64, &'static str) {
+    use FieldKind::*;
+    match (hint, kind) {
+        // Sales Invoice in filename → strongly prefer ClientInvoice
+        (DocTypeHint::SalesInvoice, ClientInvoice(_)) => (0.30, "filename: 'Tax Invoice' → Sales Invoice"),
+        (DocTypeHint::SalesInvoice, OemInvoice(_))    => (-0.20, "filename: 'Tax Invoice' rules out OEM Invoice"),
+        (DocTypeHint::SalesInvoice, InternalPO | ClientPOLegacy | ClientPOArr(_))
+            => (-0.40, "filename: 'Tax Invoice' rules out PO"),
+
+        // Purchase Invoice in filename → strongly prefer OemInvoice
+        (DocTypeHint::PurchaseInvoice, OemInvoice(_))   => (0.30, "filename: OEM-prefix / 'INV' → Purchase Invoice"),
+        (DocTypeHint::PurchaseInvoice, ClientInvoice(_)) => (-0.20, "filename: OEM-prefix rules out Sales Invoice"),
+        (DocTypeHint::PurchaseInvoice, InternalPO | ClientPOLegacy | ClientPOArr(_))
+            => (-0.40, "filename: OEM-prefix / 'INV' rules out PO"),
+
+        // Client PO in filename → prefer Client PO fields
+        (DocTypeHint::ClientPO, ClientPOArr(_) | ClientPOLegacy) => (0.30, "filename: trailing PO# → Client PO"),
+        (DocTypeHint::ClientPO, InternalPO)
+            => (-0.30, "filename: trailing PO# rules out Internal PO"),
+        (DocTypeHint::ClientPO, ClientInvoice(_) | OemInvoice(_))
+            => (-0.30, "filename: trailing PO# rules out Invoice"),
+
+        // Internal PO in filename → prefer Internal PO field
+        (DocTypeHint::InternalPO, InternalPO) => (0.30, "filename pattern → Internal PO"),
+        (DocTypeHint::InternalPO, ClientPOArr(_) | ClientPOLegacy)
+            => (-0.20, "filename: no trailing PO# → not Client PO"),
+        (DocTypeHint::InternalPO, ClientInvoice(_) | OemInvoice(_))
+            => (-0.30, "filename: PO-shape rules out Invoice"),
+
+        // Proposal — there's no contract field for Proposals (yet), so a
+        // "Proposal*" filename should NOT match any contract field strongly.
+        (DocTypeHint::Proposal, _) => (-0.20, "filename: 'Proposal' — no contract field"),
+
+        // Unknown → no bias
+        (DocTypeHint::Unknown, _) => (0.0, ""),
+    }
+}
+
+
 #[allow(clippy::too_many_arguments)]
 fn score_field_match(
     filename: &str,
@@ -3496,9 +3725,12 @@ fn score_field_match(
     oem_aliases: &[(String, String)],
     product_code_aliases: &[(String, Vec<String>)],
     contract_oem: &str,
+    // Build B-fix-6-v2 additions:
+    client_data: Option<&ClientMatchData>,
+    doc_type_hint: DocTypeHint,
 ) -> Option<MatchCandidate> {
     let _ = filename;       // currently unused; reserved for fuzzy comparisons
-    let _ = filename_lc;    // currently unused
+    // filename_lc IS now used below (GSTIN/PAN/CIN matching against filename)
 
     let mut score: f64 = 0.0;
     let mut reasons: Vec<String> = Vec::new();
@@ -3598,6 +3830,29 @@ fn score_field_match(
         }
     }
 
+    // ---- Build B-fix-6-v2: client identifiers (GSTIN/PAN/vendorCode/CIN)
+    //      in the filename. These are uncommon but very high-confidence
+    //      when present. Lowercased filename is searched against the
+    //      lowercased identifier.
+    if let Some(cd) = client_data {
+        if cd.gstin_lc.len() >= 10 && filename_lc.contains(&cd.gstin_lc) {
+            score += 0.35;
+            reasons.push(format!("filename GSTIN '{}'", cd.gstin_lc.to_uppercase()));
+        } else if cd.pan_lc.len() >= 8 && filename_lc.contains(&cd.pan_lc) {
+            // Don't double-count PAN if GSTIN already matched (PAN is in GSTIN)
+            score += 0.25;
+            reasons.push(format!("filename PAN '{}'", cd.pan_lc.to_uppercase()));
+        }
+        if cd.cin_lc.len() >= 10 && filename_lc.contains(&cd.cin_lc) {
+            score += 0.15;
+            reasons.push(format!("filename CIN '{}'", cd.cin_lc.to_uppercase()));
+        }
+        if cd.vendor_code_lc.len() >= 4 && has_token(filename_lc, &cd.vendor_code_lc) {
+            score += 0.20;
+            reasons.push(format!("filename vendor code '{}'", cd.vendor_code_lc));
+        }
+    }
+
     // ---- Field-specific extraction ----
     let (record_date, doc_number, doc_type, category_segs, original_url) = match field_kind {
         FieldKind::InternalPO => {
@@ -3605,14 +3860,14 @@ fn score_field_match(
             let dt = jstr(contract, "internalPODate");
             let url = jstr(contract, "internalPOLink");
             (dt, num, "Internal PO".to_string(),
-             vec!["POs".to_string(), "Internal".to_string()], url)
+             vec!["Internal POs".to_string()], url)
         }
         FieldKind::ClientPOLegacy => {
             let num = jstr(contract, "clientPO");
             let dt = jstr(contract, "clientPODate");
             let url = jstr(contract, "clientPOLink");
             (dt, num, "Client PO".to_string(),
-             vec!["POs".to_string(), "Client".to_string()], url)
+             vec!["Client POs".to_string()], url)
         }
         FieldKind::ClientPOArr(po_idx) => {
             let arr = contract.get("clientPOs").and_then(|v| v.as_array());
@@ -3621,7 +3876,7 @@ fn score_field_match(
             let dt = po.map(|p| jstr(p, "poDate")).unwrap_or_default();
             let url = po.map(|p| jstr(p, "poLink")).unwrap_or_default();
             (dt, num, "Client PO".to_string(),
-             vec!["POs".to_string(), "Client".to_string()], url)
+             vec!["Client POs".to_string()], url)
         }
         FieldKind::ClientInvoice(y_idx) => {
             let arr = contract.get("billingYears").and_then(|v| v.as_array());
@@ -3730,6 +3985,21 @@ fn score_field_match(
             score *= 0.65;
         }
     }
+
+    // ---- Build B-fix-6-v2: document-type bias from filename ----
+    //      Strong push (+0.30) toward field kinds matching the detected
+    //      doc type, strong pull (-0.30 to -0.40) away from incompatible
+    //      kinds. Prevents e.g. a "Tax Invoice" file from being routed
+    //      into a Client PO field even when client+OEM signals match.
+    let (bias_delta, bias_reason) = doc_type_bias(doc_type_hint, field_kind);
+    if bias_delta != 0.0 {
+        score += bias_delta;
+        if !bias_reason.is_empty() {
+            reasons.push(bias_reason.to_string());
+        }
+    }
+    // Don't let a strong negative bias send score below zero — clamp.
+    if score < 0.0 { score = 0.0; }
 
     // ---- Hard floor: if no client AND no OEM, this is noise ----
     if !client_matched && oem_matched_name.is_empty() {
@@ -3965,6 +4235,11 @@ fn propose_file_matches_inner() -> ProposeResult {
         let file_date = extract_filename_date(&f.filename);
         let file_date_ref: Option<&str> = file_date.as_deref();
 
+        // Build B-fix-6-v2: detect document type from filename ONCE per file
+        // (it doesn't depend on the contract). Passed into score_field_match
+        // to bias which field-kinds are favored. See `detect_doc_type_from_filename`.
+        let doc_type_hint = detect_doc_type_from_filename(&f.filename, &oem_aliases);
+
         // Extract PDF text once for this file (panic-caught + size-guarded).
         // Held in this scope only — dropped at end of iteration.
         let (pdf_status, pdf_text) = {
@@ -4028,13 +4303,16 @@ fn propose_file_matches_inner() -> ProposeResult {
             let client_data_for_pdf = client_match_data.get(&client);
 
             for k in &kinds {
-                // Filename-based scoring (existing behavior)
+                // Filename-based scoring (existing behavior + B-fix-6-v2 signals)
                 let mut maybe_cand = score_field_match(
                     &f.filename, &f.filename_lc, &filename_norm, file_date_ref,
                     contract, idx, k,
                     &client_norm, &client_short_norm, &client_toks,
                     &product, &oem_aliases, &product_code_aliases,
                     &contract_oem,
+                    // B-fix-6-v2: client identifiers + doc-type hint
+                    client_data_for_pdf,
+                    doc_type_hint,
                 );
 
                 // PDF body scoring layered on top, if PDF text was extractable.
@@ -4645,8 +4923,23 @@ struct RearrangeResult {
     errors: Vec<String>,
 }
 
-/// Translate a category-segment list from the OLD layout to the NEW layout.
-/// Returns None if the segments don't look like a known category (skipped).
+/// Translate a category-segment list from any OLD layout to the NEW
+/// flat-top-level layout (B-fix-6-v2). Returns None if the segments
+/// don't look like a known category (skipped).
+///
+/// All known source forms map to the canonical target:
+///   ["Invoices", "Client"]    → ["Sales Invoices"]
+///   ["Invoices", "OEM"]       → ["Purchase Invoices"]
+///   ["POs", "Internal"]       → ["Internal POs"]   (was kept verbatim in B-fix-6)
+///   ["POs", "Client"]         → ["Client POs"]     (was kept verbatim in B-fix-6)
+///   ["POs / Internal"]        → ["Internal POs"]   (alt B-fix-6 form)
+///   ["POs / Client"]          → ["Client POs"]
+///   ["Internal POs"]          → ["Internal POs"]   (already correct)
+///   ["Client POs"]            → ["Client POs"]     (already correct)
+///   ["Proposals"]             → ["Proposals"]
+///   ["Sales Invoices"]        → ["Sales Invoices"]
+///   ["Purchase Invoices"]     → ["Purchase Invoices"]
+///   anything else             → kept verbatim (user-added custom)
 fn translate_category_segments(old_segs: &[String]) -> Option<Vec<String>> {
     if old_segs.is_empty() { return None; }
     match old_segs.first().map(|s| s.as_str()) {
@@ -4658,13 +4951,21 @@ fn translate_category_segments(old_segs: &[String]) -> Option<Vec<String>> {
             }
         }
         Some("POs") => {
-            // POs/Internal and POs/Client unchanged
+            // Old B-fix-2 / B-fix-6 layout: nested under "POs" parent.
+            // New layout: flat top-level "Internal POs" / "Client POs".
             match old_segs.get(1).map(|s| s.as_str()) {
-                Some("Internal") | Some("Client") => Some(old_segs.to_vec()),
+                Some("Internal") => Some(vec!["Internal POs".to_string()]),
+                Some("Client")   => Some(vec!["Client POs".to_string()]),
                 _ => None,
             }
         }
-        Some("Proposals") => Some(vec!["Proposals".to_string()]),
+        Some("POs / Internal") => Some(vec!["Internal POs".to_string()]),
+        Some("POs / Client")   => Some(vec!["Client POs".to_string()]),
+        Some("Internal POs")    => Some(vec!["Internal POs".to_string()]),
+        Some("Client POs")      => Some(vec!["Client POs".to_string()]),
+        Some("Proposals")       => Some(vec!["Proposals".to_string()]),
+        Some("Sales Invoices")  => Some(vec!["Sales Invoices".to_string()]),
+        Some("Purchase Invoices") => Some(vec!["Purchase Invoices".to_string()]),
         _ => {
             // User-added custom category — keep verbatim
             Some(old_segs.to_vec())
@@ -5113,6 +5414,135 @@ fn reset_all_assignments(state: tauri::State<DbState>) -> ResetResult {
     result
 }
 
+// ============================================================================
+// Build B-fix-6-v2: rebuild_folder_structure
+// ----------------------------------------------------------------------------
+// "Hard reset" the file layout. Equivalent of: reset → wipe categories →
+// reseed defaults → re-init folders. Use this when changing folder layout
+// versions (e.g. moving from B-fix-6's POs/Internal to B-fix-6-v2's
+// Internal POs as a top-level folder), or when the user wants a totally
+// clean slate.
+//
+// Steps:
+//   1. Move every file under Files/ back to Migration/ (collisions renamed).
+//   2. Strip *Local fields from every contract.
+//   3. Delete every empty subdirectory under Files/ (so old layout folders
+//      go away — Files/POs/, Files/POs/Internal/FY24-25/, FY-first parents,
+//      etc.).
+//   4. Wipe ms_app__document_categories_v1 from app_settings, forcing a
+//      reseed from default_categories() on next read.
+//   5. Reseed default categories (writes the new layout's category list).
+//   6. Recreate the folder structure for the new layout.
+//   7. Clear the rearrange-completed flag.
+//
+// Idempotent: re-running on an already-rebuilt state is a no-op.
+// ============================================================================
+
+#[derive(Serialize)]
+struct RebuildResult {
+    ok: bool,
+    error: Option<String>,
+    files_moved_back: usize,
+    records_reset: usize,
+    folders_pruned: usize,
+    folders_created: usize,
+    errors: Vec<String>,
+}
+
+#[tauri::command]
+fn rebuild_folder_structure(state: tauri::State<DbState>) -> RebuildResult {
+    let mut result = RebuildResult {
+        ok: true, error: None,
+        files_moved_back: 0, records_reset: 0,
+        folders_pruned: 0, folders_created: 0,
+        errors: Vec::new(),
+    };
+
+    // 1. + 2. Reuse reset_all_assignments to move files back to Migration
+    //         and strip local fields. Cheaper than re-implementing.
+    let reset = reset_all_assignments(state.clone());
+    if !reset.ok {
+        result.ok = false;
+        result.error = reset.error.clone();
+        for e in &reset.errors { result.errors.push(e.clone()); }
+        // Continue anyway — partial progress is still useful
+    }
+    result.files_moved_back = reset.files_moved_back;
+    result.records_reset = reset.records_reset;
+    for e in reset.errors { result.errors.push(e); }
+
+    // 3. Delete every empty subdirectory under Files/. The reset already
+    //    pruned empty dirs once, but we run a second pass after collecting
+    //    all top-level dirs in case the structure has multiple empty layers
+    //    (e.g. POs/Internal/FY24-25/ where everything was emptied).
+    if let Some(files) = files_root() {
+        if files.exists() {
+            // Two passes — bottom-up pruning may leave some parents empty
+            // after the first pass that need a second sweep.
+            for _ in 0..2 {
+                if let Ok(entries) = std::fs::read_dir(&files) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_dir() { continue; }
+                        let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue; };
+                        // Don't delete the Migration folder itself
+                        if name == "Migration" { continue; }
+                        let before = count_dirs_recursive(&path);
+                        prune_empty_dirs(&path);
+                        let after = count_dirs_recursive(&path);
+                        if before > after {
+                            result.folders_pruned += before - after;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Wipe stored categories so default_categories() seeds fresh on
+    //    the next get_document_categories call.
+    let _ = with_writer(&state, |con| {
+        con.execute(
+            "DELETE FROM app_settings WHERE key = 'ms_app__document_categories'",
+            [],
+        )?;
+        Ok(1usize)
+    });
+
+    // 5. Re-seed and persist defaults immediately so 6 has a known list.
+    let cats = seed_default_categories();
+    if let Err(e) = save_document_categories(&cats) {
+        result.errors.push(format!("persist categories: {e}"));
+        result.ok = false;
+    }
+
+    // 6. Recreate folders for the new layout.
+    let init = initialize_files_folders();
+    if !init.ok {
+        result.ok = false;
+        if let Some(e) = init.error.clone() {
+            result.errors.push(format!("initialize folders: {e}"));
+        }
+    }
+    result.folders_created = init.category_folders_total.saturating_sub(init.category_folders_present);
+
+    result
+}
+
+/// Count the number of directories within (and including) `start`. Used to
+/// estimate how many empty folders were removed by prune_empty_dirs.
+fn count_dirs_recursive(start: &PathBuf) -> usize {
+    if !start.is_dir() { return 0; }
+    let mut count = 1;
+    if let Ok(entries) = std::fs::read_dir(start) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() { count += count_dirs_recursive(&p); }
+        }
+    }
+    count
+}
+
 /// Strip every field whose name ends in "Local" from every contract's
 /// raw_data. Returns the number of contracts whose data was rewritten.
 fn strip_all_local_fields_from_contracts(state: &tauri::State<DbState>) -> Result<usize, String> {
@@ -5230,6 +5660,8 @@ pub fn run() {
             rearrange_files_to_new_structure,
             // Build B-fix-4: PDF reader + reset
             reset_all_assignments,
+            // Build B-fix-6-v2: hard-reset + folder layout rebuild
+            rebuild_folder_structure,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

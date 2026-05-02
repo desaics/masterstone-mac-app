@@ -4679,7 +4679,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     '<summary style="cursor:pointer;">Advanced — Files &amp; folders</summary>' +
                     '<div style="padding-top:8px;line-height:1.55;">' +
                       'Sets up the folder structure for storing local copies of your contract documents (POs, invoices, proposals, etc.). ' +
-                      'New layout (Build B-fix-2): <code style="font-size:11px;">Files/{Category}/{FY}/file.pdf</code> — category first, FY second. ' +
+                      'New layout (Build B-fix-6-v2): <code style="font-size:11px;">Files/Sales Invoices/{FY}/file.pdf</code>, <code style="font-size:11px;">Files/Purchase Invoices/{FY}/file.pdf</code>, <code style="font-size:11px;">Files/Internal POs/file.pdf</code>, <code style="font-size:11px;">Files/Client POs/file.pdf</code>, <code style="font-size:11px;">Files/Proposals/file.pdf</code>. Only Sales/Purchase Invoices have FY subfolders; everything else is flat. ' +
                       'After initialization, drop your existing files into the <b>Migration</b> folder; the matching tool will assign each one to its CRM record and move it to the right place.<br/><br/>' +
                       '<div id="msFilesStatusBox" style="margin:8px 0;padding:10px 12px;background:rgba(255,255,255,0.04);border-radius:4px;font-size:12px;">' +
                         '<div id="msFilesStatusBody">Loading status…</div>' +
@@ -4692,7 +4692,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
                       '<div><b>Document categories</b></div>' +
                       '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
-                        'Each category becomes a top-level folder; FY sub-folders go inside. ' +
+                        'Each category becomes a top-level folder. Sales/Purchase Invoices use FY sub-folders; POs and Proposals are flat. ' +
                         'Default categories cannot be removed; user-added ones can.' +
                       '</div>' +
                       '<div id="msCategoriesList">Loading categories…</div>' +
@@ -4700,7 +4700,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
                       '<div><b>Re-arrange existing files (one-time migration)</b></div>' +
                       '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
-                        'If you have files from a previous version (FY-first layout), this moves them to the new category-first layout and updates every CRM record link. Safe to re-run — already-correct files are skipped.' +
+                        'If you have files from a previous version (FY-first layout, or B-fix-6\'s nested POs/Internal layout), this moves them to the new flat top-level layout and updates every CRM record link. Safe to re-run — already-correct files are skipped.' +
                       '</div>' +
                       '<button onclick="window.__msRearrangeFiles()" id="msRearrangeBtn">Re-arrange files into new structure</button>' +
                       '<div id="msRearrangeStatus" style="margin-top:6px;font-size:11px;"></div>' +
@@ -4711,6 +4711,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                       '</div>' +
                       '<button onclick="window.__msResetAllAssignments()" id="msResetBtn">Reset all assignments &amp; move files back to Migration</button>' +
                       '<div id="msResetStatus" style="margin-top:6px;font-size:11px;"></div>' +
+                      '<hr style="margin:12px 0;border-color:rgba(255,255,255,0.08);"/>' +
+                      '<div><b>Rebuild folder structure</b></div>' +
+                      '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
+                        '<span style="color:#fbbf24;">⚠ Most destructive.</span> Combines Reset + folder rebuild: moves every file back to <code>Migration/</code>, strips every <code>_local</code> field, deletes empty target folders (so old layouts like <code>POs/Internal/</code> are removed), wipes the stored category list, re-seeds defaults, and recreates folders for the current layout. Use this when changing folder-layout versions (e.g. upgrading from B-fix-6 to B-fix-6-v2) or when you want a totally clean slate.' +
+                      '</div>' +
+                      '<button onclick="window.__msRebuildFolders()" id="msRebuildBtn">Rebuild folder structure (clean slate)</button>' +
+                      '<div id="msRebuildStatus" style="margin-top:6px;font-size:11px;"></div>' +
                     '</div>' +
                   '</details>' +
 
@@ -5819,6 +5826,81 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (status) status.innerHTML = '<span style="color:#f87171;">✗ Error: ' + escapeHtml(String(e)) + '</span>';
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = 'Reset all assignments & move files back to Migration'; }
+        }
+    };
+
+    // ---- Rebuild folder structure (Build B-fix-6-v2) -----
+    // Hard-reset: combines Reset + folder rebuild. Moves files back to
+    // Migration, strips _local fields, deletes empty target folders,
+    // wipes stored categories, re-seeds defaults, recreates folders.
+    window.__msRebuildFolders = async function () {
+        var ok = await window.__msConfirm(
+            '⚠ Most destructive action — read carefully.\n\n' +
+            'This will:\n' +
+            '  • Move every file currently under Files/ back to Migration/\n' +
+            '  • Strip every _local field from every contract record\n' +
+            '  • Delete every empty subfolder under Files/ (POs/, FY*/ etc.)\n' +
+            '  • Wipe the stored document-category list\n' +
+            '  • Re-seed the default categories with the current layout spec\n' +
+            '  • Recreate the folder structure for the new layout\n\n' +
+            'Original OneDrive URL fields are preserved — only the local paths and physical file locations change.\n\n' +
+            'Use this when changing folder-layout versions (B-fix-6 → B-fix-6-v2) or for a totally clean slate.\n\n' +
+            'Proceed?'
+        );
+        if (!ok) return;
+
+        var ok2 = await window.__msConfirm(
+            'Last chance. This will move every file, clear every local link, and rebuild every folder.\n\n' +
+            'Proceed?'
+        );
+        if (!ok2) return;
+
+        var btn = document.getElementById('msRebuildBtn');
+        var status = document.getElementById('msRebuildStatus');
+        if (btn) { btn.disabled = true; btn.textContent = 'Rebuilding…'; }
+        if (status) status.textContent = 'Working… (moving files, deleting old folders, re-seeding categories, rebuilding)';
+
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                if (status) status.textContent = 'Tauri runtime unavailable';
+                return;
+            }
+            var r = await t.invoke('rebuild_folder_structure');
+            if (!r.ok) {
+                if (status) status.innerHTML = '<span style="color:#f87171;">✗ Failed: ' + escapeHtml(r.error || 'unknown') + '</span>';
+                return;
+            }
+            var lines = [
+                '<span style="color:#34d399;">✓ Rebuild complete.</span>',
+                'Files moved back to Migration: <b>' + r.files_moved_back + '</b>',
+                'Records cleared: <b>' + r.records_reset + '</b>',
+                'Empty folders pruned: <b>' + r.folders_pruned + '</b>',
+                'Folders recreated: <b>' + r.folders_created + '</b>',
+            ];
+            if (r.errors && r.errors.length > 0) {
+                lines.push('<span style="color:#f87171;">' + r.errors.length + ' error(s):</span>');
+                for (var i = 0; i < Math.min(r.errors.length, 5); i++) {
+                    lines.push('  • ' + escapeHtml(r.errors[i]));
+                }
+                if (r.errors.length > 5) {
+                    lines.push('  • … and ' + (r.errors.length - 5) + ' more (see console)');
+                    console.error('[ms] rebuild errors:', r.errors);
+                }
+            }
+            if (status) status.innerHTML = lines.join('<br/>');
+
+            // Refresh in-memory cache
+            try {
+                var loadResult = await t.invoke('storage_load_all');
+                if (loadResult && loadResult.ok && loadResult.data && loadResult.data.ms_pro_v210) {
+                    realSet.call(window.localStorage, 'ms_pro_v210', loadResult.data.ms_pro_v210);
+                }
+            } catch (e2) { console.error('[ms] cache refresh failed:', e2); }
+        } catch (e) {
+            if (status) status.innerHTML = '<span style="color:#f87171;">✗ Error: ' + escapeHtml(String(e)) + '</span>';
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Rebuild folder structure (clean slate)'; }
         }
     };
 
