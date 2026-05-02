@@ -2919,6 +2919,17 @@ fn date_to_day_number(date_str: &str) -> Option<i64> {
 
 /// Extract a date from the filename in DD_MM_YYYY, DD-MM-YYYY, or
 /// DD MM YYYY format. Returns canonical YYYY-MM-DD or None.
+///
+/// Build B-fix-7: previously, when a digit-run failed validation as a date
+/// component, the loop just fell through with `i` pointing past the end
+/// of the failed triple. That swallowed the real date in filenames like
+/// "DT_CAMS_119533_19_04_2021.pdf" — "119533/19/04" was parsed as a
+/// candidate triple, validation failed (year wasn't 4 digits), and the
+/// scanner moved past position 20 ("04") without ever trying the real
+/// triple "19/04/2021" starting at position 15. Fix: every failure path
+/// resets `i = start + 1` so the next iteration begins one byte past the
+/// start of the failed first-number, guaranteeing every embedded date
+/// shape gets considered.
 fn extract_filename_date(filename: &str) -> Option<String> {
     // Look for any 3-number sequence with separators.
     let bytes = filename.as_bytes();
@@ -2934,7 +2945,7 @@ fn extract_filename_date(filename: &str) -> Option<String> {
         let n1_str = &filename[start..i];
         // Read separator.
         if i >= bytes.len() || !is_date_sep(bytes[i]) {
-            i += 1;
+            i = start + 1;
             continue;
         }
         let sep = bytes[i];
@@ -2943,7 +2954,9 @@ fn extract_filename_date(filename: &str) -> Option<String> {
         while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
         let n2_str = &filename[s2..i];
         if i >= bytes.len() || bytes[i] != sep {
-            // not a triple — keep scanning
+            // not a triple — restart past the first digit-run so later
+            // embedded dates aren't missed.
+            i = start + 1;
             continue;
         }
         i += 1;
@@ -2954,7 +2967,7 @@ fn extract_filename_date(filename: &str) -> Option<String> {
         // Try to interpret as a date.
         let (n1, n2, n3) = match (n1_str.parse::<i32>(), n2_str.parse::<i32>(), n3_str.parse::<i32>()) {
             (Ok(a), Ok(b), Ok(c)) => (a, b, c),
-            _ => continue,
+            _ => { i = start + 1; continue; }
         };
 
         // Plausibility: third number is the year (4-digit) and first
@@ -2968,6 +2981,9 @@ fn extract_filename_date(filename: &str) -> Option<String> {
             && n2 >= 1 && n2 <= 12 && n3 >= 1 && n3 <= 31 {
             return Some(format!("{:04}-{:02}-{:02}", n1, n2, n3));
         }
+        // Triple matched the shape but didn't validate (year wrong size,
+        // day or month out of range). Restart past the first digit-run.
+        i = start + 1;
     }
     None
 }
@@ -3670,6 +3686,13 @@ fn has_date_pattern(lc: &str) -> bool {
 /// returned value is added to the raw score (can be negative). Bias is
 /// strong but not absolute — a strong client/OEM/doc-number match can
 /// still surface a candidate in the review pile.
+///
+/// Build B-fix-7: superseded by `doc_type_allows_kind`, which is a hard
+/// filter applied upstream in `propose_file_matches_inner`. This bias
+/// function is no longer called — kept only so a future maintainer can
+/// see how the soft-bias version worked, and so reverting to soft-bias
+/// behavior is a one-line change.
+#[allow(dead_code)]
 fn doc_type_bias(hint: DocTypeHint, kind: &FieldKind) -> (f64, &'static str) {
     use FieldKind::*;
     match (hint, kind) {
@@ -3705,6 +3728,42 @@ fn doc_type_bias(hint: DocTypeHint, kind: &FieldKind) -> (f64, &'static str) {
 
         // Unknown → no bias
         (DocTypeHint::Unknown, _) => (0.0, ""),
+    }
+}
+
+/// Build B-fix-7: filename convention is law.
+///
+/// Returns true if `kind` is a compatible target for a file with the given
+/// filename-derived `hint`. When the hint is non-Unknown, ONLY compatible
+/// kinds are allowed — incompatible field kinds are filtered out before
+/// scoring runs. This kills two prior leaks:
+///
+///   1. PDF-body scoring used to override the soft filename bias. A Sales
+///      Invoice PDF that referenced the customer's PO# in its body would
+///      get +0.70 doc# match for the Client PO field via the body scorer,
+///      which doesn't know about the doc-type hint. Result: Tax Invoices
+///      surfaced as Client PO candidates with confidence ~1.0.
+///
+///   2. The bare-candidate "rescue" path resurrected candidates that the
+///      filename scorer rejected (because of the negative bias), letting
+///      PDF body score push them to the top of the dropdown.
+///
+/// With this filter, the rejected field-kind never enters the candidate
+/// pool in the first place. PDF-body scoring is still applied to the
+/// allowed kinds.
+///
+/// Proposal hint returns false for every kind on purpose: there's no
+/// contract-side field for proposals, and the user has asked for proposal
+/// files to land in Unmatched so they can be filed manually.
+fn doc_type_allows_kind(hint: DocTypeHint, kind: &FieldKind) -> bool {
+    use FieldKind::*;
+    match hint {
+        DocTypeHint::SalesInvoice    => matches!(kind, ClientInvoice(_)),
+        DocTypeHint::PurchaseInvoice => matches!(kind, OemInvoice(_)),
+        DocTypeHint::ClientPO        => matches!(kind, ClientPOArr(_) | ClientPOLegacy),
+        DocTypeHint::InternalPO      => matches!(kind, InternalPO),
+        DocTypeHint::Proposal        => false,
+        DocTypeHint::Unknown         => true,
     }
 }
 
@@ -3986,18 +4045,14 @@ fn score_field_match(
         }
     }
 
-    // ---- Build B-fix-6-v2: document-type bias from filename ----
-    //      Strong push (+0.30) toward field kinds matching the detected
-    //      doc type, strong pull (-0.30 to -0.40) away from incompatible
-    //      kinds. Prevents e.g. a "Tax Invoice" file from being routed
-    //      into a Client PO field even when client+OEM signals match.
-    let (bias_delta, bias_reason) = doc_type_bias(doc_type_hint, field_kind);
-    if bias_delta != 0.0 {
-        score += bias_delta;
-        if !bias_reason.is_empty() {
-            reasons.push(bias_reason.to_string());
-        }
-    }
+    // ---- Build B-fix-7: filename-convention bias is now a hard filter ----
+    //      Incompatible field kinds are rejected upstream in
+    //      `propose_file_matches_inner` via `doc_type_allows_kind`, so by
+    //      the time we get here we already know `field_kind` is compatible
+    //      with `doc_type_hint`. No score adjustment needed.
+    //      `doc_type_hint` is kept in the signature for future use and to
+    //      preserve a record of what the filename told us.
+    let _ = doc_type_hint;
     // Don't let a strong negative bias send score below zero — clamp.
     if score < 0.0 { score = 0.0; }
 
@@ -4303,6 +4358,12 @@ fn propose_file_matches_inner() -> ProposeResult {
             let client_data_for_pdf = client_match_data.get(&client);
 
             for k in &kinds {
+                // Build B-fix-7: filename convention is law. If the filename's
+                // doc-type hint is incompatible with this field kind, skip
+                // entirely — don't score it, don't let PDF body matching
+                // resurrect it. See `doc_type_allows_kind` for the rules.
+                if !doc_type_allows_kind(doc_type_hint, k) { continue; }
+
                 // Filename-based scoring (existing behavior + B-fix-6-v2 signals)
                 let mut maybe_cand = score_field_match(
                     &f.filename, &f.filename_lc, &filename_norm, file_date_ref,
@@ -4354,6 +4415,72 @@ fn propose_file_matches_inner() -> ProposeResult {
         // user can see more alternatives in the review dropdown when many
         // contracts share a client (e.g. 5 CAMS contracts).
         deduped.truncate(20);
+
+        // Build B-fix-7: synthetic category-only candidate.
+        //
+        // When the filename has a strong category hint (Tax Invoice / DT_ /
+        // INV / trailing PO# / no-PO-date-only) BUT no contract-record
+        // candidate scored above the auto threshold, inject a top-of-list
+        // synthetic that just files the file to the right category folder
+        // without linking to any record. This handles the case where a new
+        // OEM invoice arrives whose number isn't yet recorded in any
+        // contract billing-year row — the file still lands where it
+        // belongs, and the user can edit the contract later.
+        //
+        // Skipped for:
+        //   - Unknown hint  (no convention to enforce)
+        //   - Proposal hint (user said: file proposals manually)
+        //   - FY-required categories with no derivable FY (avoid silent
+        //     mis-filing into a wrong year)
+        let need_synthetic = !matches!(
+            doc_type_hint,
+            DocTypeHint::Unknown | DocTypeHint::Proposal
+        );
+        let top_score = deduped.first().map(|c| c.confidence).unwrap_or(0.0);
+        if need_synthetic && top_score < AUTO_THRESHOLD {
+            let category_segs: Vec<String> = match doc_type_hint {
+                DocTypeHint::SalesInvoice    => vec!["Sales Invoices".to_string()],
+                DocTypeHint::PurchaseInvoice => vec!["Purchase Invoices".to_string()],
+                DocTypeHint::ClientPO        => vec!["Client POs".to_string()],
+                DocTypeHint::InternalPO      => vec!["Internal POs".to_string()],
+                _ => Vec::new(), // unreachable given the guard above
+            };
+            let needs_fy = matches!(
+                doc_type_hint,
+                DocTypeHint::SalesInvoice | DocTypeHint::PurchaseInvoice
+            );
+            let derived_fy: Option<String> = if needs_fy {
+                file_date_ref.and_then(date_to_fy)
+            } else {
+                None
+            };
+            let proceed = !category_segs.is_empty()
+                && (!needs_fy || derived_fy.is_some());
+            if proceed {
+                let where_str = if let Some(fy) = derived_fy.as_ref() {
+                    format!("{}/{fy}", category_segs[0])
+                } else {
+                    category_segs[0].clone()
+                };
+                let synth = MatchCandidate {
+                    // Empty field_path is the signal to the JS apply path
+                    // that this is a category-only file (action=file_only,
+                    // no record link). See __msApplyAllAuto / __msConfirmReview.
+                    field_path: String::new(),
+                    label: format!("File to {where_str}  (no record link)"),
+                    confidence: 0.95,
+                    reasons: vec![
+                        "filename convention → category-only file".to_string(),
+                    ],
+                    original_url: String::new(),
+                    category_path: category_segs,
+                    suggested_fy: derived_fy,
+                    document_type: "Category only".to_string(),
+                };
+                deduped.insert(0, synth);
+                if deduped.len() > 20 { deduped.truncate(20); }
+            }
+        }
 
         let bucket = if deduped.is_empty() {
             "unmatched".to_string()
@@ -5198,6 +5325,21 @@ fn prune_empty_dirs(start: &PathBuf) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() { prune_empty_dirs(&p); }
+        }
+    }
+    // Build B-fix-7: macOS leaves .DS_Store / ._* metadata files in any
+    // folder Finder has opened. These would block `remove_dir` below and
+    // leave the now-stale folder behind. Delete them first — they're
+    // generated metadata, not user data.
+    if let Ok(entries) = std::fs::read_dir(start) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_file() { continue; }
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name == ".DS_Store" || name.starts_with("._") {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
         }
     }
     // Then try removing this if empty

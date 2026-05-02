@@ -5302,8 +5302,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var c = reviewFiles[idx].candidates[sel_idx];
         if (!c) return;
 
+        // Build B-fix-7: a synthetic category-only candidate carries an
+        // empty field_path. In that case, switch to 'file_only' so the
+        // Rust side moves the file but doesn't try to update a record.
+        var isCategoryOnly = !c.field_path || c.field_path.length === 0;
+        var action = isCategoryOnly ? 'file_only' : 'link_to_record';
+
+        // FY is only required for FY-using categories (Sales/Purchase
+        // Invoices). Skip the prompt for flat categories (Client POs,
+        // Internal POs, Proposals).
         var fy = c.suggested_fy;
-        if (!fy) {
+        if (!fy && __msCategoryUsesFY(c.category_path)) {
             fy = await window.__msPrompt('No FY auto-derived. Enter FY (e.g. FY24-25):', 'FY' + new Date().getFullYear().toString().slice(-2) + '-' + (new Date().getFullYear() + 1).toString().slice(-2));
             if (!fy) return;
         }
@@ -5315,7 +5324,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (!t || !t.invoke) return;
             var r = await t.invoke('apply_file_assignment', {
                 filePath: filePath,
-                action: 'link_to_record',
+                action: action,
                 fy: fy,
                 categoryPath: c.category_path,
                 fieldPath: c.field_path
@@ -5369,7 +5378,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             for (var i = 0; i < autoFiles.length; i++) {
                 var f = autoFiles[i];
                 var c = f.candidates[0];
-                if (!c.suggested_fy) {
+
+                // Build B-fix-7: synthetic category-only candidate has empty
+                // field_path. Use file_only so the Rust side moves the file
+                // without trying to update a (non-existent) record.
+                var isCategoryOnly = !c.field_path || c.field_path.length === 0;
+                var action = isCategoryOnly ? 'file_only' : 'link_to_record';
+
+                // FY required only for Sales/Purchase Invoices. For flat
+                // categories (Client POs, Internal POs), no FY needed.
+                var needsFy = __msCategoryUsesFY(c.category_path);
+                if (needsFy && !c.suggested_fy) {
                     failed++;
                     failures.push(f.file.filename + ': no FY could be auto-derived');
                     continue;
@@ -5377,7 +5396,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 try {
                     var r = await t.invoke('apply_file_assignment', {
                         filePath: f.file.abs_path,
-                        action: 'link_to_record',
+                        action: action,
                         fy: c.suggested_fy,
                         categoryPath: c.category_path,
                         fieldPath: c.field_path
