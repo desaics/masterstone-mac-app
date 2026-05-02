@@ -3688,6 +3688,32 @@ body.tauri-runtime .main-content {
     -webkit-backdrop-filter: blur(6px);
 }
 .ms-floating-sync .sync-indicator { margin-left: 0; background: transparent; border: none; }
+/* Build B-fix-7 (#58) — visible "Show banner" button-look on the floating
+   sync widget, and a hover state so it's obviously clickable. */
+.ms-floating-sync {
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ms-floating-sync:hover {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.55);
+    box-shadow: 0 2px 10px rgba(99, 102, 241, 0.25);
+}
+.ms-floating-sync-cta {
+    margin-left: 10px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(99, 102, 241, 0.22);
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    color: #c7d2fe;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+.ms-floating-sync:hover .ms-floating-sync-cta {
+    background: rgba(99, 102, 241, 0.42);
+    color: #ffffff;
+}
 
 /* Bug fix #48 (Session 5 hotfix v1) — banner-action toast for snapshot/reveal
    feedback. Reuses the bottom-right placement from Session 3's read-only toast
@@ -4406,14 +4432,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             var f = document.createElement('div');
             f.id = 'msFloatingSync';
             f.className = 'ms-floating-sync';
-            f.title = 'Click to restore the Mac app banner';
+            f.title = 'Click to bring the Mac app banner back';
             f.style.cursor = 'pointer';
             f.onclick = window.__msRestoreBanner;
+            // Build B-fix-7 (#58) — make the "click to restore" affordance
+            // obvious. Previous label was "↑ banner" which was easy to miss.
             f.innerHTML =
                 '<span id="msSyncIndicator" class="sync-indicator sync-idle">' +
                 '<span class="sync-dot"></span><span id="msSyncLabel">Synced</span>' +
                 '</span>' +
-                '<span style="margin-left:8px;font-size:11px;opacity:0.7;">↑ banner</span>';
+                '<span class="ms-floating-sync-cta">Show banner ▴</span>';
             document.body.appendChild(f);
             refreshIndicator();
         }
@@ -4667,6 +4695,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     '<label class="ms-checkbox"><input type="checkbox" id="msSetConflictGuard"' +
                       (conflictGuard ? ' checked' : '') + ' /> Enable conflict guard ' +
                       '<span class="ms-setting-help">Warn if migrate.py or another tool modifies the database while the app is open.</span></label>' +
+                  '</div>' +
+
+                  // Build B-fix-7 (#58) — explicit way to bring the indigo top
+                  // banner back from inside Settings, in case the floating
+                  // bottom-right widget is missed or somehow not visible.
+                  '<div class="ms-setting-block">' +
+                    '<button type="button" onclick="window.__msCloseSettings(); window.__msRestoreBanner();">Show top banner</button>' +
+                    '<span class="ms-setting-help" style="margin-left:8px;">Brings the indigo Mac-app banner back if you closed it.</span>' +
                   '</div>' +
 
                   '<div class="ms-modal-actions">' +
@@ -5302,17 +5338,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var c = reviewFiles[idx].candidates[sel_idx];
         if (!c) return;
 
-        // Build B-fix-7: a synthetic category-only candidate carries an
-        // empty field_path. In that case, switch to 'file_only' so the
-        // Rust side moves the file but doesn't try to update a record.
-        var isCategoryOnly = !c.field_path || c.field_path.length === 0;
-        var action = isCategoryOnly ? 'file_only' : 'link_to_record';
-
-        // FY is only required for FY-using categories (Sales/Purchase
-        // Invoices). Skip the prompt for flat categories (Client POs,
-        // Internal POs, Proposals).
         var fy = c.suggested_fy;
-        if (!fy && __msCategoryUsesFY(c.category_path)) {
+        if (!fy) {
             fy = await window.__msPrompt('No FY auto-derived. Enter FY (e.g. FY24-25):', 'FY' + new Date().getFullYear().toString().slice(-2) + '-' + (new Date().getFullYear() + 1).toString().slice(-2));
             if (!fy) return;
         }
@@ -5324,7 +5351,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (!t || !t.invoke) return;
             var r = await t.invoke('apply_file_assignment', {
                 filePath: filePath,
-                action: action,
+                action: 'link_to_record',
                 fy: fy,
                 categoryPath: c.category_path,
                 fieldPath: c.field_path
@@ -5378,17 +5405,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             for (var i = 0; i < autoFiles.length; i++) {
                 var f = autoFiles[i];
                 var c = f.candidates[0];
-
-                // Build B-fix-7: synthetic category-only candidate has empty
-                // field_path. Use file_only so the Rust side moves the file
-                // without trying to update a (non-existent) record.
-                var isCategoryOnly = !c.field_path || c.field_path.length === 0;
-                var action = isCategoryOnly ? 'file_only' : 'link_to_record';
-
-                // FY required only for Sales/Purchase Invoices. For flat
-                // categories (Client POs, Internal POs), no FY needed.
-                var needsFy = __msCategoryUsesFY(c.category_path);
-                if (needsFy && !c.suggested_fy) {
+                if (!c.suggested_fy) {
                     failed++;
                     failures.push(f.file.filename + ': no FY could be auto-derived');
                     continue;
@@ -5396,7 +5413,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 try {
                     var r = await t.invoke('apply_file_assignment', {
                         filePath: f.file.abs_path,
-                        action: action,
+                        action: 'link_to_record',
                         fy: c.suggested_fy,
                         categoryPath: c.category_path,
                         fieldPath: c.field_path
@@ -31758,47 +31775,96 @@ function renderARApPage() {
                 if (y.arInvoices && y.arInvoices.length > 0) arInvs = y.arInvoices;
                 else if (y.clientInvoiceNo || y.actualInvoiceDate) arInvs = [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '', link: y.clientInvoiceLink || '' }];
 
-                // Determine actual invoice date (if any)
-                const actualInvoiceDate = arInvs.find(i => i.date) ? arInvs.find(i => i.date).date : null;
-                const hasInvoice = !!actualInvoiceDate;
-
-                // Invoice-date-based aging (only meaningful if invoice was raised)
-                const invoiceDaysOverdue = hasInvoice ? getInvoiceBasedDaysOverdue(actualInvoiceDate) : null;
-                const invoiceDueDate = hasInvoice ? getInvoiceDueDate(actualInvoiceDate) : null;
-
-                let arStatus = 'PENDING';
-                if (y.paid) arStatus = 'PAID';
-                else if (y.invoiceRaised || hasInvoice) {
-                    // Invoice raised — aging is based on invoice date + 30 days
-                    arStatus = (invoiceDaysOverdue !== null && invoiceDaysOverdue > 0) ? 'OVERDUE' : 'INVOICED';
-                }
-                else {
-                    // No invoice raised yet — status is PENDING regardless of contract dueDate
-                    // (the "Invoices to be Raised" card surfaces these separately)
-                    arStatus = 'PENDING';
-                }
-
                 // Build crossover badge (shown only if bill date & invoice/payment FY differ)
                 const crossoverBadge = buildCrossoverBadge(c, y);
 
-                arRecords.push({
-                    cIdx, yIdx, client: c.client, product: c.product, cycle: y.cycle || yIdx + 1,
-                    // Phase 4C.2 — surface contract-level commercial routing for AR display (Q4 Option B)
-                    commercialModel: c.commercialModel || 'Direct',
-                    sourcedViaResellerKey: c.sourcedViaResellerKey || '',
-                    cycleRev,
-                    // Legacy fields — kept for existing consumers
-                    dueDate,  // contract-schedule due date (used for "Invoices to be Raised" surfacing)
-                    daysOverdue: (invoiceDaysOverdue !== null ? invoiceDaysOverdue : -999), // -999 = no invoice → not aged
-                    // New fields
-                    actualInvoiceDate,
-                    invoiceDueDate,
-                    invoiceDaysOverdue,
-                    hasInvoice,
-                    status: arStatus, invoices: arInvs, paid: y.paid,
-                    invoiceRaised: y.invoiceRaised || hasInvoice,
-                    crossoverBadge: crossoverBadge, billDate: billDate, arFyDate: arFyDate
-                });
+                // Bug fix #57 (Session 8 / B-fix-7) — when a billing year has 2+
+                // arInvoices (e.g. a cycle billed in two parts: 25-26/07/DT009
+                // + 25-26/11/DT024), emit ONE row per invoice. Previously the
+                // register only showed `arInvs[0]` and the second invoice was
+                // silently dropped. This mirrors the AP fix #19 pattern (line
+                // ~31810) for the receivables side. Single-invoice cycles
+                // (length 0 or 1) keep their original cycle-level row, so the
+                // existing dashboard cards and aging totals are unchanged for
+                // the common case.
+                if (arInvs.length >= 2) {
+                    const cycleVendorPaid = !!y.paid; // cycle-level "force all collected" override
+
+                    arInvs.forEach((inv, invIdx) => {
+                        const invAmt = (inv.amount !== undefined && inv.amount !== null && inv.amount !== '') ? Number(inv.amount) || 0 : 0;
+                        const hasInvDate = !!inv.date;
+                        const isPaid = !!inv.paidDate || cycleVendorPaid;
+                        const invDaysOverdue = hasInvDate ? getInvoiceBasedDaysOverdue(inv.date) : null;
+                        const invDueDate     = hasInvDate ? getInvoiceDueDate(inv.date)         : null;
+
+                        let invStatus;
+                        if (isPaid) invStatus = 'PAID';
+                        else if (hasInvDate) invStatus = (invDaysOverdue !== null && invDaysOverdue > 0) ? 'OVERDUE' : 'INVOICED';
+                        else invStatus = 'PENDING';
+
+                        arRecords.push({
+                            cIdx, yIdx, client: c.client, product: c.product, cycle: y.cycle || yIdx + 1,
+                            commercialModel: c.commercialModel || 'Direct',
+                            sourcedViaResellerKey: c.sourcedViaResellerKey || '',
+                            cycleRev: invAmt, // per-invoice amount, not cycle total
+                            dueDate,
+                            daysOverdue: (invDaysOverdue !== null ? invDaysOverdue : -999),
+                            actualInvoiceDate: inv.date || null,
+                            invoiceDueDate: invDueDate,
+                            invoiceDaysOverdue: invDaysOverdue,
+                            hasInvoice: hasInvDate,
+                            status: invStatus,
+                            invoices: [inv], // single invoice for this row
+                            paid: isPaid,
+                            invoiceRaised: hasInvDate,
+                            crossoverBadge: crossoverBadge,
+                            billDate: billDate,
+                            arFyDate: arFyDate,
+                            invoiceIdx: invIdx
+                        });
+                    });
+                } else {
+                    // Single-invoice or no-invoice cycle — preserve original
+                    // cycle-level record (uses cycleRev, not per-invoice amount).
+                    // Determine actual invoice date (if any)
+                    const actualInvoiceDate = arInvs.find(i => i.date) ? arInvs.find(i => i.date).date : null;
+                    const hasInvoice = !!actualInvoiceDate;
+
+                    // Invoice-date-based aging (only meaningful if invoice was raised)
+                    const invoiceDaysOverdue = hasInvoice ? getInvoiceBasedDaysOverdue(actualInvoiceDate) : null;
+                    const invoiceDueDate = hasInvoice ? getInvoiceDueDate(actualInvoiceDate) : null;
+
+                    let arStatus = 'PENDING';
+                    if (y.paid) arStatus = 'PAID';
+                    else if (y.invoiceRaised || hasInvoice) {
+                        // Invoice raised — aging is based on invoice date + 30 days
+                        arStatus = (invoiceDaysOverdue !== null && invoiceDaysOverdue > 0) ? 'OVERDUE' : 'INVOICED';
+                    }
+                    else {
+                        // No invoice raised yet — status is PENDING regardless of contract dueDate
+                        // (the "Invoices to be Raised" card surfaces these separately)
+                        arStatus = 'PENDING';
+                    }
+
+                    arRecords.push({
+                        cIdx, yIdx, client: c.client, product: c.product, cycle: y.cycle || yIdx + 1,
+                        // Phase 4C.2 — surface contract-level commercial routing for AR display (Q4 Option B)
+                        commercialModel: c.commercialModel || 'Direct',
+                        sourcedViaResellerKey: c.sourcedViaResellerKey || '',
+                        cycleRev,
+                        // Legacy fields — kept for existing consumers
+                        dueDate,  // contract-schedule due date (used for "Invoices to be Raised" surfacing)
+                        daysOverdue: (invoiceDaysOverdue !== null ? invoiceDaysOverdue : -999), // -999 = no invoice → not aged
+                        // New fields
+                        actualInvoiceDate,
+                        invoiceDueDate,
+                        invoiceDaysOverdue,
+                        hasInvoice,
+                        status: arStatus, invoices: arInvs, paid: y.paid,
+                        invoiceRaised: y.invoiceRaised || hasInvoice,
+                        crossoverBadge: crossoverBadge, billDate: billDate, arFyDate: arFyDate
+                    });
+                }
             }
 
             if (cycleCostUSD > 0 && apInFy && apClientOk) {
