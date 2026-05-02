@@ -5154,13 +5154,24 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
         if (summary) {
             summary.style.display = 'block';
+            // Build PDF extraction status sub-line.
+            var pdfBits = [];
+            if (p.pdf_text_count > 0) pdfBits.push('<span style="color:#34d399;">' + p.pdf_text_count + ' text-extracted</span>');
+            if (p.pdf_scanned_count > 0) pdfBits.push('<span style="color:var(--text-dim);">' + p.pdf_scanned_count + ' scanned (no text)</span>');
+            if (p.pdf_too_large_count > 0) pdfBits.push('<span style="color:#fbbf24;">' + p.pdf_too_large_count + ' too large</span>');
+            if (p.pdf_error_count > 0) pdfBits.push('<span style="color:#fbbf24;">' + p.pdf_error_count + ' read errors</span>');
+            if (p.pdf_panic_count > 0) pdfBits.push('<span style="color:#f87171;">' + p.pdf_panic_count + ' parse failures</span>');
+            if (p.pdf_not_pdf_count > 0) pdfBits.push('<span style="color:var(--text-dim);">' + p.pdf_not_pdf_count + ' not PDF</span>');
             summary.innerHTML =
                 '<div><b>' + p.total_files + '</b> file(s) in Migration folder</div>' +
                 '<div style="margin-top:4px;">' +
                   '<span style="color:#34d399;">' + p.auto_count + ' auto-matched</span> · ' +
                   '<span style="color:#fbbf24;">' + p.review_count + ' need review</span> · ' +
                   '<span style="color:var(--text-dim);">' + p.unmatched_count + ' unmatched</span>' +
-                '</div>';
+                '</div>' +
+                (pdfBits.length > 0 ?
+                    '<div style="margin-top:4px;font-size:11px;color:var(--text-dim);">PDF extraction: ' + pdfBits.join(' · ') + '</div>'
+                    : '');
         }
         if (applyAllBtn) {
             applyAllBtn.style.display = (p.auto_count > 0) ? '' : 'none';

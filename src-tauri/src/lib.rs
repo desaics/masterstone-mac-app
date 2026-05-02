@@ -2852,6 +2852,9 @@ struct FileWithMatches {
     file: MigrationFile,
     candidates: Vec<MatchCandidate>,
     bucket: String, // "auto" | "review" | "unmatched"
+    /// Build B-fix-5: status of PDF extraction for this file.
+    /// "text" | "scanned" | "too_large" | "error" | "not_pdf"
+    pdf_status: String,
 }
 
 #[derive(Clone)]
@@ -3028,34 +3031,85 @@ fn default_oem_aliases() -> Vec<(String, String)> {
 }
 
 // ============================================================================
-// Build B-fix-4: PDF text extraction
+// Build B-fix-4 / fix-5: PDF text extraction
 //
-// Uses the pdf-extract crate to pull body text from PDF files. Returns None
-// for scanned (image-only) PDFs where text extraction yields effectively
-// nothing. The extracted text is then used by the matcher to find:
-//   - exact doc numbers (PO numbers, invoice numbers)
-//   - client GSTIN / PAN
-//   - dates in the body
-//   - OEM references
-// These are dramatically more reliable than filename-only matching.
+// Uses the pdf-extract crate to pull body text from PDF files.
+//
+// Build B-fix-5 hardening (after a crash on a 8GB-RAM Mac): every call to
+// pdf_extract::extract_text is wrapped in std::panic::catch_unwind. The
+// crate sometimes panics on malformed/encrypted PDFs (or hits an
+// allocation failure when the system is under memory pressure). Without
+// this catch, the panic propagates through Wry's url scheme handler
+// callback (a `pub extern "C"` function), where Rust must abort because
+// C ABI doesn't allow unwinding. Result: the whole app dies.
+//
+// We also enforce a hard size cap (50 MB) — anything larger is treated
+// as scanned/unprocessable and falls back to filename-only matching.
 // ============================================================================
 
-/// Try to extract text from a PDF file. Returns lowercased text on success,
-/// or None if the file is unreadable or appears to be image-only (very
-/// short text or whitespace-only).
+const PDF_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Clone, PartialEq)]
+enum PdfExtractStatus {
+    /// Successfully extracted at least 50 chars of text.
+    Text,
+    /// File was processed but extracted text is empty/very short
+    /// (image-only / scanned).
+    Scanned,
+    /// File exceeded PDF_MAX_BYTES.
+    TooLarge,
+    /// Extraction panicked or returned an error (corrupt/encrypted/etc.).
+    Error,
+    /// Not a .pdf file — skipped extraction entirely.
+    NotPdf,
+}
+
+impl PdfExtractStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PdfExtractStatus::Text => "text",
+            PdfExtractStatus::Scanned => "scanned",
+            PdfExtractStatus::TooLarge => "too_large",
+            PdfExtractStatus::Error => "error",
+            PdfExtractStatus::NotPdf => "not_pdf",
+        }
+    }
+}
+
+/// Try to extract text from a PDF file. Returns (status, text_option).
+/// Wraps pdf-extract in catch_unwind to prevent crashes from poisoning
+/// the whole process.
+fn extract_pdf_text_safe(path: &std::path::Path) -> (PdfExtractStatus, Option<String>) {
+    // Size guard
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size == 0 || size > PDF_MAX_BYTES {
+        return (PdfExtractStatus::TooLarge, None);
+    }
+
+    // Catch panics from pdf-extract / lopdf
+    let path_buf = path.to_path_buf();
+    let extract_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        pdf_extract::extract_text(&path_buf)
+    }));
+
+    match extract_result {
+        Ok(Ok(text)) => {
+            let trimmed = text.trim();
+            if trimmed.len() < 50 {
+                (PdfExtractStatus::Scanned, None)
+            } else {
+                (PdfExtractStatus::Text, Some(trimmed.to_lowercase()))
+            }
+        }
+        Ok(Err(_)) => (PdfExtractStatus::Error, None),
+        Err(_) => (PdfExtractStatus::Error, None),
+    }
+}
+
+/// Legacy wrapper retained for callers that don't care about status.
+#[allow(dead_code)]
 fn extract_pdf_text(path: &std::path::Path) -> Option<String> {
-    // pdf-extract::extract_text reads a PDF and returns its text content.
-    // It's synchronous and CPU-bound. On failure (corrupt PDF, password-
-    // protected, etc.) it returns an Err which we map to None.
-    let text = match pdf_extract::extract_text(path) {
-        Ok(t) => t,
-        Err(_) => return None,
-    };
-    let trimmed = text.trim();
-    // Heuristic: if the extracted text is shorter than 50 chars, it's
-    // probably a scanned PDF (we got page numbers and footer text only).
-    if trimmed.len() < 50 { return None; }
-    Some(trimmed.to_lowercase())
+    extract_pdf_text_safe(path).1
 }
 
 /// Compact a string for substring matching: lowercase + collapse whitespace
@@ -3078,25 +3132,26 @@ fn compact_pdf_text(s: &str) -> String {
     out
 }
 
-/// Cached per-file PDF text. Computed on first need, reused for every
-/// contract scoring pass. Returns the compacted lowercase text or None.
+/// Cached per-file PDF text + status. Computed on first need.
+/// (text, status) pair; text is None unless status == Text.
 struct PdfTextCache<'a> {
-    files: &'a mut std::collections::HashMap<String, Option<String>>,
+    files: &'a mut std::collections::HashMap<String, (PdfExtractStatus, Option<String>)>,
 }
 impl<'a> PdfTextCache<'a> {
-    fn get_or_extract(&mut self, abs_path: &str) -> Option<&str> {
+    fn get_or_extract(&mut self, abs_path: &str) -> (PdfExtractStatus, Option<String>) {
         if !self.files.contains_key(abs_path) {
             let path = std::path::Path::new(abs_path);
-            // Only attempt PDF extraction for .pdf files
-            let is_pdf = abs_path.to_lowercase().ends_with(".pdf");
-            let text = if is_pdf {
-                extract_pdf_text(path).map(|s| compact_pdf_text(&s))
+            let entry = if abs_path.to_lowercase().ends_with(".pdf") {
+                let (status, text_opt) = extract_pdf_text_safe(path);
+                let compact = text_opt.as_deref().map(compact_pdf_text);
+                (status, compact)
             } else {
-                None
+                (PdfExtractStatus::NotPdf, None)
             };
-            self.files.insert(abs_path.to_string(), text);
+            self.files.insert(abs_path.to_string(), entry);
         }
-        self.files.get(abs_path).and_then(|o| o.as_deref())
+        let v = self.files.get(abs_path).unwrap();
+        (v.0.clone(), v.1.clone())
     }
 }
 
@@ -3782,6 +3837,23 @@ struct ProposeResult {
     review_count: usize,
     unmatched_count: usize,
     total_files: usize,
+    /// Build B-fix-5: per-status counts for the PDF extraction phase.
+    pdf_text_count: usize,
+    pdf_scanned_count: usize,
+    pdf_too_large_count: usize,
+    pdf_error_count: usize,
+    pdf_not_pdf_count: usize,
+}
+
+impl ProposeResult {
+    fn err(msg: String) -> Self {
+        Self {
+            ok: false, error: Some(msg),
+            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
+            pdf_text_count: 0, pdf_scanned_count: 0, pdf_too_large_count: 0,
+            pdf_error_count: 0, pdf_not_pdf_count: 0,
+        }
+    }
 }
 
 // Build B-fix-4: thresholds adjusted for PDF-augmented scoring.
@@ -3790,35 +3862,48 @@ struct ProposeResult {
 const AUTO_THRESHOLD: f64 = 0.95;
 const REVIEW_THRESHOLD: f64 = 0.20;
 
+/// Tauri command. Async wrapper that runs the heavy sync work on a
+/// blocking thread pool, so the WebView's main thread (and the IPC
+/// dispatcher) stays responsive during the 30-60 second PDF scan.
+///
+/// Build B-fix-5 hardening: also wraps the entire inner call in
+/// catch_unwind so any panic from pdf-extract / lopdf surfaces as a
+/// Rust error rather than aborting the whole app.
 #[tauri::command]
-fn propose_file_matches() -> ProposeResult {
+async fn propose_file_matches() -> ProposeResult {
+    let result = tokio::task::spawn_blocking(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(propose_file_matches_inner))
+    }).await;
+
+    match result {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => ProposeResult::err(
+            "Matcher panicked (likely PDF extraction failure). The crash was caught — see the JS console for details. Try re-running; if it persists, some PDF in Migration/ may be corrupt.".into()
+        ),
+        Err(e) => ProposeResult::err(format!("Matcher task failed: {e}")),
+    }
+}
+
+fn propose_file_matches_inner() -> ProposeResult {
     // 1. Read contracts + clients + OEMs from SQLite.
     let dbp = match db_path() {
-        Some(p) => p, None => return ProposeResult {
-            ok: false, error: Some("no db path".into()),
-            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
-        },
+        Some(p) => p,
+        None => return ProposeResult::err("no db path".into()),
     };
     let con = match Connection::open_with_flags(&dbp, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c, Err(e) => return ProposeResult {
-            ok: false, error: Some(format!("open db: {e}")),
-            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
-        },
+        Ok(c) => c,
+        Err(e) => return ProposeResult::err(format!("open db: {e}")),
     };
 
     let mut contracts: Vec<serde_json::Value> = Vec::new();
     {
         let mut stmt = match con.prepare("SELECT raw_data FROM contracts ORDER BY legacy_idx ASC") {
-            Ok(s) => s, Err(e) => return ProposeResult {
-                ok: false, error: Some(format!("prepare contracts: {e}")),
-                files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
-            },
+            Ok(s) => s,
+            Err(e) => return ProposeResult::err(format!("prepare contracts: {e}")),
         };
         let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
-            Ok(r) => r, Err(e) => return ProposeResult {
-                ok: false, error: Some(format!("query contracts: {e}")),
-                files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
-            },
+            Ok(r) => r,
+            Err(e) => return ProposeResult::err(format!("query contracts: {e}")),
         };
         for row in rows.flatten() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row) {
@@ -3841,30 +3926,42 @@ fn propose_file_matches() -> ProposeResult {
 
     // 2. List files.
     let files = match list_migration_files() {
-        Ok(f) => f, Err(e) => return ProposeResult {
-            ok: false, error: Some(e),
-            files: vec![], auto_count: 0, review_count: 0, unmatched_count: 0, total_files: 0,
-        },
+        Ok(f) => f,
+        Err(e) => return ProposeResult::err(e),
     };
 
     // 3. For each file, score against every contract field.
-    //    Per-file PDF text is extracted on first need and cached, so each
-    //    file is parsed at most once even though it's compared against
-    //    many contracts.
-    let mut pdf_cache: std::collections::HashMap<String, Option<String>> =
-        std::collections::HashMap::new();
+    //    Build B-fix-5: process each file independently — extract PDF text,
+    //    score against ALL contracts, then drop the text. This caps per-iteration
+    //    memory at one PDF + one contract list, instead of holding all 150
+    //    extracted texts in memory at once (which crashed an 8GB Mac).
     let mut results: Vec<FileWithMatches> = Vec::new();
+    let mut pdf_text_count: usize = 0;
+    let mut pdf_scanned_count: usize = 0;
+    let mut pdf_too_large_count: usize = 0;
+    let mut pdf_error_count: usize = 0;
+    let mut pdf_not_pdf_count: usize = 0;
 
     for f in &files {
         let filename_norm = normalize_for_match(&f.filename_lc);
         let file_date = extract_filename_date(&f.filename);
         let file_date_ref: Option<&str> = file_date.as_deref();
 
-        // Extract PDF text once for this file.
-        let pdf_text: Option<String> = {
-            let mut cache = PdfTextCache { files: &mut pdf_cache };
-            cache.get_or_extract(&f.abs_path).map(String::from)
+        // Extract PDF text once for this file (panic-caught + size-guarded).
+        // Held in this scope only — dropped at end of iteration.
+        let (pdf_status, pdf_text) = {
+            let mut tmp_cache: std::collections::HashMap<String, (PdfExtractStatus, Option<String>)> =
+                std::collections::HashMap::with_capacity(1);
+            let mut cache = PdfTextCache { files: &mut tmp_cache };
+            cache.get_or_extract(&f.abs_path)
         };
+        match &pdf_status {
+            PdfExtractStatus::Text => pdf_text_count += 1,
+            PdfExtractStatus::Scanned => pdf_scanned_count += 1,
+            PdfExtractStatus::TooLarge => pdf_too_large_count += 1,
+            PdfExtractStatus::Error => pdf_error_count += 1,
+            PdfExtractStatus::NotPdf => pdf_not_pdf_count += 1,
+        }
         let pdf_text_ref: Option<&str> = pdf_text.as_deref();
 
         let mut candidates: Vec<MatchCandidate> = Vec::new();
@@ -3969,7 +4066,12 @@ fn propose_file_matches() -> ProposeResult {
             "unmatched".to_string()
         };
 
-        results.push(FileWithMatches { file: f.clone(), candidates: deduped, bucket });
+        results.push(FileWithMatches {
+            file: f.clone(),
+            candidates: deduped,
+            bucket,
+            pdf_status: pdf_status.as_str().to_string(),
+        });
     }
 
     let total = results.len();
@@ -3982,6 +4084,8 @@ fn propose_file_matches() -> ProposeResult {
         files: results,
         auto_count, review_count, unmatched_count,
         total_files: total,
+        pdf_text_count, pdf_scanned_count, pdf_too_large_count,
+        pdf_error_count, pdf_not_pdf_count,
     }
 }
 
