@@ -4234,6 +4234,91 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     }
 
+    // ── Inline modal helpers (Build B-fix-3) ─────────────────────────────
+    // Tauri's WebView on macOS silently no-ops native window.prompt(),
+    // window.confirm(), and window.alert(). These replacements use a styled
+    // inline DOM modal and return a Promise so the rest of the code can
+    // remain effectively synchronous-feeling with `await`.
+    //
+    // __msPrompt(message, defaultValue?) → Promise<string|null>
+    // __msConfirm(message)               → Promise<boolean>
+    // __msAlert(message)                 → Promise<void>
+    function __msBuildModal(message, kind /* 'prompt' | 'confirm' | 'alert' */, defaultValue) {
+        return new Promise(function (resolve) {
+            var overlay = document.createElement('div');
+            overlay.className = 'ms-modal-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+
+            var box = document.createElement('div');
+            box.style.cssText = 'background:#1f2937;color:#f3f4f6;padding:20px 24px;border-radius:8px;max-width:480px;min-width:320px;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:system-ui,-apple-system,sans-serif;';
+            box.innerHTML =
+                '<div style="font-size:13px;line-height:1.5;margin-bottom:14px;white-space:pre-wrap;color:#f3f4f6;">' + escapeHtml(message) + '</div>' +
+                (kind === 'prompt' ?
+                    '<input type="text" id="msModalInput" style="width:100%;padding:8px;background:#374151;color:#f3f4f6;border:1px solid #4b5563;border-radius:4px;font-size:13px;margin-bottom:14px;box-sizing:border-box;" />' : '') +
+                '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+                  (kind === 'alert' ? '' :
+                    '<button id="msModalCancel" style="padding:6px 14px;background:#374151;color:#f3f4f6;border:1px solid #4b5563;border-radius:4px;font-size:12px;cursor:pointer;">Cancel</button>') +
+                  '<button id="msModalOk" style="padding:6px 14px;background:#6366f1;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">' +
+                    (kind === 'confirm' ? 'OK' : (kind === 'alert' ? 'OK' : 'OK')) +
+                  '</button>' +
+                '</div>';
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+
+            var input = document.getElementById('msModalInput');
+            if (input) {
+                if (defaultValue !== undefined && defaultValue !== null) input.value = defaultValue;
+                setTimeout(function () { input.focus(); input.select(); }, 50);
+            }
+
+            function close(value) {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                resolve(value);
+            }
+
+            function onKey(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.removeEventListener('keydown', onKey);
+                    if (kind === 'prompt') close(input ? input.value : null);
+                    else if (kind === 'confirm') close(true);
+                    else close(undefined);
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    document.removeEventListener('keydown', onKey);
+                    if (kind === 'prompt') close(null);
+                    else if (kind === 'confirm') close(false);
+                    else close(undefined);
+                }
+            }
+            document.addEventListener('keydown', onKey);
+
+            var okBtn = document.getElementById('msModalOk');
+            if (okBtn) okBtn.onclick = function () {
+                document.removeEventListener('keydown', onKey);
+                if (kind === 'prompt') close(input ? input.value : null);
+                else if (kind === 'confirm') close(true);
+                else close(undefined);
+            };
+            var cancelBtn = document.getElementById('msModalCancel');
+            if (cancelBtn) cancelBtn.onclick = function () {
+                document.removeEventListener('keydown', onKey);
+                if (kind === 'prompt') close(null);
+                else if (kind === 'confirm') close(false);
+                else close(undefined);
+            };
+        });
+    }
+    window.__msPrompt = function (message, defaultValue) {
+        return __msBuildModal(message, 'prompt', defaultValue);
+    };
+    window.__msConfirm = function (message) {
+        return __msBuildModal(message, 'confirm');
+    };
+    window.__msAlert = function (message) {
+        return __msBuildModal(message, 'alert');
+    };
+
     // ── Snapshot ─────────────────────────────────────────────────────────
     window.__msSnapshot = async function () {
         showActionToast('Generating snapshot…', 'info');
@@ -4928,9 +5013,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     }
 
     window.__msAddCategory = async function () {
-        // Two-step prompt — display name + path. Could be a modal but
-        // a simple prompt sequence is enough for this use case.
-        var displayName = window.prompt(
+        // Two-step prompt — display name + path.
+        var displayName = await window.__msPrompt(
             'New category display name (1-80 chars):\n' +
             'Examples: "Service Reports", "NDAs", "Authorization Letters"',
             ''
@@ -4939,7 +5023,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         displayName = displayName.trim();
         if (!displayName) { showActionToast('Display name required.', 'error'); return; }
 
-        var pathInput = window.prompt(
+        var pathInput = await window.__msPrompt(
             'Folder path under each FY (use slashes for nesting; max 4 levels).\n' +
             'Examples:\n' +
             '  ServiceReports\n' +
@@ -4984,11 +5068,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     window.__msRemoveCategory = async function (key, displayName) {
-        if (!window.confirm(
+        var ok = await window.__msConfirm(
             'Remove category "' + displayName + '"?\n\n' +
             'Existing folders on disk will be PRESERVED — files inside them are safe. ' +
             'You can delete the empty folders manually if no longer needed.'
-        )) return;
+        );
+        if (!ok) return;
         try {
             var t = getTauri();
             if (!t || !t.invoke) return;
@@ -5164,7 +5249,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return html;
     }
 
-    window.__msShowReasons = function (idx) {
+    window.__msShowReasons = async function (idx) {
         var p = msMatcherProposals;
         if (!p) return;
         var reviewFiles = p.files.filter(function (f) { return f.bucket === 'review'; });
@@ -5178,7 +5263,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             'Confidence: ' + Math.round(c.confidence * 100) + '%\n' +
             'Suggested FY: ' + (c.suggested_fy || '(none)') + '\n\n' +
             'Reasons:\n  • ' + c.reasons.join('\n  • ');
-        window.alert(msg);
+        await window.__msAlert(msg);
     };
 
     window.__msConfirmReview = async function (filePath, idx) {
@@ -5193,7 +5278,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
         var fy = c.suggested_fy;
         if (!fy) {
-            fy = window.prompt('No FY auto-derived. Enter FY (e.g. FY24-25):', 'FY' + new Date().getFullYear().toString().slice(-2) + '-' + (new Date().getFullYear() + 1).toString().slice(-2));
+            fy = await window.__msPrompt('No FY auto-derived. Enter FY (e.g. FY24-25):', 'FY' + new Date().getFullYear().toString().slice(-2) + '-' + (new Date().getFullYear() + 1).toString().slice(-2));
             if (!fy) return;
         }
 
@@ -5244,7 +5329,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         if (!p) return;
         var autoFiles = p.files.filter(function (f) { return f.bucket === 'auto'; });
         if (autoFiles.length === 0) { showActionToast('No auto-matches to apply.', 'info'); return; }
-        if (!window.confirm('Apply ' + autoFiles.length + ' auto-matches?\n\nFiles will be moved from Migration/ to their final folders. Records will be updated.')) return;
+        var ok = await window.__msConfirm('Apply ' + autoFiles.length + ' auto-matches?\n\nFiles will be moved from Migration/ to their final folders. Records will be updated.');
+        if (!ok) return;
 
         var btn = document.getElementById('msApplyAutoBtn');
         if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
@@ -5569,12 +5655,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
     // ---- Re-arrange files to new structure (Build B-fix-2) -----
     window.__msRearrangeFiles = async function () {
-        if (!window.confirm(
+        var ok = await window.__msConfirm(
             'This will move every file currently under Files/FY-XX/.../ to the new layout: Files/{Category}/FY-XX/file.pdf\n\n' +
             'It will also update every CRM record link to point to the new path.\n\n' +
             'Already-correct files are skipped. Safe to run multiple times.\n\n' +
             'Proceed?'
-        )) return;
+        );
+        if (!ok) return;
 
         var btn = document.getElementById('msRearrangeBtn');
         var status = document.getElementById('msRearrangeStatus');
@@ -5659,14 +5746,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 box.innerHTML = '<div style="color:var(--text-dim);font-style:italic;font-size:11px;">No aliases defined yet. Examples to add: <b>AGE</b> → DT Email, <b>EIS</b> → DT Network.</div>';
                 return;
             }
-            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
-              '<tr style="background:rgba(255,255,255,0.04);"><th style="text-align:left;padding:4px;">Code</th><th style="text-align:left;padding:4px;">Maps to product(s)</th><th style="padding:4px;width:50px;"></th></tr>';
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-bright);">' +
+              '<tr style="background:rgba(255,255,255,0.06);color:var(--text-bright);"><th style="text-align:left;padding:6px;">Code</th><th style="text-align:left;padding:6px;">Maps to product(s)</th><th style="padding:6px;width:50px;"></th></tr>';
             for (var i = 0; i < aliases.length; i++) {
                 var a = aliases[i];
-                html += '<tr style="border-top:1px solid rgba(255,255,255,0.06);">' +
-                    '<td style="padding:4px;font-family:ui-monospace,monospace;font-weight:600;">' + escapeHtml(a.code) + '</td>' +
-                    '<td style="padding:4px;">' + a.products.map(escapeHtml).join(', ') + '</td>' +
-                    '<td style="padding:4px;text-align:right;"><button style="font-size:10px;padding:2px 6px;" onclick="window.__msRemoveProductAlias(' + i + ')">×</button></td>' +
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.08);color:var(--text-bright);">' +
+                    '<td style="padding:6px;font-family:ui-monospace,monospace;font-weight:600;color:var(--text-bright);">' + escapeHtml(a.code) + '</td>' +
+                    '<td style="padding:6px;color:var(--text-bright);">' + a.products.map(escapeHtml).join(', ') + '</td>' +
+                    '<td style="padding:6px;text-align:right;"><button style="font-size:11px;padding:2px 8px;" onclick="window.__msRemoveProductAlias(' + i + ')">×</button></td>' +
                   '</tr>';
             }
             html += '</table>';
@@ -5674,15 +5761,15 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) { box.textContent = 'Load error: ' + e; }
     };
 
-    window.__msAddProductAlias = function () {
-        var code = window.prompt('Filename code (e.g. AGE):');
+    window.__msAddProductAlias = async function () {
+        var code = await window.__msPrompt('Filename code (e.g. AGE):');
         if (!code) return;
         code = code.trim().toUpperCase();
         if (!code.match(/^[A-Z0-9]{2,8}$/)) {
-            window.alert('Code must be 2-8 alphanumeric characters.');
+            await window.__msAlert('Code must be 2-8 alphanumeric characters.');
             return;
         }
-        var prodInput = window.prompt('Product name(s) this code maps to (comma-separated, must match your CRM products):\n\nExamples: DT Email, DT Network');
+        var prodInput = await window.__msPrompt('Product name(s) this code maps to (comma-separated, must match your CRM products):\n\nExamples: DT Email, DT Network');
         if (!prodInput) return;
         var products = prodInput.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
         if (products.length === 0) return;
@@ -5701,24 +5788,23 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
         // Save: backend expects lowercase codes internally, accepts whatever case
         var saveArr = existing.map(function (a) { return { code: a.code.toLowerCase(), products: a.products }; });
-        (async function () {
-            try {
-                var t = getTauri();
-                var r = await t.invoke('save_product_code_aliases', { aliases: saveArr });
-                if (r && r.ok) {
-                    showActionToast('Alias saved.', 'success');
-                    window.__msLoadProductAliases();
-                } else {
-                    showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
-                }
-            } catch (e) { showActionToast('Save error: ' + e, 'error'); }
-        })();
+        try {
+            var t = getTauri();
+            var r = await t.invoke('save_product_code_aliases', { aliases: saveArr });
+            if (r && r.ok) {
+                showActionToast('Alias saved.', 'success');
+                window.__msLoadProductAliases();
+            } else {
+                showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+        } catch (e) { showActionToast('Save error: ' + e, 'error'); }
     };
 
     window.__msRemoveProductAlias = async function (idx) {
         var existing = (window.__msProductAliasesCache || []).slice();
         if (idx < 0 || idx >= existing.length) return;
-        if (!window.confirm('Remove alias "' + existing[idx].code + '"?')) return;
+        var ok = await window.__msConfirm('Remove alias "' + existing[idx].code + '"?');
+        if (!ok) return;
         existing.splice(idx, 1);
         var saveArr = existing.map(function (a) { return { code: a.code.toLowerCase(), products: a.products }; });
         try {
@@ -5749,14 +5835,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 return;
             }
             keys.sort();
-            var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
-              '<tr style="background:rgba(255,255,255,0.04);"><th style="text-align:left;padding:4px;">Code</th><th style="text-align:left;padding:4px;">OEM</th><th style="padding:4px;width:50px;"></th></tr>';
+            var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-bright);">' +
+              '<tr style="background:rgba(255,255,255,0.06);color:var(--text-bright);"><th style="text-align:left;padding:6px;">Code</th><th style="text-align:left;padding:6px;">OEM</th><th style="padding:6px;width:50px;"></th></tr>';
             for (var i = 0; i < keys.length; i++) {
                 var k = keys[i];
-                html += '<tr style="border-top:1px solid rgba(255,255,255,0.06);">' +
-                    '<td style="padding:4px;font-family:ui-monospace,monospace;font-weight:600;">' + escapeHtml(k) + '</td>' +
-                    '<td style="padding:4px;">' + escapeHtml(aliases[k]) + '</td>' +
-                    '<td style="padding:4px;text-align:right;"><button style="font-size:10px;padding:2px 6px;" onclick="window.__msRemoveOemAlias(\'' + escapeAttr(k) + '\')">×</button></td>' +
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.08);color:var(--text-bright);">' +
+                    '<td style="padding:6px;font-family:ui-monospace,monospace;font-weight:600;color:var(--text-bright);">' + escapeHtml(k) + '</td>' +
+                    '<td style="padding:6px;color:var(--text-bright);">' + escapeHtml(aliases[k]) + '</td>' +
+                    '<td style="padding:6px;text-align:right;"><button style="font-size:11px;padding:2px 8px;" onclick="window.__msRemoveOemAlias(\'' + escapeAttr(k) + '\')">×</button></td>' +
                   '</tr>';
             }
             html += '</table>';
@@ -5764,15 +5850,15 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) { box.textContent = 'Load error: ' + e; }
     };
 
-    window.__msAddOemAlias = function () {
-        var code = window.prompt('Short code in filenames (e.g. DT):');
+    window.__msAddOemAlias = async function () {
+        var code = await window.__msPrompt('Short code in filenames (e.g. DT):');
         if (!code) return;
         code = code.trim().toUpperCase();
         if (!code.match(/^[A-Z0-9]{2,12}$/)) {
-            window.alert('Code must be 2-12 alphanumeric characters.');
+            await window.__msAlert('Code must be 2-12 alphanumeric characters.');
             return;
         }
-        var oem = window.prompt('OEM name this code maps to (must match an OEM name in your OEM master, e.g. Darktrace):');
+        var oem = await window.__msPrompt('OEM name this code maps to (must match an OEM name in your OEM master, e.g. Darktrace):');
         if (!oem) return;
         oem = oem.trim();
         if (!oem) return;
@@ -5784,22 +5870,21 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var saveObj = {};
         Object.keys(existing).forEach(function (k) { saveObj[k.toLowerCase()] = existing[k]; });
 
-        (async function () {
-            try {
-                var t = getTauri();
-                var r = await t.invoke('save_oem_aliases', { aliases: saveObj });
-                if (r && r.ok) {
-                    showActionToast('OEM alias saved.', 'success');
-                    window.__msLoadOemAliases();
-                } else {
-                    showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
-                }
-            } catch (e) { showActionToast('Save error: ' + e, 'error'); }
-        })();
+        try {
+            var t = getTauri();
+            var r = await t.invoke('save_oem_aliases', { aliases: saveObj });
+            if (r && r.ok) {
+                showActionToast('OEM alias saved.', 'success');
+                window.__msLoadOemAliases();
+            } else {
+                showActionToast('Save failed: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+        } catch (e) { showActionToast('Save error: ' + e, 'error'); }
     };
 
     window.__msRemoveOemAlias = async function (code) {
-        if (!window.confirm('Remove OEM alias "' + code + '"?')) return;
+        var ok = await window.__msConfirm('Remove OEM alias "' + code + '"?');
+        if (!ok) return;
         var existing = Object.assign({}, window.__msOemAliasesCache || {});
         delete existing[code];
         var saveObj = {};
