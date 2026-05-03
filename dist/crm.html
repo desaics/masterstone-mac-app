@@ -10067,7 +10067,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8L";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -21825,7 +21825,8 @@ function poLineItemBlank() {
         qty: 1,
         unitCost: 0,
         discountPct: 0,
-        gstPct: 0  // default 0 for foreign; user can set for domestic
+        gstPct: 0,  // default 0 for foreign; user can set for domestic
+        notes: ''   // Phase 8L — free-text per-line-item notes (shown on PDF when non-empty)
     };
 }
 
@@ -22532,8 +22533,16 @@ function renderPOLineItems() {
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onPOLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace;">${(parseFloat(net) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td><button class="prop-line-delete-btn" onclick="removePOLineItem(${idx})" title="Remove"><i class="fas fa-times"></i></button></td>
-        </tr>`;
+        </tr>
+        <tr data-po-li-notes-idx="${idx}" class="po-li-notes-row"><td colspan="8" style="padding:2px 6px 10px 6px; border-top:none;">
+            <textarea class="po-li-notes-textarea" data-idx="${idx}" rows="2" onchange="onPOLineItemFieldChange(${idx}, 'notes', this.value)" oninput="this.style.height='auto'; this.style.height=this.scrollHeight+'px';" placeholder="Notes for this line item (optional — prints on PO)" style="width:100%; font-size:11.5px; padding:6px 8px; box-sizing:border-box; resize:vertical; min-height:38px; line-height:1.4; font-family:inherit;">${pEsc(li.notes || '')}</textarea>
+        </td></tr>`;
     }).join('');
+    // Phase 8L — autosize notes textareas to fit any pre-existing content
+    tbody.querySelectorAll('textarea.po-li-notes-textarea').forEach(ta => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    });
 }
 
 // Phase 8J — Handler for the Product-cell dropdown picker. Picking a value
@@ -23142,7 +23151,7 @@ function buildPOBankDetailsBlock(po, oemMeta, palette) {
     <div style="margin-bottom:20px; padding:12px 14px; border:1px solid ${p.hairline}; border-left:3px solid ${p.color}; border-radius:4px; background:#fafafa;">
         <div style="font-size:12px; font-weight:700; color:${p.color}; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.6px;"><i class="fas fa-university" style="margin-right:6px;"></i>Remittance / Bank Details</div>
         <table style="width:100%; border-collapse:collapse;"><tbody>${rows}${addrRow}</tbody></table>
-        <div style="margin-top:8px; font-size:9.5px; color:${p.muted}; font-style:italic;">Payment to be remitted to the above account. Quote PO number on remittance advice.</div>
+        <div style="margin-top:8px; font-size:9.5px; color:${p.muted}; font-style:italic;">Payment shall be remitted to the above account.</div>
     </div>`;
 }
 
@@ -23227,6 +23236,7 @@ function buildPOPDFHTMLDefault(po) {
             <td style="padding:8px 6px; border:1px solid #ccc; vertical-align:top;">
                 <div style="font-weight:600;">${safe(li.product)}</div>
                 ${li.sku ? `<div style="font-size:10px; color:#666; margin-top:2px;">SKU: ${safe(li.sku)}</div>` : ''}
+                ${li.notes ? `<div style="font-size:10.5px; color:#555; margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${fmtCcy(unit)}</td>
@@ -23287,7 +23297,7 @@ function buildPOPDFHTMLDefault(po) {
         <tr>
             <td style="vertical-align:top; width:60%; padding-right:20px;">
                 <div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">To (Vendor)</div>
-                <div style="font-size:14px; font-weight:700; color:#7c3aed; margin-bottom:4px;">${safe(po.oem)}${po.isForeignOem ? ' <span style="font-size:10px; color:#666; font-weight:400;">(Foreign supplier)</span>' : ''}</div>
+                <div style="font-size:14px; font-weight:700; color:#7c3aed; margin-bottom:4px;">${safe(po.oem)}</div>
                 ${oemAddrLines.map(l => `<div style="font-size:11px; color:#555;">${safe(l)}</div>`).join('')}
                 ${oemTaxIdValue ? `<div style="font-size:11px; color:#555; margin-top:4px;"><strong>${oemTaxIdLabel}:</strong> ${safe(oemTaxIdValue)}</div>` : ''}
                 ${oemContact ? `<div style="font-size:10.5px; color:#666; margin-top:3px;">${safe(oemContact)}</div>` : ''}
@@ -23443,6 +23453,7 @@ function buildPOPDFHTMLWithLetterhead(po) {
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; vertical-align:top;">
                 <div style="font-weight:600;">${safe(li.product)}</div>
                 ${li.sku ? `<div style="font-size:10px; color:${COL_MUTED}; margin-top:2px;">SKU: ${safe(li.sku)}</div>` : ''}
+                ${li.notes ? `<div style="font-size:10.5px; color:${COL_MUTED}; margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${fmtCcy(unit)}</td>
@@ -23498,7 +23509,7 @@ function buildPOPDFHTMLWithLetterhead(po) {
             <tr>
                 <td style="vertical-align:top; width:58%; padding-right:20px;">
                     <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">To (Vendor)</div>
-                    <div style="font-size:14px; font-weight:700; color:${COL_HEADER}; margin-bottom:4px;">${safe(po.oem)}${po.isForeignOem ? ' <span style="font-size:10px; color:' + COL_MUTED + '; font-weight:400;">(Foreign supplier)</span>' : ''}</div>
+                    <div style="font-size:14px; font-weight:700; color:${COL_HEADER}; margin-bottom:4px;">${safe(po.oem)}</div>
                     ${oemAddrLines.map(l => `<div style="font-size:11px; color:${COL_BODY};">${safe(l)}</div>`).join('')}
                     ${oemTaxIdValue ? `<div style="font-size:11px; color:${COL_BODY}; margin-top:4px;"><strong>${oemTaxIdLabel}:</strong> ${safe(oemTaxIdValue)}</div>` : ''}
                 </td>
