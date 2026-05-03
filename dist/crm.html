@@ -6120,7 +6120,18 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <div id="oemListContainer" class="scroll-container" style="max-height: 300px; border:1px solid var(--glass-border); border-radius:6px;"></div>
             </div>
             <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
-                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Products for <span id="masterSelectedOem" style="color:var(--accent-cyan);">Select an OEM</span></h4>
+                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">
+                    Products for
+                    <span id="oemNameDisplayWrap" style="display:inline-flex; align-items:center; gap:6px;">
+                        <span id="masterSelectedOem" style="color:var(--accent-cyan);">Select an OEM</span>
+                        <i id="oemNameEditBtn" class="fas fa-pencil-alt" title="Rename OEM" style="display:none; cursor:pointer; font-size:12px; color:var(--text-dim);" onclick="beginOemRename()"></i>
+                    </span>
+                    <span id="oemNameEditWrap" style="display:none; align-items:center; gap:6px;">
+                        <input type="text" id="oemNameEditInput" style="padding:4px 8px; font-size:14px; min-width:200px;" onkeydown="onOemRenameKeydown(event)">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="commitOemRename()" style="padding:4px 10px;">Save</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="cancelOemRename()" style="padding:4px 10px;">Cancel</button>
+                    </span>
+                </h4>
                 <div style="display:flex; gap:8px; margin-bottom:16px;">
                     <input type="text" id="newProductName" placeholder="E.g., Web Application Firewall" disabled>
                     <button class="btn btn-primary" id="addProductBtn" onclick="addNewProductToMaster()" disabled><i class="fas fa-plus"></i></button>
@@ -13562,6 +13573,16 @@ function selectMasterOem(oem) {
     document.getElementById('masterSelectedOem').innerText = oem;
     document.getElementById('newProductName').disabled = false;
     document.getElementById('addProductBtn').disabled = false;
+
+    // Phase 8H: show the rename pencil now that an OEM is selected; ensure
+    // any leftover inline-edit row is hidden (e.g. user clicked another OEM
+    // mid-edit).
+    const _editBtn = document.getElementById('oemNameEditBtn');
+    const _displayWrap = document.getElementById('oemNameDisplayWrap');
+    const _editWrap = document.getElementById('oemNameEditWrap');
+    if (_editBtn) _editBtn.style.display = 'inline-block';
+    if (_displayWrap) _displayWrap.style.display = 'inline-flex';
+    if (_editWrap) _editWrap.style.display = 'none';
     
     renderMasterProductList();
 
@@ -13786,11 +13807,190 @@ function deleteMasterOem(oem) {
             // Hide the OEM metadata panel since no OEM is selected
             const metaPanel = document.getElementById('oemMetaPanel');
             if (metaPanel) metaPanel.style.display = 'none';
+            // Phase 8H: also hide the rename pencil + any open inline-edit row
+            const _editBtn = document.getElementById('oemNameEditBtn');
+            const _editWrap = document.getElementById('oemNameEditWrap');
+            const _displayWrap = document.getElementById('oemNameDisplayWrap');
+            if (_editBtn) _editBtn.style.display = 'none';
+            if (_editWrap) _editWrap.style.display = 'none';
+            if (_displayWrap) _displayWrap.style.display = 'inline-flex';
         }
         renderOemMasterList();
         // Phase B-fix-8-E: refresh contract-form OEM dropdown immediately.
         renderProvisioningOemSelect();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8H — OEM rename
+// ---------------------------------------------------------------------------
+// Renaming an OEM is more than a label flip. The OEM name is the *key* in
+// two stores (ms_oem_master_v1 products list, ms_oem_metadata_v1 details
+// block) and a *value* on prospects (.oems[] array), contracts (c.oem),
+// purchase orders (po.oem), and proposal line items (li.oem). All of these
+// are rekeyed/updated atomically in commitOemRename() below.
+//
+// Invoices are intentionally skipped — invoice line items store the OEM
+// name baked into a freeform product description string (e.g. "Darktrace
+// (DT Email) — Cycle 1") rather than as a structured field, and silently
+// rewriting issued invoice text would be wrong. The confirmation dialog
+// states this explicitly.
+//
+// The contract-level c.product field is also a freeform user-typed string
+// and is left alone for the same reason.
+
+function beginOemRename() {
+    if (!activeMasterOem) return;
+    const displayWrap = document.getElementById('oemNameDisplayWrap');
+    const editWrap = document.getElementById('oemNameEditWrap');
+    const input = document.getElementById('oemNameEditInput');
+    if (!displayWrap || !editWrap || !input) return;
+    input.value = activeMasterOem;
+    displayWrap.style.display = 'none';
+    editWrap.style.display = 'inline-flex';
+    // focus + select for immediate typing
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+function cancelOemRename() {
+    const displayWrap = document.getElementById('oemNameDisplayWrap');
+    const editWrap = document.getElementById('oemNameEditWrap');
+    if (displayWrap) displayWrap.style.display = 'inline-flex';
+    if (editWrap) editWrap.style.display = 'none';
+}
+
+function onOemRenameKeydown(ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitOemRename(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); cancelOemRename(); }
+}
+
+// Count how many records of each type reference a given OEM name. Used in
+// the confirmation dialog so the user sees the cascade scope before
+// committing.
+function countOemReferences(oemName) {
+    const counts = { products: 0, prospects: 0, contracts: 0, pos: 0, proposalLines: 0 };
+    if (oemMasterData && Array.isArray(oemMasterData[oemName])) {
+        counts.products = oemMasterData[oemName].length;
+    }
+    if (Array.isArray(prospects)) {
+        prospects.forEach(p => {
+            if (p && Array.isArray(p.oems) && p.oems.indexOf(oemName) !== -1) counts.prospects++;
+        });
+    }
+    if (Array.isArray(contracts)) {
+        contracts.forEach(c => { if (c && c.oem === oemName) counts.contracts++; });
+    }
+    if (Array.isArray(purchaseOrders)) {
+        purchaseOrders.forEach(po => { if (po && po.oem === oemName) counts.pos++; });
+    }
+    if (Array.isArray(proposals)) {
+        proposals.forEach(pr => {
+            if (pr && Array.isArray(pr.lineItems)) {
+                pr.lineItems.forEach(li => { if (li && li.oem === oemName) counts.proposalLines++; });
+            }
+        });
+    }
+    return counts;
+}
+
+function commitOemRename() {
+    const input = document.getElementById('oemNameEditInput');
+    if (!input || !activeMasterOem) { cancelOemRename(); return; }
+    const oldName = activeMasterOem;
+    const newName = (input.value || '').trim();
+
+    if (!newName) {
+        alert('OEM name cannot be empty.');
+        return;
+    }
+    if (newName === oldName) {
+        cancelOemRename();
+        return;
+    }
+    // Case-insensitive duplicate check against existing OEMs
+    const existing = Object.keys(oemMasterData || {});
+    const clash = existing.find(k => k !== oldName && k.toLowerCase() === newName.toLowerCase());
+    if (clash) {
+        alert('An OEM named "' + clash + '" already exists. Pick a different name.');
+        return;
+    }
+
+    const counts = countOemReferences(oldName);
+    const msg =
+        'Rename "' + oldName + '" → "' + newName + '"?\n\n' +
+        'This will update:\n' +
+        '  • OEM Master entry (with ' + counts.products + ' product' + (counts.products === 1 ? '' : 's') + ')\n' +
+        '  • OEM details (state code, GSTIN/Tax ID, address, contact, bank)\n' +
+        '  • ' + counts.prospects + ' prospect' + (counts.prospects === 1 ? '' : 's') + ' tagged with this OEM\n' +
+        '  • ' + counts.contracts + ' contract' + (counts.contracts === 1 ? '' : 's') + '\n' +
+        '  • ' + counts.pos + ' purchase order' + (counts.pos === 1 ? '' : 's') + '\n' +
+        '  • ' + counts.proposalLines + ' proposal line item' + (counts.proposalLines === 1 ? '' : 's') + '\n\n' +
+        'Invoice line items keep the original name in their product description ' +
+        '(edit manually per invoice if needed).';
+    if (!confirm(msg)) return;
+
+    // ---- 1. OEM Master (rekey products list) ----
+    if (oemMasterData && Object.prototype.hasOwnProperty.call(oemMasterData, oldName)) {
+        oemMasterData[newName] = oemMasterData[oldName];
+        delete oemMasterData[oldName];
+        saveOemMaster();
+    }
+
+    // ---- 2. OEM metadata (rekey details block) ----
+    if (typeof oemMetadata === 'object' && oemMetadata && Object.prototype.hasOwnProperty.call(oemMetadata, oldName)) {
+        oemMetadata[newName] = oemMetadata[oldName];
+        delete oemMetadata[oldName];
+        saveOemMetadata();
+    }
+
+    // ---- 3. Prospects (.oems[] array) ----
+    let prospectsChanged = false;
+    if (Array.isArray(prospects)) {
+        prospects.forEach(p => {
+            if (p && Array.isArray(p.oems)) {
+                let touched = false;
+                p.oems = p.oems.map(o => { if (o === oldName) { touched = true; return newName; } return o; });
+                if (touched) prospectsChanged = true;
+            }
+        });
+        if (prospectsChanged) saveProspects();
+    }
+
+    // ---- 4. Contracts (c.oem) ----
+    let contractsChanged = false;
+    if (Array.isArray(contracts)) {
+        contracts.forEach(c => { if (c && c.oem === oldName) { c.oem = newName; contractsChanged = true; } });
+        if (contractsChanged) persistData();
+    }
+
+    // ---- 5. Purchase Orders (po.oem) ----
+    let posChanged = false;
+    if (Array.isArray(purchaseOrders)) {
+        purchaseOrders.forEach(po => { if (po && po.oem === oldName) { po.oem = newName; posChanged = true; } });
+        if (posChanged) savePurchaseOrders();
+    }
+
+    // ---- 6. Proposal line items (li.oem) ----
+    let proposalsChanged = false;
+    if (Array.isArray(proposals)) {
+        proposals.forEach(pr => {
+            if (pr && Array.isArray(pr.lineItems)) {
+                pr.lineItems.forEach(li => { if (li && li.oem === oldName) { li.oem = newName; proposalsChanged = true; } });
+            }
+        });
+        if (proposalsChanged) saveProposals();
+    }
+
+    // ---- Close the inline editor and re-select the renamed OEM ----
+    cancelOemRename();
+    selectMasterOem(newName); // updates header + product list + metadata panel
+    renderOemMasterList();
+    // Refresh dropdowns / lists that surface OEM names
+    if (typeof renderProvisioningOemSelect === 'function') renderProvisioningOemSelect();
+    if (typeof renderContracts === 'function' && contractsChanged) renderContracts();
+    if (typeof renderPipelinePage === 'function' && prospectsChanged) renderPipelinePage();
+    if (typeof renderPOsPage === 'function' && posChanged) renderPOsPage();
+    if (typeof renderProposalsPage === 'function' && proposalsChanged) renderProposalsPage();
 }
 
 function addNewProductToMaster() {
