@@ -7864,6 +7864,21 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </label>
       <div style="font-size:10.5px; color:var(--text-dim); margin-top:3px; margin-left:22px;">Prints a "Remittance" block on this PO's PDF. Only shows if the OEM Master has bank details filled in for this OEM.</div>
     </div>
+    <!-- Phase 8I — Contract Start / End dates (subscription/license period
+         this PO covers). Manual entry only — no auto-fill from linked
+         contract. Both print on the PO PDF as a "Contract Period" line. -->
+    <div class="prospect-form-grid-2" style="margin-top:14px;">
+      <div>
+        <label>Contract Start Date</label>
+        <input type="date" id="poContractStartDate" onchange="onPOContractDateChange()">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Start of the subscription / license period this PO covers. Prints on the PO PDF.</div>
+      </div>
+      <div>
+        <label>Contract End Date</label>
+        <input type="date" id="poContractEndDate" onchange="onPOContractDateChange()">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">End of the subscription / license period. Optional — leave blank if not yet known.</div>
+      </div>
+    </div>
     <div class="prospect-form-grid-3" style="margin-top:14px;">
       <div>
         <label>Issue Date</label>
@@ -21493,6 +21508,11 @@ function poBlank() {
         fxRate: 1,
         issueDate: today,
         expectedDelivery: '',
+        // Phase 8I — subscription/license period covered by this PO.
+        // Manually entered; no auto-fill from linkedContract because
+        // renewal POs may cover only one cycle of a multi-year contract.
+        contractStartDate: '',
+        contractEndDate: '',
         status: 'Draft',
         isForeignOem: false,  // derived: if OEM has no stateCode in oemMetadata, treat as foreign
         lineItems: [],
@@ -21857,6 +21877,10 @@ function openPOForm(id) {
         val('poFxRate', po.fxRate);
         val('poIssueDate', po.issueDate);
         val('poExpectedDelivery', po.expectedDelivery);
+        // Phase 8I — contract dates (load from record; pre-8I records lack
+        // these fields and load as blank, which is the right behaviour)
+        val('poContractStartDate', po.contractStartDate || '');
+        val('poContractEndDate', po.contractEndDate || '');
         val('poStatus', po.status);
         val('poPaymentTerms', po.paymentTerms);
         val('poDeliveryTerms', po.deliveryTerms);
@@ -21893,6 +21917,12 @@ function openPOForm(id) {
         val('poFxRate', 1);
         val('poIssueDate', blank.issueDate);
         val('poExpectedDelivery', '');
+        // Phase 8I — contract dates blank for a new PO
+        val('poContractStartDate', '');
+        val('poContractEndDate', '');
+        // Clear any stale validation styling on the End Date input
+        const _ced = document.getElementById('poContractEndDate');
+        if (_ced) { _ced.style.borderColor = ''; _ced.title = ''; }
         val('poStatus', 'Draft');
         val('poPaymentTerms', (companyProfile && companyProfile.defaultPOPaymentTerms) || '');
         val('poDeliveryTerms', '');
@@ -22239,11 +22269,42 @@ function updatePOTotalsDisplay() {
     `;
 }
 
+// Phase 8I — Live (in-form) validation for the Contract Start/End date pair.
+// The hard block on save lives inside savePOFromForm; this helper just
+// gives an inline cue (red border + tooltip on the End Date) so the user
+// gets immediate feedback instead of a save-time surprise. Only flags
+// when both dates are filled and end < start; otherwise clears any prior
+// styling. Runs on `onchange` of either input.
+function onPOContractDateChange() {
+    const startEl = document.getElementById('poContractStartDate');
+    const endEl = document.getElementById('poContractEndDate');
+    if (!startEl || !endEl) return;
+    const s = (startEl.value || '').trim();
+    const e = (endEl.value || '').trim();
+    const bad = (s && e && e < s);
+    if (bad) {
+        endEl.style.borderColor = 'var(--danger)';
+        endEl.title = 'Contract End Date cannot be before Contract Start Date.';
+    } else {
+        endEl.style.borderColor = '';
+        endEl.title = '';
+    }
+}
+
 function savePOFromForm() {
     const oem = document.getElementById('poOem').value;
     const subject = document.getElementById('poSubject').value.trim();
     if (!oem) { alert("Please select an OEM."); return; }
     if (!subject) { alert("Subject is required."); return; }
+    // Phase 8I — Contract dates: if both filled, end must be on/after start.
+    // If only one is filled, save anyway (the user may fill the other later
+    // — e.g. start is known when raising the PO; end is finalised later).
+    const _csd = (document.getElementById('poContractStartDate').value || '').trim();
+    const _ced = (document.getElementById('poContractEndDate').value || '').trim();
+    if (_csd && _ced && _ced < _csd) {
+        alert("Contract End Date cannot be before Contract Start Date.");
+        return;
+    }
     if (poFormLineItems.length === 0) {
         if (!confirm("No line items — PO will be empty. Save anyway?")) return;
     }
@@ -22285,6 +22346,11 @@ function savePOFromForm() {
     rec.fxRate = parseFloat(document.getElementById('poFxRate').value) || 1;
     rec.issueDate = document.getElementById('poIssueDate').value;
     rec.expectedDelivery = document.getElementById('poExpectedDelivery').value;
+    // Phase 8I — contract dates (subscription/license period). Re-read from
+    // form (the validated _csd/_ced from the top-of-function check are
+    // already trimmed; no need to reach for them again).
+    rec.contractStartDate = (document.getElementById('poContractStartDate').value || '').trim();
+    rec.contractEndDate = (document.getElementById('poContractEndDate').value || '').trim();
     rec.status = document.getElementById('poStatus').value;
     rec.paymentTerms = document.getElementById('poPaymentTerms').value;
     rec.deliveryTerms = document.getElementById('poDeliveryTerms').value;
@@ -22870,6 +22936,7 @@ function buildPOPDFHTMLDefault(po) {
                     ${po.oemRefDocNo ? `<div><strong>OEM Ref:</strong> ${safe(po.oemRefDocNo)}</div>` : ''}
                     ${po.sourcedViaResellerKey ? `<div><strong>Reseller:</strong> ${safe(po.sourcedViaResellerKey)}${po.resellerPONumber ? ` <span style="color:#888;">(PO# ${safe(po.resellerPONumber)})</span>` : ''}</div>` : (po.resellerDetails ? `<div><strong>Reseller:</strong> ${safe(po.resellerDetails)}</div>` : '')}
                     ${po.expectedDelivery ? `<div><strong>Expected:</strong> ${formatDateReadable(po.expectedDelivery)}</div>` : ''}
+                    ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}</div>` : ''}
                     <div><strong>Currency:</strong> ${safe(po.currency)}${po.currency !== 'INR' ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
                     ${gst.buyerStateName ? `<div style="margin-top:4px;"><strong>Place of Supply:</strong> ${safe(gst.buyerStateName)}</div>` : ''}
                     <div><strong>GST:</strong> ${gst.mode === 'zero-rated' ? 'Zero-rated (foreign)' : gst.mode === 'intra' ? 'Intra-state' : 'Inter-state (IGST)'}</div>
@@ -23070,6 +23137,7 @@ function buildPOPDFHTMLWithLetterhead(po) {
                         ${po.oemRefDocNo ? `<div><strong>OEM Ref:</strong> ${safe(po.oemRefDocNo)}</div>` : ''}
                         ${po.sourcedViaResellerKey ? `<div><strong>Reseller:</strong> ${safe(po.sourcedViaResellerKey)}${po.resellerPONumber ? ` <span style="color:${COL_MUTED};">(PO# ${safe(po.resellerPONumber)})</span>` : ''}</div>` : (po.resellerDetails ? `<div><strong>Reseller:</strong> ${safe(po.resellerDetails)}</div>` : '')}
                         ${po.expectedDelivery ? `<div><strong>Expected:</strong> ${formatDateReadable(po.expectedDelivery)}</div>` : ''}
+                        ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}</div>` : ''}
                         <div><strong>Currency:</strong> ${safe(po.currency)}${po.currency !== 'INR' ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
                         <div><strong>GST:</strong> ${gst.mode === 'zero-rated' ? 'Zero-rated' : gst.mode === 'intra' ? 'Intra-state' : 'Inter-state'}</div>
                     </div>
