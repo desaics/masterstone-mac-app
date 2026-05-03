@@ -6058,6 +6058,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <label>Payment Terms</label>
                 <input type="text" id="cpTplPayment_po" oninput="cpTplOnFieldChange('po'); cpMarkDirty();" placeholder="e.g. Net 45 from invoice date, or back-to-back on client payment">
             </div>
+            <!-- Phase 8K — Company-profile-level default for the per-PO
+                 "Instructions to Vendor" textarea. Lives outside the
+                 template-specific fields above (single global default,
+                 doesn't vary per template). Pre-fills new PO records;
+                 user can override or blank out per-PO. If blanked, the
+                 entire Instructions block is omitted from the PO PDF. -->
+            <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--glass-border);">
+                <label>Default Instructions to Vendor <span style="font-size:10.5px; color:var(--text-dim); font-weight:normal;">(applies to all PO templates · pre-fills the per-PO Instructions field)</span></label>
+                <textarea id="cp_defaultPOInstructions" rows="2" style="width:100%; resize:vertical; font-family:inherit;" oninput="cpMarkDirty();" placeholder="e.g. Please acknowledge receipt of this PO and confirm expected delivery timeline."></textarea>
+            </div>
         </div>
 
         <!-- Invoice Library -->
@@ -7805,7 +7815,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div>
         <label>FX Rate (to INR)</label>
-        <input type="number" id="poFxRate" step="0.01" placeholder="e.g. 83.50" oninput="updatePOTotalsDisplay()">
+        <div style="display:flex; gap:6px; align-items:stretch;">
+          <input type="number" id="poFxRate" step="0.01" placeholder="e.g. 83.50" oninput="updatePOTotalsDisplay()" style="flex:1;">
+          <button type="button" class="btn btn-ghost" onclick="fetchPOFX()" title="Fetch rate from web as of PO Issue Date" style="padding:0 12px;"><i class="fas fa-globe"></i></button>
+        </div>
         <div id="poFxRateHint" class="po-fx-hint"></div>
       </div>
     </div>
@@ -7956,6 +7969,39 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div style="margin-top:14px;">
       <label>Internal Notes (not printed)</label>
       <textarea id="poNotes" rows="2" style="width:100%; resize:vertical; font-family:inherit;"></textarea>
+    </div>
+    <!-- Phase 8K — Instructions to Vendor (replaces hardcoded
+         "Please acknowledge receipt..." text). Pre-fills from
+         companyProfile.defaultPOInstructions on new POs. If blanked,
+         the entire Instructions block is omitted from the PDF. -->
+    <div style="margin-top:14px;">
+      <label>Instructions to Vendor <span style="font-size:10.5px; color:var(--text-dim); font-weight:normal;">(printed on PO PDF · leave blank to omit the block entirely)</span></label>
+      <textarea id="poInstructionsToVendor" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="e.g. Please acknowledge receipt of this PO and confirm expected delivery timeline."></textarea>
+      <div style="margin-top:4px;">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="loadDefaultPOInstructions()" style="padding:2px 8px; font-size:11px;"><i class="fas fa-file-import"></i> Load default from Company Profile</button>
+      </div>
+    </div>
+    <!-- Phase 8K — PDF column / display toggles. All three default OFF
+         (clean PDF). Discount and GST control line item columns AND the
+         corresponding totals breakdown rows. FX toggle controls whether
+         the FX rate prints next to the currency. -->
+    <div style="margin-top:14px; padding:12px 14px; background:var(--input-bg); border:1px solid var(--glass-border); border-radius:6px;">
+      <div style="font-size:11.5px; color:var(--text-dim); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">PDF Display Options</div>
+      <div style="display:flex; gap:24px; align-items:center; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; margin:0; color:var(--text-main); white-space:nowrap;">
+          <input type="checkbox" id="poShowDiscountOnPdf" style="margin:0; cursor:pointer;">
+          <span>Show Discount % column</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; margin:0; color:var(--text-main); white-space:nowrap;">
+          <input type="checkbox" id="poShowGstOnPdf" style="margin:0; cursor:pointer;">
+          <span>Show GST % column</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; margin:0; color:var(--text-main); white-space:nowrap;">
+          <input type="checkbox" id="poShowFxOnPdf" style="margin:0; cursor:pointer;">
+          <span>Show FX rate on PDF</span>
+        </label>
+        <span style="font-size:10.5px; color:var(--text-dim); font-style:italic; margin-left:auto; white-space:nowrap;">All three hidden by default</span>
+      </div>
     </div>
     <div class="prospect-form-grid-2" style="margin-top:14px;">
       <div>
@@ -10235,6 +10281,11 @@ function initCompanyProfile() {
         defaultProposalPaymentTerms: '100% advance on PO, or as mutually agreed in writing.',
         defaultPOTerms: '1. Delivery/activation timelines as per OEM commitment.\n2. Invoice to quote our PO number for payment processing.\n3. License keys to be shared via secure channel within 48 hours of activation.\n4. All disputes subject to Mumbai jurisdiction.',
         defaultPOPaymentTerms: 'Net 45 days from invoice receipt, subject to satisfactory delivery.',
+        // Phase 8K — default text for the per-PO "Instructions to Vendor"
+        // textarea. Pre-populated on every new PO; user can override per-PO
+        // or blank it out (in which case the entire Instructions block is
+        // omitted from the PO PDF).
+        defaultPOInstructions: 'Please acknowledge receipt of this PO and confirm expected delivery timeline.',
         defaultInvoiceTerms: '1. Interest @ 18% p.a. applicable on invoices outstanding beyond the due date.\n2. TDS, if any, to be deducted as per applicable provisions of the Income Tax Act.\n3. Any dispute regarding this invoice must be raised in writing within 7 days of receipt.\n4. All disputes subject to Mumbai jurisdiction.',
         defaultInvoicePaymentTerms: '30 days from invoice date',
         defaultGSTRate: 18
@@ -12784,6 +12835,8 @@ function cpLoadForm() {
         val('cp_invoiceNextNumber', companyProfile.invoiceNextNumber);
     }
     val('cp_defaultGSTRate', companyProfile.defaultGSTRate);
+    // Phase 8K — Default PO Instructions (company-profile level)
+    val('cp_defaultPOInstructions', companyProfile.defaultPOInstructions || '');
     // Refresh live preview boxes + labels
     if (typeof cpRefreshNumberingPreviews === 'function') cpRefreshNumberingPreviews();
     // Terms Templates Library loaded via cpTplLoadLibraryAll (Phase 3 addendum — T-2)
@@ -13131,6 +13184,12 @@ function cpSave() {
         companyProfile.invoiceNextNumber = Number.isFinite(invNext) && invNext >= 1 ? invNext : 1001;
     }
     companyProfile.defaultGSTRate = valNum('cp_defaultGSTRate', 18);
+    // Phase 8K — Default PO Instructions (company-profile level). Stored
+    // even when blank so the user can deliberately have an empty default.
+    {
+        const _el = document.getElementById('cp_defaultPOInstructions');
+        if (_el) companyProfile.defaultPOInstructions = (_el.value || '').trim();
+    }
     // Terms Templates are already synced in-memory via cpTplOnFieldChange.
     // Keep legacy fields in sync with the default templates for backward compat with any code still reading them.
     if (typeof cpTplSyncLegacyDefaults === 'function') {
@@ -14581,6 +14640,32 @@ function calcExactTerm(s, e) {
     let val = diffDays / 30.437; 
     
     return parseFloat(val.toFixed(1)); 
+}
+
+// Phase 8K — Format a contract duration for human display on the PO PDF.
+// Takes either a numeric months value (from calcExactTerm) or two date
+// strings. Returns a string like "12 months", "1 year", "2 years",
+// "13 months", or "" when invalid.
+function formatTermDuration(startOrMonths, end) {
+    let months;
+    if (end === undefined) {
+        // Single-arg: already a months number
+        months = parseFloat(startOrMonths);
+    } else {
+        // Two-arg: date strings — delegate to calcExactTerm
+        months = calcExactTerm(startOrMonths, end);
+    }
+    if (!isFinite(months) || months <= 0) return '';
+    // Round to nearest int for the display (calcExactTerm returns 1-decimal precision;
+    // a 365-day year typically returns 12.0 but a leap year may return 12.0 or 12.1).
+    const rounded = Math.round(months);
+    if (rounded === 0) return '';
+    // Whole-year multiples → "1 year" / "2 years"
+    if (rounded % 12 === 0) {
+        const years = rounded / 12;
+        return years === 1 ? '1 year' : (years + ' years');
+    }
+    return rounded === 1 ? '1 month' : (rounded + ' months');
 }
 
 let customCycleCount = 0;
@@ -19872,6 +19957,88 @@ function loadDefaultPOTerms() {
     }
 }
 
+// Phase 8K — load the company-profile-level Default Instructions to Vendor
+// into the per-PO textarea. Mirrors loadDefaultPOTerms() but for the single
+// global instructions field.
+function loadDefaultPOInstructions() {
+    const el = document.getElementById('poInstructionsToVendor');
+    if (!el) return;
+    const def = (companyProfile && companyProfile.defaultPOInstructions) || '';
+    if (el.value.trim() && !confirm("Replace current Instructions with the default from Company Profile?")) return;
+    el.value = def;
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-file-import" style="color:var(--accent-cyan);"></i> Instructions loaded from Company Profile.`);
+    }
+}
+
+// Phase 8K — Fetch the PO currency → INR rate as of the PO's Issue Date
+// and populate the FX input. Mirrors the contract form's fetchHistoricalFX
+// pattern (Frankfurter primary, exchangerate.host fallback). The endpoints
+// support arbitrary base currencies, so this works for USD/GBP/EUR alike.
+// For INR POs this is a no-op (FX-to-INR is by definition 1).
+async function fetchPOFX() {
+    const ccyEl = document.getElementById('poCurrency');
+    const dateEl = document.getElementById('poIssueDate');
+    const rateEl = document.getElementById('poFxRate');
+    const hintEl = document.getElementById('poFxRateHint');
+    if (!ccyEl || !dateEl || !rateEl) return;
+    const setHint = (msg, color) => {
+        if (!hintEl) return;
+        hintEl.innerText = msg;
+        if (color) hintEl.style.color = color;
+    };
+
+    const ccy = (ccyEl.value || 'INR').toUpperCase();
+    if (ccy === 'INR') {
+        setHint("Currency is INR — FX rate not applicable.", 'var(--text-dim)');
+        return;
+    }
+    const dateVal = (dateEl.value || '').trim();
+    if (!dateVal) {
+        setHint("Set the PO Issue Date first.", 'var(--warning)');
+        return;
+    }
+    setHint("Fetching rate…", 'var(--text-dim)');
+
+    const d = new Date(dateVal);
+    const today = new Date();
+    const isFuture = d > today;
+    const endpoints = isFuture ? [
+        `https://api.frankfurter.dev/v1/latest?base=${ccy}&symbols=INR`,
+        `https://api.frankfurter.app/latest?from=${ccy}&to=INR`,
+        `https://api.exchangerate.host/latest?base=${ccy}&symbols=INR`
+    ] : [
+        `https://api.frankfurter.dev/v1/${dateVal}?base=${ccy}&symbols=INR`,
+        `https://api.frankfurter.app/${dateVal}?from=${ccy}&to=INR`,
+        `https://api.exchangerate.host/${dateVal}?base=${ccy}&symbols=INR`,
+        `https://api.frankfurter.dev/v1/latest?base=${ccy}&symbols=INR`,
+        `https://api.frankfurter.app/latest?from=${ccy}&to=INR`
+    ];
+    for (let i = 0; i < endpoints.length; i++) {
+        const url = endpoints[i];
+        try {
+            const res = await fetch(url);
+            if (!res.ok) continue;
+            const data = await res.json();
+            let rate = null, dateLabel = data.date || '';
+            if (data.rates && data.rates.INR) rate = data.rates.INR;
+            if (rate && !isNaN(rate)) {
+                rateEl.value = Number(rate).toFixed(4);
+                const isHistorical = url.includes(dateVal);
+                const isFallback = isFuture || !isHistorical;
+                const label = isFallback ? `Using latest rate${dateLabel ? ' ('+dateLabel+')' : ''}.` : `Rate fetched for ${dateLabel || dateVal}.`;
+                setHint(label, 'var(--success)');
+                if (typeof updatePOTotalsDisplay === 'function') updatePOTotalsDisplay();
+                return;
+            }
+        } catch (e) {
+            console.warn('PO FX endpoint failed:', url, e.message);
+            continue;
+        }
+    }
+    setHint("Fetch failed — enter rate manually.", 'var(--danger)');
+}
+
 // Load defaults from Company Profile (or client override) into the Invoice form (Phase 3 addendum)
 function loadDefaultInvoiceTerms() {
     const termsEl = document.getElementById('invTerms');
@@ -20703,11 +20870,19 @@ function generateProposalFromProspect(prospectId) {
            PROPOSAL PDF GENERATION + CONTRACT CONVERSION (Phase 2 Turn 3)
    ====================================================================== */
 
-// ===== Number to words (Indian system) — used on invoices/proposals =====
-function numberToIndianWords(num) {
+// ===== Number to words (Indian system) — used on invoices/proposals/POs =====
+// Options:
+//   omitCurrency: when true, drop the "Rupees" / "Paise" suffixes. Used by
+//     PO PDFs (USD/EUR/GBP) where the heading already says "Amount in
+//     Words (USD)" so repeating the currency word would be wrong/wrong-
+//     currency. Whole amounts → "Nine Thousand Only"; fractional →
+//     "Nine Thousand and 50/100 Only" (banking convention, currency-neutral).
+function numberToIndianWords(num, opts) {
+    opts = opts || {};
+    const omitCurrency = !!opts.omitCurrency;
     if (num === null || num === undefined || isNaN(num)) return '';
     num = Math.round(parseFloat(num) * 100) / 100;
-    if (num === 0) return 'Zero Rupees Only';
+    if (num === 0) return omitCurrency ? 'Zero Only' : 'Zero Rupees Only';
     const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
                   'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
                   'Seventeen', 'Eighteen', 'Nineteen'];
@@ -20719,7 +20894,7 @@ function numberToIndianWords(num) {
     }
     const intPart = Math.floor(num);
     const paise = Math.round((num - intPart) * 100);
-    if (intPart === 0 && paise === 0) return 'Zero Rupees Only';
+    if (intPart === 0 && paise === 0) return omitCurrency ? 'Zero Only' : 'Zero Rupees Only';
     let words = '';
     const crore = Math.floor(intPart / 10000000);
     const lakh = Math.floor((intPart % 10000000) / 100000);
@@ -20729,7 +20904,15 @@ function numberToIndianWords(num) {
     if (lakh > 0) words += under1000(lakh) + ' Lakh ';
     if (thousand > 0) words += under1000(thousand) + ' Thousand ';
     if (remainder > 0) words += under1000(remainder);
-    words = words.trim() + ' Rupees';
+    words = words.trim();
+    if (omitCurrency) {
+        if (paise > 0) {
+            const pStr = String(paise).padStart(2, '0');
+            return words + ' and ' + pStr + '/100 Only';
+        }
+        return words + ' Only';
+    }
+    words += ' Rupees';
     if (paise > 0) words += ' and ' + under1000(paise) + ' Paise';
     return words + ' Only';
 }
@@ -21616,6 +21799,14 @@ function poBlank() {
         notes: '',
         signatureShown: true,             // Per-PO toggle for showing the signature image on the PDF
         showOemBankOnPdf: false,          // Phase 8G — per-PO toggle: include OEM remittance/bank block on PDF
+        // Phase 8K — PDF display toggles (all default OFF) and per-PO
+        // Instructions to Vendor (pre-filled from companyProfile.defaultPOInstructions
+        // on form open by openPOForm; stored as '' here so existing pre-8K
+        // POs that lack the field load with whatever they have).
+        showDiscountOnPdf: false,
+        showGstOnPdf: false,
+        showFxOnPdf: false,
+        instructionsToVendor: '',
         linkedApCycles: [],   // [{cIdx, yIdx}] — populated when PO is issued (T4b)
         acknowledgedAt: null,
         receivedAt: null,
@@ -21984,6 +22175,14 @@ function openPOForm(id) {
         // Phase 8G — bank-on-PDF toggle
         const __bankChk = document.getElementById('poShowOemBankOnPdf');
         if (__bankChk) __bankChk.checked = !!po.showOemBankOnPdf;
+        // Phase 8K — load PDF display toggles + Instructions to Vendor
+        const __discChk = document.getElementById('poShowDiscountOnPdf');
+        if (__discChk) __discChk.checked = !!po.showDiscountOnPdf;
+        const __gstChk = document.getElementById('poShowGstOnPdf');
+        if (__gstChk) __gstChk.checked = !!po.showGstOnPdf;
+        const __fxChk = document.getElementById('poShowFxOnPdf');
+        if (__fxChk) __fxChk.checked = !!po.showFxOnPdf;
+        val('poInstructionsToVendor', po.instructionsToVendor || '');
         val('poExternalLink', po.externalLink || '');
         val('poExternalLink__local', po.externalLinkLocalPath || '');
         try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
@@ -22026,6 +22225,16 @@ function openPOForm(id) {
         // Phase 8G — bank-on-PDF toggle defaults off for new POs
         const __bankChkNew = document.getElementById('poShowOemBankOnPdf');
         if (__bankChkNew) __bankChkNew.checked = false;
+        // Phase 8K — PDF display toggles default off; Instructions
+        // pre-fills from companyProfile.defaultPOInstructions so the user
+        // doesn't have to retype standard text on every new PO.
+        const __discChkNew = document.getElementById('poShowDiscountOnPdf');
+        if (__discChkNew) __discChkNew.checked = false;
+        const __gstChkNew = document.getElementById('poShowGstOnPdf');
+        if (__gstChkNew) __gstChkNew.checked = false;
+        const __fxChkNew = document.getElementById('poShowFxOnPdf');
+        if (__fxChkNew) __fxChkNew.checked = false;
+        val('poInstructionsToVendor', (companyProfile && companyProfile.defaultPOInstructions) || '');
         val('poExternalLink', '');
         val('poExternalLink__local', '');
         try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
@@ -22496,6 +22705,11 @@ function savePOFromForm() {
     rec.signatureShown = document.getElementById('poShowSignature').value === 'true';
     // Phase 8G — bank-on-PDF toggle (per-PO)
     rec.showOemBankOnPdf = !!(document.getElementById('poShowOemBankOnPdf') || {}).checked;
+    // Phase 8K — PDF display toggles + Instructions to Vendor
+    rec.showDiscountOnPdf = !!(document.getElementById('poShowDiscountOnPdf') || {}).checked;
+    rec.showGstOnPdf = !!(document.getElementById('poShowGstOnPdf') || {}).checked;
+    rec.showFxOnPdf = !!(document.getElementById('poShowFxOnPdf') || {}).checked;
+    rec.instructionsToVendor = ((document.getElementById('poInstructionsToVendor') || {}).value || '').trim();
     rec.externalLink = (document.getElementById('poExternalLink').value || '').trim();
     rec.externalLinkLocalPath = ((document.getElementById('poExternalLink__local') || {}).value || '').trim();
     rec.isForeignOem = isOemForeign(oem);
@@ -22992,6 +23206,17 @@ function buildPOPDFHTMLDefault(po) {
         ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid #333; width:180px; margin-bottom:4px;"></div>`);
 
+    // Phase 8K — display-toggle flags read once and reused below.
+    // _isForeign mirrors the foreign-OEM check used for GST classification;
+    // when true, ALL GST mentions are suppressed on the PO PDF (item #3 of
+    // 8K) regardless of the user's GST-column toggle. Domestic POs respect
+    // the per-PO toggles independently.
+    const _showDisc = !!po.showDiscountOnPdf;
+    const _showGstCol = !!po.showGstOnPdf;
+    const _isForeign = (gst.mode === 'zero-rated');
+    const _showGst = _showGstCol && !_isForeign; // foreign OEMs always hide GST col
+    const _showFx = !!po.showFxOnPdf;
+
     const lineItemsHtml = (po.lineItems || []).map((li, idx) => {
         const { net } = computePOLineItemSubtotal(li);
         const qty = parseFloat(li.qty) || 0;
@@ -23005,20 +23230,22 @@ function buildPOPDFHTMLDefault(po) {
             </td>
             <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${fmtCcy(unit)}</td>
-            <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>
-            <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
+            ${_showDisc ? `<td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
+            ${_showGst ? `<td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid #ccc; text-align:right; vertical-align:top; font-weight:600;">${fmtCcy(net)}</td>
         </tr>`;
     }).join('');
 
+    // Phase 8K — GST breakdown rows: hidden entirely for foreign OEMs (item #3),
+    // and for domestic POs only shown when the GST column toggle is on (item #2).
     let gstRows = '';
-    if (gst.mode === 'zero-rated') {
-        gstRows = `<tr><td colspan="2" style="padding:6px 10px; text-align:center; color:#7c3aed; font-style:italic;">Zero-rated — IGST under RCM applies at invoice</td></tr>`;
-    } else if (gst.mode === 'intra') {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.cgst)}</td></tr>
-                   <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.sgst)}</td></tr>`;
-    } else {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.igst)}</td></tr>`;
+    if (!_isForeign && _showGst) {
+        if (gst.mode === 'intra') {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.cgst)}</td></tr>
+                       <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.sgst)}</td></tr>`;
+        } else {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.igst)}</td></tr>`;
+        }
     }
 
     return `
@@ -23073,10 +23300,9 @@ function buildPOPDFHTMLDefault(po) {
                     ${po.oemRefDocNo ? `<div><strong>OEM Ref:</strong> ${safe(po.oemRefDocNo)}</div>` : ''}
                     ${po.sourcedViaResellerKey ? `<div><strong>Reseller:</strong> ${safe(po.sourcedViaResellerKey)}${po.resellerPONumber ? ` <span style="color:#888;">(PO# ${safe(po.resellerPONumber)})</span>` : ''}</div>` : (po.resellerDetails ? `<div><strong>Reseller:</strong> ${safe(po.resellerDetails)}</div>` : '')}
                     ${po.expectedDelivery ? `<div><strong>Expected:</strong> ${formatDateReadable(po.expectedDelivery)}</div>` : ''}
-                    ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}</div>` : ''}
-                    <div><strong>Currency:</strong> ${safe(po.currency)}${po.currency !== 'INR' ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
-                    ${gst.buyerStateName ? `<div style="margin-top:4px;"><strong>Place of Supply:</strong> ${safe(gst.buyerStateName)}</div>` : ''}
-                    <div><strong>GST:</strong> ${gst.mode === 'zero-rated' ? 'Zero-rated (foreign)' : gst.mode === 'intra' ? 'Intra-state' : 'Inter-state (IGST)'}</div>
+                    ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}${(po.contractStartDate && po.contractEndDate) ? (() => { const _d = formatTermDuration(po.contractStartDate, po.contractEndDate); return _d ? ' (' + _d + ')' : ''; })() : ''}</div>` : ''}
+                    <div><strong>Currency:</strong> ${safe(po.currency)}${(po.currency !== 'INR' && _showFx) ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
+                    ${(!_isForeign && _showGst) ? `${gst.buyerStateName ? `<div style="margin-top:4px;"><strong>Place of Supply:</strong> ${safe(gst.buyerStateName)}</div>` : ''}<div><strong>GST:</strong> ${gst.mode === 'intra' ? 'Intra-state' : 'Inter-state (IGST)'}</div>` : ''}
                 </div>
             </td>
         </tr>
@@ -23090,12 +23316,12 @@ function buildPOPDFHTMLDefault(po) {
                 <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:left; font-weight:600;">Description</th>
                 <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:50px;">Qty</th>
                 <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:90px;">Unit Cost</th>
-                <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:60px;">Disc</th>
-                <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:60px;">GST</th>
+                ${_showDisc ? `<th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
+                ${_showGst ? `<th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
                 <th style="padding:8px 6px; border:1px solid #7c3aed; text-align:right; font-weight:600; width:100px;">Amount</th>
             </tr>
         </thead>
-        <tbody>${lineItemsHtml || '<tr><td colspan="7" style="padding:20px; text-align:center; border:1px solid #ccc; color:#999; font-style:italic;">No line items</td></tr>'}</tbody>
+        <tbody>${lineItemsHtml || `<tr><td colspan="${5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0)}" style="padding:20px; text-align:center; border:1px solid #ccc; color:#999; font-style:italic;">No line items</td></tr>`}</tbody>
     </table>
 
     <!-- TOTALS -->
@@ -23104,20 +23330,20 @@ function buildPOPDFHTMLDefault(po) {
             <td style="width:55%; vertical-align:top; padding-right:20px;">
                 <div style="background:#f3f4f6; padding:10px 14px; border-radius:4px; font-size:11px; color:#555;">
                     <div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Amount in Words (${safe(po.currency)})</div>
-                    <div style="font-style:italic; color:#222;">${safe(numberToIndianWords(totals.grandTotal))}</div>
+                    <div style="font-style:italic; color:#222;">${safe(numberToIndianWords(totals.grandTotal, { omitCurrency: true }))}</div>
                 </div>
             </td>
             <td style="width:45%; vertical-align:top;">
                 <table style="width:100%; border-collapse:collapse; font-size:12px;">
                     <tr><td style="padding:6px 10px; text-align:right; color:#666;">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.grossTotal)}</td></tr>
-                    ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:#666;">Discount</td><td style="padding:6px 10px; text-align:right; color:#b91c1c;">− ${fmtCcy(totals.discountTotal)}</td></tr>` : ''}
+                    ${(_showDisc && totals.discountTotal > 0) ? `<tr><td style="padding:6px 10px; text-align:right; color:#666;">Discount</td><td style="padding:6px 10px; text-align:right; color:#b91c1c;">− ${fmtCcy(totals.discountTotal)}</td></tr>` : ''}
                     <tr style="border-top:1px solid #ccc;"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.subtotal)}</td></tr>
                     ${gstRows}
                     <tr style="background:#7c3aed; color:#fff; font-weight:700; font-size:14px;">
                         <td style="padding:10px; text-align:right;">Grand Total</td>
                         <td style="padding:10px; text-align:right;">${fmtCcy(totals.grandTotal)}</td>
                     </tr>
-                    ${po.currency !== 'INR' ? `<tr><td style="padding:6px 10px; text-align:right; color:#666; font-size:11px;">≈ INR @ ${(po.fxRate || 1).toFixed(2)}</td><td style="padding:6px 10px; text-align:right; font-size:11px;">₹${poToInr(totals.grandTotal, po.currency, po.fxRate).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td></tr>` : ''}
+                    ${(po.currency !== 'INR' && _showFx) ? `<tr><td style="padding:6px 10px; text-align:right; color:#666; font-size:11px;">≈ INR @ ${(po.fxRate || 1).toFixed(2)}</td><td style="padding:6px 10px; text-align:right; font-size:11px;">₹${poToInr(totals.grandTotal, po.currency, po.fxRate).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td></tr>` : ''}
                 </table>
             </td>
         </tr>
@@ -23139,8 +23365,8 @@ function buildPOPDFHTMLDefault(po) {
     <table style="width:100%; margin-top:24px;">
         <tr>
             <td style="width:55%; vertical-align:top; padding-right:20px; font-size:11px; color:#666;">
-                <div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Instructions to Vendor</div>
-                <div>Please acknowledge receipt of this PO and confirm expected delivery timeline.${po.isForeignOem ? ' IGST under Reverse Charge Mechanism applies at your invoice — please issue invoice in ' + safe(po.currency) + '.' : ''}</div>
+                ${(po.instructionsToVendor && po.instructionsToVendor.trim()) ? `<div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Instructions to Vendor</div>
+                <div style="white-space:pre-line;">${safe(po.instructionsToVendor.trim())}</div>` : ''}
             </td>
             <td style="width:45%; vertical-align:top; text-align:right;">
                 <div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">For ${safe(cp.legalName || cp.tradingName || 'the Company')}</div>
@@ -23199,6 +23425,14 @@ function buildPOPDFHTMLWithLetterhead(po) {
     const COL_BODY = '#222';
     const COL_HAIRLINE = '#cbd5e1';
 
+    // Phase 8K — display-toggle flags (mirrors default renderer). Foreign
+    // OEMs always hide GST regardless of toggle.
+    const _showDisc = !!po.showDiscountOnPdf;
+    const _showGstCol = !!po.showGstOnPdf;
+    const _isForeign = (gst.mode === 'zero-rated');
+    const _showGst = _showGstCol && !_isForeign;
+    const _showFx = !!po.showFxOnPdf;
+
     const lineItemsHtml = (po.lineItems || []).map((li, idx) => {
         const { net } = computePOLineItemSubtotal(li);
         const qty = parseFloat(li.qty) || 0;
@@ -23212,20 +23446,22 @@ function buildPOPDFHTMLWithLetterhead(po) {
             </td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${fmtCcy(unit)}</td>
-            <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>
-            <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
+            ${_showDisc ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
+            ${_showGst ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600;">${fmtCcy(net)}</td>
         </tr>`;
     }).join('');
 
+    // Phase 8K — GST breakdown rows: hidden for foreign OEMs (item #3) and
+    // gated on the GST column toggle for domestic POs (item #2).
     let gstRows = '';
-    if (gst.mode === 'zero-rated') {
-        gstRows = `<tr><td colspan="2" style="padding:6px 10px; text-align:center; color:${COL_ACCENT}; font-style:italic;">Zero-rated — IGST under RCM applies at invoice</td></tr>`;
-    } else if (gst.mode === 'intra') {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.cgst)}</td></tr>
-                   <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.sgst)}</td></tr>`;
-    } else {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.igst)}</td></tr>`;
+    if (!_isForeign && _showGst) {
+        if (gst.mode === 'intra') {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.cgst)}</td></tr>
+                       <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.sgst)}</td></tr>`;
+        } else {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.igst)}</td></tr>`;
+        }
     }
 
     const signatureHtml = (po.signatureShown === false) ? "" : (cp.signatureImageDataUrl
@@ -23274,9 +23510,9 @@ function buildPOPDFHTMLWithLetterhead(po) {
                         ${po.oemRefDocNo ? `<div><strong>OEM Ref:</strong> ${safe(po.oemRefDocNo)}</div>` : ''}
                         ${po.sourcedViaResellerKey ? `<div><strong>Reseller:</strong> ${safe(po.sourcedViaResellerKey)}${po.resellerPONumber ? ` <span style="color:${COL_MUTED};">(PO# ${safe(po.resellerPONumber)})</span>` : ''}</div>` : (po.resellerDetails ? `<div><strong>Reseller:</strong> ${safe(po.resellerDetails)}</div>` : '')}
                         ${po.expectedDelivery ? `<div><strong>Expected:</strong> ${formatDateReadable(po.expectedDelivery)}</div>` : ''}
-                        ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}</div>` : ''}
-                        <div><strong>Currency:</strong> ${safe(po.currency)}${po.currency !== 'INR' ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
-                        <div><strong>GST:</strong> ${gst.mode === 'zero-rated' ? 'Zero-rated' : gst.mode === 'intra' ? 'Intra-state' : 'Inter-state'}</div>
+                        ${(po.contractStartDate || po.contractEndDate) ? `<div><strong>Contract Period:</strong> ${po.contractStartDate ? formatDateReadable(po.contractStartDate) : '—'} to ${po.contractEndDate ? formatDateReadable(po.contractEndDate) : '—'}${(po.contractStartDate && po.contractEndDate) ? (() => { const _d = formatTermDuration(po.contractStartDate, po.contractEndDate); return _d ? ' (' + _d + ')' : ''; })() : ''}</div>` : ''}
+                        <div><strong>Currency:</strong> ${safe(po.currency)}${(po.currency !== 'INR' && _showFx) ? ` @ FX ${(po.fxRate || 1).toFixed(2)}` : ''}</div>
+                        ${(!_isForeign && _showGst) ? `<div><strong>GST:</strong> ${gst.mode === 'intra' ? 'Intra-state' : 'Inter-state'}</div>` : ''}
                     </div>
                 </td>
             </tr>
@@ -23290,12 +23526,12 @@ function buildPOPDFHTMLWithLetterhead(po) {
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:left; font-weight:600;">Description</th>
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:50px;">Qty</th>
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:90px;">Unit Cost</th>
-                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">Disc</th>
-                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">GST</th>
+                    ${_showDisc ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
+                    ${_showGst ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:100px;">Amount</th>
                 </tr>
             </thead>
-            <tbody>${lineItemsHtml || `<tr><td colspan="7" style="padding:20px; text-align:center; border:1px solid ${COL_HAIRLINE}; color:${COL_MUTED}; font-style:italic;">No line items</td></tr>`}</tbody>
+            <tbody>${lineItemsHtml || `<tr><td colspan="${5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0)}" style="padding:20px; text-align:center; border:1px solid ${COL_HAIRLINE}; color:${COL_MUTED}; font-style:italic;">No line items</td></tr>`}</tbody>
         </table>
 
         <!-- TOTALS -->
@@ -23304,20 +23540,20 @@ function buildPOPDFHTMLWithLetterhead(po) {
                 <td style="width:55%; vertical-align:top; padding-right:20px;">
                     <div style="background:#f4f4f5; padding:10px 14px; border-radius:2px; font-size:11px; color:${COL_BODY}; border-left:3px solid ${COL_ACCENT};">
                         <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Amount in Words (${safe(po.currency)})</div>
-                        <div style="font-style:italic;">${safe(numberToIndianWords(totals.grandTotal))}</div>
+                        <div style="font-style:italic;">${safe(numberToIndianWords(totals.grandTotal, { omitCurrency: true }))}</div>
                     </div>
                 </td>
                 <td style="width:45%; vertical-align:top;">
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.grossTotal)}</td></tr>
-                        ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Discount</td><td style="padding:6px 10px; text-align:right;">− ${fmtCcy(totals.discountTotal)}</td></tr>` : ''}
+                        ${(_showDisc && totals.discountTotal > 0) ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Discount</td><td style="padding:6px 10px; text-align:right;">− ${fmtCcy(totals.discountTotal)}</td></tr>` : ''}
                         <tr style="border-top:1px solid ${COL_HAIRLINE};"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtCcy(totals.subtotal)}</td></tr>
                         ${gstRows}
                         <tr style="background:${COL_HEADER}; color:#fff; font-weight:700; font-size:14px;">
                             <td style="padding:10px; text-align:right;">Grand Total</td>
                             <td style="padding:10px; text-align:right;">${fmtCcy(totals.grandTotal)}</td>
                         </tr>
-                        ${po.currency !== 'INR' ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED}; font-size:11px;">≈ INR @ ${(po.fxRate || 1).toFixed(2)}</td><td style="padding:6px 10px; text-align:right; font-size:11px;">₹${poToInr(totals.grandTotal, po.currency, po.fxRate).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td></tr>` : ''}
+                        ${(po.currency !== 'INR' && _showFx) ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED}; font-size:11px;">≈ INR @ ${(po.fxRate || 1).toFixed(2)}</td><td style="padding:6px 10px; text-align:right; font-size:11px;">₹${poToInr(totals.grandTotal, po.currency, po.fxRate).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td></tr>` : ''}
                     </table>
                 </td>
             </tr>
@@ -23339,8 +23575,8 @@ function buildPOPDFHTMLWithLetterhead(po) {
         <table style="width:100%; margin-top:20px;">
             <tr>
                 <td style="width:55%; vertical-align:top; padding-right:20px; font-size:11px; color:${COL_MUTED};">
-                    <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Instructions to Vendor</div>
-                    <div style="color:${COL_BODY};">Please acknowledge receipt of this PO and confirm expected delivery timeline.${po.isForeignOem ? ' IGST under RCM applies at your invoice — please issue invoice in ' + safe(po.currency) + '.' : ''}</div>
+                    ${(po.instructionsToVendor && po.instructionsToVendor.trim()) ? `<div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Instructions to Vendor</div>
+                    <div style="color:${COL_BODY}; white-space:pre-line;">${safe(po.instructionsToVendor.trim())}</div>` : ''}
                 </td>
                 <td style="width:45%; vertical-align:top; text-align:right;">
                     <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:8px;">For ${safe(cp.legalName || cp.tradingName || 'the Company')}</div>
