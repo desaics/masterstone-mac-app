@@ -5472,10 +5472,34 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                         <span style="font-size:12px; font-weight:500; color:var(--text-main);">Itemized Pricing</span>
                     </label>
                     <div style="width:1px; height:16px; background:var(--glass-border);"></div>
-                    <button type="button" class="btn btn-ghost btn-sm" onclick="openOemMaster()"><i class="fas fa-database"></i> Master</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="openInlineNewOemPanel()" title="Add a new OEM without leaving this contract"><i class="fas fa-plus" style="color:var(--accent-cyan);"></i> New OEM</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="openOemMaster()" title="Open full OEM &amp; Product Master (you'll lose any unsaved contract changes)"><i class="fas fa-database"></i> Master</button>
                 </div>
             </div>
-            
+
+            <!-- Phase 8M — Inline "+ add OEM" mini-panel. Hidden by default;
+                 shown by openInlineNewOemPanel(). Restores the "don't lose
+                 your typing" workflow that 8E's modal-removal traded away.
+                 Writes through the same oemMasterData + saveOemMaster() path
+                 used by addNewOem() in System Controls, so the new OEM is a
+                 real, persistent master record (not a contract-local entry). -->
+            <div id="inlineNewOemPanel" style="display:none; background: var(--hover-bg); border: 1px solid var(--accent-cyan); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
+                    <i class="fas fa-plus-circle" style="color:var(--accent-cyan); font-size:14px;"></i>
+                    <span style="font-size:13px; font-weight:600; color:var(--text-main);">Add a new OEM</span>
+                    <span style="font-size:11px; color:var(--text-dim); font-weight:400;">— GST, products and other details can be filled in later via the Master button.</span>
+                </div>
+                <div style="display:flex; gap:8px; align-items:stretch; flex-wrap:wrap;">
+                    <input type="text" id="inlineNewOemName" placeholder="OEM name (e.g. Palo Alto Networks)"
+                           style="flex:1; min-width:200px; padding:7px 10px; font-size:13px;"
+                           oninput="onInlineNewOemNameInput()"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault(); addOemFromInlinePanel();} else if(event.key==='Escape'){event.preventDefault(); closeInlineNewOemPanel();}">
+                    <button type="button" id="inlineNewOemAddBtn" class="btn btn-primary btn-sm" onclick="addOemFromInlinePanel()" disabled><i class="fas fa-check"></i> Add</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="closeInlineNewOemPanel()"><i class="fas fa-times"></i> Cancel</button>
+                </div>
+                <div id="inlineNewOemMsg" style="margin-top:8px; font-size:12px;"></div>
+            </div>
+
             <div id="productBuilderInputs" style="display:flex; flex-direction:column; gap:16px;">
                 <div style="display: flex; gap: 12px; align-items: end;">
                     <div style="flex:1;">
@@ -10067,7 +10091,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8L";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8M";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -13861,6 +13885,89 @@ function addNewOem() {
         // the old modal-close hook used to do this on dismiss.
         renderProvisioningOemSelect();
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 8M — Inline "+ add OEM" panel inside the contract form.
+//
+// Restores the pre-8E "don't lose your typing" workflow. The Master button
+// still navigates to System Controls for full OEM editing; this panel is
+// for the in-flow case — you're filling out a contract, realised the OEM
+// isn't in your dropdown, and want to add it without leaving the form.
+//
+// All write through the same oemMasterData + saveOemMaster() path used by
+// addNewOem() above, so the new OEM is a real persistent master record,
+// not a one-off contract-local entry. GST/products/other metadata can be
+// filled in later via System Controls.
+// ─────────────────────────────────────────────────────────────────────────
+function openInlineNewOemPanel() {
+    const panel = document.getElementById('inlineNewOemPanel');
+    const input = document.getElementById('inlineNewOemName');
+    const msg   = document.getElementById('inlineNewOemMsg');
+    if (!panel || !input) return;
+    panel.style.display = 'block';
+    input.value = '';
+    if (msg) msg.innerHTML = '';
+    onInlineNewOemNameInput();  // refresh Add-button disabled state
+    setTimeout(function () { try { input.focus(); } catch (_) {} }, 0);
+}
+
+function closeInlineNewOemPanel() {
+    const panel = document.getElementById('inlineNewOemPanel');
+    const input = document.getElementById('inlineNewOemName');
+    const msg   = document.getElementById('inlineNewOemMsg');
+    if (input) input.value = '';
+    if (msg) msg.innerHTML = '';
+    if (panel) panel.style.display = 'none';
+}
+
+function onInlineNewOemNameInput() {
+    const input = document.getElementById('inlineNewOemName');
+    const btn   = document.getElementById('inlineNewOemAddBtn');
+    const msg   = document.getElementById('inlineNewOemMsg');
+    if (!input || !btn) return;
+    const val = (input.value || '').trim();
+    btn.disabled = (val.length === 0);
+    // Clear any prior error/success message on each keystroke
+    if (msg) msg.innerHTML = '';
+}
+
+function addOemFromInlinePanel() {
+    const input = document.getElementById('inlineNewOemName');
+    const msg   = document.getElementById('inlineNewOemMsg');
+    if (!input) return;
+    const val = (input.value || '').trim();
+    if (!val) return;  // Add button is disabled when empty, but defensive
+
+    // Duplicate guard — case-insensitive against existing master keys.
+    const existingKeys = Object.keys(oemMasterData || {});
+    const dup = existingKeys.find(k => k.toLowerCase() === val.toLowerCase());
+    if (dup) {
+        if (msg) msg.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> <span style="color:var(--warning);">An OEM named <strong>' + pEsc(dup) + '</strong> already exists. Pick a different name, or close this panel and select it from the OEM dropdown.</span>';
+        return;
+    }
+
+    // Create the OEM in master and persist (same path as addNewOem above).
+    oemMasterData[val] = [];
+    saveOemMaster();
+
+    // Refresh the contract-form OEM dropdown and auto-select the new one.
+    renderProvisioningOemSelect();
+    const sel = document.getElementById('oemSelect');
+    if (sel) {
+        sel.value = val;
+        try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    }
+
+    // If the System Controls OEM list is currently rendered (e.g. user has
+    // it open in another scroll position), keep it visually in sync.
+    if (typeof renderOemMasterList === 'function') {
+        try { renderOemMasterList(); } catch (_) {}
+    }
+
+    // Inline success confirmation, then collapse the panel after a short beat.
+    if (msg) msg.innerHTML = '<i class="fas fa-check-circle" style="color:var(--success);"></i> <span style="color:var(--success);">OEM <strong>' + pEsc(val) + '</strong> added and selected. Use the Master button later to add products and other details.</span>';
+    setTimeout(function () { closeInlineNewOemPanel(); }, 1400);
 }
 
 function deleteMasterOem(oem) {
