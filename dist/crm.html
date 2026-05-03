@@ -2676,6 +2676,24 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     margin-bottom: 4px; display: block;
 }
 .oem-meta-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+.oem-meta-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+.oem-meta-origin-toggle {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 14px; padding: 8px 12px;
+    background: rgba(0, 217, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    font-size: 12px;
+}
+.oem-meta-origin-toggle label { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--text-main); font-size: 12px; cursor: pointer; }
+.oem-meta-origin-toggle input[type="radio"] { margin: 0 4px 0 0; }
+.oem-meta-section-heading {
+    font-size: 12px; font-weight: 600; color: var(--text-main);
+    margin: 14px 0 8px; padding-top: 10px;
+    border-top: 1px dashed var(--glass-border);
+    text-transform: uppercase; letter-spacing: 0.6px;
+}
+.oem-meta-section-heading .meta-hint { font-size: 10.5px; color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 6px; }
 
 /* ============================================================= */
 /*  PROPOSALS MODULE (Phase 2 Turn 2)                            */
@@ -6114,43 +6132,164 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <!-- OEM metadata (state code, GSTIN, address, contact) — used for POs -->
                 <div class="oem-meta-panel" id="oemMetaPanel" style="display:none;">
                     <h4 style="margin:0 0 10px 0; font-size:13px; color:var(--text-main);"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> OEM Details <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(used on Purchase Orders)</span></h4>
-                    <div class="oem-meta-grid-2">
-                        <div>
-                            <label>State (for GST)</label>
-                            <select id="oemMeta_stateCode" onchange="saveActiveOemMetadata()">
-                                <!-- Populated via JS -->
-                            </select>
+
+                    <!-- Origin toggle: Domestic vs Foreign -->
+                    <div class="oem-meta-origin-toggle">
+                        <span style="color:var(--text-dim); font-weight:500;">OEM origin:</span>
+                        <label><input type="radio" name="oemMeta_origin" id="oemMeta_origin_domestic" value="domestic" onchange="onOemOriginChange()"> Domestic</label>
+                        <label><input type="radio" name="oemMeta_origin" id="oemMeta_origin_foreign" value="foreign" onchange="onOemOriginChange()"> Foreign</label>
+                    </div>
+
+                    <!-- ===== DOMESTIC tax/legal block ===== -->
+                    <div id="oemMeta_domesticOnly">
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>State (for GST)</label>
+                                <select id="oemMeta_stateCode" onchange="saveActiveOemMetadata()">
+                                    <!-- Populated via JS -->
+                                </select>
+                            </div>
+                            <div>
+                                <label>GSTIN</label>
+                                <input type="text" id="oemMeta_gstin" placeholder="e.g. 27AADCC1234F1ZX" maxlength="15" style="text-transform:uppercase;" oninput="oemMetaOnGstinInput()" onchange="saveActiveOemMetadata()">
+                            </div>
                         </div>
-                        <div>
-                            <label>GSTIN</label>
-                            <input type="text" id="oemMeta_gstin" placeholder="e.g. 27AADCC1234F1ZX" maxlength="15" style="text-transform:uppercase;" oninput="oemMetaOnGstinInput()" onchange="saveActiveOemMetadata()">
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>PAN</label>
+                                <input type="text" id="oemMeta_pan" placeholder="e.g. AADCC1234F" maxlength="10" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div></div>
                         </div>
                     </div>
-                    <div class="oem-meta-grid-2">
-                        <div>
-                            <label>PAN</label>
-                            <input type="text" id="oemMeta_pan" placeholder="e.g. AADCC1234F" maxlength="10" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+
+                    <!-- ===== FOREIGN tax/legal block ===== -->
+                    <div id="oemMeta_foreignOnly" style="display:none;">
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>Country</label>
+                                <input type="text" id="oemMeta_country" placeholder="e.g. United Kingdom" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div>
+                                <label>Tax ID / VAT No.</label>
+                                <input type="text" id="oemMeta_vatNumber" placeholder="e.g. GB411303168" onchange="saveActiveOemMetadata()">
+                            </div>
                         </div>
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>Company Reg. No.</label>
+                                <input type="text" id="oemMeta_companyRegNo" placeholder="e.g. 08562035" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div></div>
+                        </div>
+                    </div>
+
+                    <!-- ===== COMMON contact block ===== -->
+                    <div class="oem-meta-grid-2">
                         <div>
                             <label>Contact Person</label>
                             <input type="text" id="oemMeta_contactName" placeholder="e.g. Sales Manager" onchange="saveActiveOemMetadata()">
                         </div>
-                    </div>
-                    <div class="oem-meta-grid-2">
                         <div>
                             <label>Contact Email</label>
                             <input type="email" id="oemMeta_contactEmail" placeholder="sales@oem.com" onchange="saveActiveOemMetadata()">
                         </div>
+                    </div>
+                    <div class="oem-meta-grid-2">
                         <div>
                             <label>Contact Phone</label>
                             <input type="tel" id="oemMeta_contactPhone" placeholder="+91 XX XXXX XXXX" onchange="saveActiveOemMetadata()">
                         </div>
+                        <div></div>
                     </div>
-                    <div>
-                        <label>Address</label>
-                        <textarea id="oemMeta_address" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="Registered address..." onchange="saveActiveOemMetadata()"></textarea>
+
+                    <!-- ===== COMMON address block (structured) ===== -->
+                    <div class="oem-meta-grid-2">
+                        <div>
+                            <label>Address Line 1</label>
+                            <input type="text" id="oemMeta_addressLine1" placeholder="Building / street" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>Address Line 2</label>
+                            <input type="text" id="oemMeta_addressLine2" placeholder="Area / locality" onchange="saveActiveOemMetadata()">
+                        </div>
                     </div>
-                    <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:6px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
+                    <!-- Domestic city + pincode -->
+                    <div class="oem-meta-grid-2" id="oemMeta_addrDomesticTail">
+                        <div>
+                            <label>City</label>
+                            <input type="text" id="oemMeta_city" placeholder="e.g. Mumbai" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>Pincode</label>
+                            <input type="text" id="oemMeta_pincode" placeholder="e.g. 400001" maxlength="6" onchange="saveActiveOemMetadata()">
+                        </div>
+                    </div>
+                    <!-- Foreign city + state/county + postal -->
+                    <div class="oem-meta-grid-3" id="oemMeta_addrForeignTail" style="display:none;">
+                        <div>
+                            <label>City</label>
+                            <input type="text" id="oemMeta_cityForeign" placeholder="e.g. Cambridge" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>State / County</label>
+                            <input type="text" id="oemMeta_foreignState" placeholder="e.g. Cambridgeshire" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>Postal / ZIP Code</label>
+                            <input type="text" id="oemMeta_postalCode" placeholder="e.g. CB4 0DS" onchange="saveActiveOemMetadata()">
+                        </div>
+                    </div>
+
+                    <!-- ===== FOREIGN bank section ===== -->
+                    <div id="oemMeta_bankSection" style="display:none;">
+                        <div class="oem-meta-section-heading">
+                            <i class="fas fa-university" style="color:var(--accent-cyan); margin-right:6px;"></i>Bank Details<span class="meta-hint">(for remittance — kept on file as a record)</span>
+                        </div>
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>Bank Account Name</label>
+                                <input type="text" id="oemMeta_bankAccountName" placeholder="e.g. Darktrace Holdings Ltd" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div>
+                                <label>Bank Account No.</label>
+                                <input type="text" id="oemMeta_bankAccountNo" placeholder="e.g. 85367253" onchange="saveActiveOemMetadata()">
+                            </div>
+                        </div>
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>IBAN</label>
+                                <input type="text" id="oemMeta_iban" placeholder="e.g. GB67HBUK40127685367253" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div>
+                                <label>SWIFT / BIC</label>
+                                <input type="text" id="oemMeta_swift" placeholder="e.g. HBUKGB4B" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+                            </div>
+                        </div>
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>Sort Code / Routing No.</label>
+                                <input type="text" id="oemMeta_sortCode" placeholder="e.g. 401276" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div>
+                                <label>Bank Name</label>
+                                <input type="text" id="oemMeta_bankName" placeholder="e.g. HSBC" onchange="saveActiveOemMetadata()">
+                            </div>
+                        </div>
+                        <div>
+                            <label>Bank Address</label>
+                            <textarea id="oemMeta_bankAddress" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="e.g. 1 Centenary Square, Birmingham, B1 1HQ, United Kingdom" onchange="saveActiveOemMetadata()"></textarea>
+                        </div>
+                        <div style="margin-top:10px; padding:8px 10px; background:rgba(0,217,255,0.04); border:1px solid var(--glass-border); border-radius:6px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; margin:0; color:var(--text-main); font-size:12px;">
+                                <input type="checkbox" id="oemMeta_showBankOnPO" onchange="saveActiveOemMetadata()" style="margin:0;">
+                                Show bank details on Purchase Order
+                            </label>
+                            <div style="font-size:10.5px; color:var(--text-dim); margin-top:3px; margin-left:22px;">When ticked, a "Remittance" block with these bank details will be printed on the PO PDF for this OEM.</div>
+                        </div>
+                    </div>
+
+                    <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:10px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
                 </div>
             </div>
         </div>
@@ -9996,7 +10135,40 @@ function saveOemMetadata() {
 function getOemMetadata(oemName) {
     if (!oemName) return null;
     if (!oemMetadata[oemName]) {
-        oemMetadata[oemName] = { stateCode: '', gstin: '', pan: '', address: '', contactName: '', contactEmail: '', contactPhone: '' };
+        oemMetadata[oemName] = {
+            // Origin
+            origin: 'domestic',         // 'domestic' or 'foreign'
+            country: '',                // 'India' for domestic, free text for foreign
+            // Tax / legal — domestic
+            stateCode: '',
+            gstin: '',
+            pan: '',
+            // Tax / legal — foreign
+            vatNumber: '',
+            companyRegNo: '',
+            // Contact (common)
+            contactName: '',
+            contactEmail: '',
+            contactPhone: '',
+            // Address — structured (used by PO renderer)
+            addressLine1: '',
+            addressLine2: '',
+            city: '',
+            pincode: '',                // Indian pincode (domestic)
+            foreignState: '',           // State / county / region (foreign)
+            postalCode: '',             // Postal / ZIP code (foreign)
+            // Address — legacy single textarea (kept for back-compat / fallback)
+            address: '',
+            // Bank details (foreign — for remittance)
+            bankAccountName: '',
+            bankAccountNo: '',
+            iban: '',
+            swift: '',
+            sortCode: '',
+            bankName: '',
+            bankAddress: '',
+            showBankOnPO: false,
+        };
     }
     return oemMetadata[oemName];
 }
@@ -13405,19 +13577,94 @@ function renderOemMetadataPanel(oem) {
     if (!oem) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
     const meta = getOemMetadata(oem); // auto-creates blank if missing
+
+    // Determine origin: prefer explicit `meta.origin`; fall back to "country other than India"
+    const isForeign = (meta.origin === 'foreign')
+        || (!!meta.country && meta.country.trim().toLowerCase() !== 'india' && meta.country.trim() !== '');
+    const domRadio = document.getElementById('oemMeta_origin_domestic');
+    const forRadio = document.getElementById('oemMeta_origin_foreign');
+    if (domRadio) domRadio.checked = !isForeign;
+    if (forRadio) forRadio.checked = isForeign;
+
     const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-    // State dropdown
+    const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+
+    // Domestic legal/tax
     const stateSel = document.getElementById('oemMeta_stateCode');
     if (stateSel) stateSel.innerHTML = getStateOptionsHTML(meta.stateCode || '');
     setVal('oemMeta_gstin', meta.gstin);
     setVal('oemMeta_pan', meta.pan);
-    setVal('oemMeta_address', meta.address);
+
+    // Foreign legal/tax
+    setVal('oemMeta_country', meta.country);
+    setVal('oemMeta_vatNumber', meta.vatNumber);
+    setVal('oemMeta_companyRegNo', meta.companyRegNo);
+
+    // Common contact
     setVal('oemMeta_contactName', meta.contactName);
     setVal('oemMeta_contactEmail', meta.contactEmail);
     setVal('oemMeta_contactPhone', meta.contactPhone);
+
+    // Common structured address (line1/line2 used for both modes)
+    // Back-compat: if structured fields are blank but legacy `address` textarea has
+    // content, seed addressLine1 from the first line so old data isn't lost.
+    let line1 = meta.addressLine1 || '';
+    let line2 = meta.addressLine2 || '';
+    if (!line1 && !line2 && meta.address) {
+        const split = meta.address.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (split.length) line1 = split[0];
+        if (split.length > 1) line2 = split.slice(1).join(', ');
+    }
+    setVal('oemMeta_addressLine1', line1);
+    setVal('oemMeta_addressLine2', line2);
+
+    // City: shared value, mirrored into both visible-conditional inputs
+    setVal('oemMeta_city', meta.city);
+    setVal('oemMeta_cityForeign', meta.city);
+
+    // Domestic-only address tail
+    setVal('oemMeta_pincode', meta.pincode);
+    // Foreign-only address tail
+    setVal('oemMeta_foreignState', meta.foreignState);
+    setVal('oemMeta_postalCode', meta.postalCode);
+
+    // Bank
+    setVal('oemMeta_bankAccountName', meta.bankAccountName);
+    setVal('oemMeta_bankAccountNo', meta.bankAccountNo);
+    setVal('oemMeta_iban', meta.iban);
+    setVal('oemMeta_swift', meta.swift);
+    setVal('oemMeta_sortCode', meta.sortCode);
+    setVal('oemMeta_bankName', meta.bankName);
+    setVal('oemMeta_bankAddress', meta.bankAddress);
+    setChk('oemMeta_showBankOnPO', meta.showBankOnPO);
+
+    // Apply show/hide based on origin
+    applyOemOriginVisibility(isForeign);
+
     const hint = document.getElementById('oemMeta_saveHint');
     if (hint) hint.innerHTML = '<i class="fas fa-info-circle"></i> Changes save automatically.';
-    hint && (hint.style.color = 'var(--text-dim)');
+    if (hint) hint.style.color = 'var(--text-dim)';
+}
+
+// Show/hide the domestic vs foreign blocks (UI only — does not save)
+function applyOemOriginVisibility(isForeign) {
+    const dom = document.getElementById('oemMeta_domesticOnly');
+    const frn = document.getElementById('oemMeta_foreignOnly');
+    const addrDom = document.getElementById('oemMeta_addrDomesticTail');
+    const addrFor = document.getElementById('oemMeta_addrForeignTail');
+    const bnk = document.getElementById('oemMeta_bankSection');
+    if (dom) dom.style.display = isForeign ? 'none' : 'block';
+    if (frn) frn.style.display = isForeign ? 'block' : 'none';
+    if (addrDom) addrDom.style.display = isForeign ? 'none' : 'grid';
+    if (addrFor) addrFor.style.display = isForeign ? 'grid' : 'none';
+    if (bnk) bnk.style.display = isForeign ? 'block' : 'none';
+}
+
+// Triggered when the user toggles Domestic/Foreign — applies visibility and saves
+function onOemOriginChange() {
+    const isForeign = !!(document.getElementById('oemMeta_origin_foreign') && document.getElementById('oemMeta_origin_foreign').checked);
+    applyOemOriginVisibility(isForeign);
+    saveActiveOemMetadata();
 }
 
 // Save the OEM metadata from the panel back to oemMetadata storage
@@ -13425,13 +13672,48 @@ function saveActiveOemMetadata() {
     if (!activeMasterOem) return;
     const meta = getOemMetadata(activeMasterOem);
     const val = (id) => { const el = document.getElementById(id); return el ? (el.value || '').trim() : ''; };
+    const chk = (id) => { const el = document.getElementById(id); return el ? !!el.checked : false; };
+
+    const isForeign = !!(document.getElementById('oemMeta_origin_foreign') && document.getElementById('oemMeta_origin_foreign').checked);
+    meta.origin = isForeign ? 'foreign' : 'domestic';
+    // Country: hardcoded "India" for domestic so isOemForeign() works correctly
+    meta.country = isForeign ? val('oemMeta_country') : 'India';
+
+    // Domestic legal/tax (kept across toggles so user doesn't lose data)
     meta.stateCode = val('oemMeta_stateCode');
     meta.gstin = val('oemMeta_gstin').toUpperCase();
     meta.pan = val('oemMeta_pan').toUpperCase();
-    meta.address = val('oemMeta_address');
+    meta.pincode = val('oemMeta_pincode');
+
+    // Foreign legal/tax
+    meta.vatNumber = val('oemMeta_vatNumber');
+    meta.companyRegNo = val('oemMeta_companyRegNo');
+    meta.foreignState = val('oemMeta_foreignState');
+    meta.postalCode = val('oemMeta_postalCode');
+
+    // Common contact
     meta.contactName = val('oemMeta_contactName');
     meta.contactEmail = val('oemMeta_contactEmail');
     meta.contactPhone = val('oemMeta_contactPhone');
+
+    // Common address (city read from whichever input is currently visible)
+    meta.addressLine1 = val('oemMeta_addressLine1');
+    meta.addressLine2 = val('oemMeta_addressLine2');
+    meta.city = isForeign ? val('oemMeta_cityForeign') : val('oemMeta_city');
+    // Mirror city back to the other input so toggling shows the same value
+    const otherCity = document.getElementById(isForeign ? 'oemMeta_city' : 'oemMeta_cityForeign');
+    if (otherCity) otherCity.value = meta.city;
+
+    // Bank
+    meta.bankAccountName = val('oemMeta_bankAccountName');
+    meta.bankAccountNo = val('oemMeta_bankAccountNo');
+    meta.iban = val('oemMeta_iban').toUpperCase();
+    meta.swift = val('oemMeta_swift').toUpperCase();
+    meta.sortCode = val('oemMeta_sortCode');
+    meta.bankName = val('oemMeta_bankName');
+    meta.bankAddress = val('oemMeta_bankAddress');
+    meta.showBankOnPO = chk('oemMeta_showBankOnPO');
+
     saveOemMetadata();
     const hint = document.getElementById('oemMeta_saveHint');
     if (hint) {
@@ -21495,12 +21777,27 @@ function onPOOemChange() {
     const hint = document.getElementById('poOemHint');
     if (!hint) return;
     // Auto-populate OEM address from OEM Master (only if field is currently empty
-    // to respect any edits the user already made)
+    // to respect any edits the user already made). Prefers the structured
+    // address fields (line1/line2/city/state/pincode/country) and falls back to
+    // the legacy single `address` textarea if those are blank.
     const oemAddrEl = document.getElementById('poOemAddress');
     if (oemAddrEl && !oemAddrEl.value.trim() && oem && typeof oemMetadata === 'object') {
         const meta = oemMetadata[oem];
-        if (meta && meta.address) {
-            oemAddrEl.value = meta.address;
+        if (meta) {
+            const lines = [];
+            if (meta.addressLine1) lines.push(meta.addressLine1);
+            if (meta.addressLine2) lines.push(meta.addressLine2);
+            const regionalState = meta.stateCode
+                ? getStateNameByCode(meta.stateCode)
+                : (meta.foreignState || '');
+            const cityRow = [meta.city, regionalState, (meta.pincode || meta.postalCode || '')]
+                .filter(Boolean).join(', ');
+            if (cityRow) lines.push(cityRow);
+            if (meta.country && meta.country.trim().toLowerCase() !== 'india') {
+                lines.push(meta.country);
+            }
+            const assembled = lines.join('\n') || (meta.address || '');
+            if (assembled) oemAddrEl.value = assembled;
         }
     }
     if (!oem) { hint.innerHTML = ''; updatePOTotalsDisplay(); return; }
@@ -22192,6 +22489,41 @@ function generatePOFromContract(contractIdx) {
            PO PDF GENERATION + AP INTEGRATION (Phase 2 Turn 4b)
    ====================================================================== */
 
+// Builds the optional Remittance/Bank Details block for a PO PDF. Returns an
+// empty string if the OEM Master does not have showBankOnPO toggled on, or if
+// no bank fields have been filled in. Uses an esc helper that mirrors the safe()
+// inside the PO renderers (we use pEsc here so this is renderer-agnostic).
+function buildPOBankDetailsBlock(oemMeta, palette) {
+    if (!oemMeta || !oemMeta.showBankOnPO) return '';
+    const fields = [
+        ['Account Name', oemMeta.bankAccountName],
+        ['Account No.', oemMeta.bankAccountNo],
+        ['IBAN', oemMeta.iban],
+        ['SWIFT / BIC', oemMeta.swift],
+        ['Sort Code / Routing', oemMeta.sortCode],
+        ['Bank', oemMeta.bankName],
+    ].filter(pair => pair[1] && String(pair[1]).trim());
+    const bankAddr = (oemMeta.bankAddress || '').trim();
+    if (!fields.length && !bankAddr) return '';
+    const p = palette || { color: '#7c3aed', muted: '#666', body: '#222', hairline: '#ccc' };
+    const rows = fields.map(([label, value]) => `
+        <tr>
+            <td style="padding:3px 10px 3px 0; font-size:10.5px; color:${p.muted}; vertical-align:top; white-space:nowrap; width:130px;">${pEsc(label)}</td>
+            <td style="padding:3px 0; font-size:11px; color:${p.body}; vertical-align:top; font-family:'Courier New', monospace;">${pEsc(value)}</td>
+        </tr>`).join('');
+    const addrRow = bankAddr ? `
+        <tr>
+            <td style="padding:3px 10px 3px 0; font-size:10.5px; color:${p.muted}; vertical-align:top; white-space:nowrap;">Bank Address</td>
+            <td style="padding:3px 0; font-size:11px; color:${p.body}; vertical-align:top; white-space:pre-line; line-height:1.5;">${pEsc(bankAddr)}</td>
+        </tr>` : '';
+    return `
+    <div style="margin-bottom:20px; padding:12px 14px; border:1px solid ${p.hairline}; border-left:3px solid ${p.color}; border-radius:4px; background:#fafafa;">
+        <div style="font-size:12px; font-weight:700; color:${p.color}; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.6px;"><i class="fas fa-university" style="margin-right:6px;"></i>Remittance / Bank Details</div>
+        <table style="width:100%; border-collapse:collapse;"><tbody>${rows}${addrRow}</tbody></table>
+        <div style="margin-top:8px; font-size:9.5px; color:${p.muted}; font-style:italic;">Payment to be remitted to the above account. Quote PO number on remittance advice.</div>
+    </div>`;
+}
+
 // Dispatcher — picks letterhead-overlay or default renderer based on CP
 function buildPOPDFHTML(po) {
     if (!po) return '<div>Invalid PO</div>';
@@ -22215,11 +22547,22 @@ function buildPOPDFHTMLDefault(po) {
     } else if (oemMeta) {
         if (oemMeta.addressLine1) oemAddrLines.push(oemMeta.addressLine1);
         if (oemMeta.addressLine2) oemAddrLines.push(oemMeta.addressLine2);
-        const cityState = [oemMeta.city, oemMeta.stateCode ? getStateNameByCode(oemMeta.stateCode) : '', oemMeta.pincode].filter(Boolean).join(', ');
+        const regionalState = oemMeta.stateCode
+            ? getStateNameByCode(oemMeta.stateCode)
+            : (oemMeta.foreignState || '');
+        const cityState = [oemMeta.city, regionalState, (oemMeta.pincode || oemMeta.postalCode || '')].filter(Boolean).join(', ');
         if (cityState) oemAddrLines.push(cityState);
         if (oemMeta.country && oemMeta.country !== 'India') oemAddrLines.push(oemMeta.country);
+        // Back-compat: if no structured fields filled but legacy textarea has content, use that
+        if (oemAddrLines.length === 0 && oemMeta.address) {
+            oemAddrLines = oemMeta.address.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        }
     }
-    const oemGstin = oemMeta ? (oemMeta.gstin || '') : '';
+    // Tax ID: foreign OEMs use VAT/Tax No. instead of GSTIN
+    const oemIsForeign = !!(oemMeta && oemMeta.country && oemMeta.country.trim().toLowerCase() !== 'india' && oemMeta.country.trim() !== '');
+    const oemTaxIdLabel = oemIsForeign ? 'Tax ID' : 'GSTIN';
+    const oemTaxIdValue = oemMeta ? (oemIsForeign ? (oemMeta.vatNumber || '') : (oemMeta.gstin || '')) : '';
+    const oemGstin = oemTaxIdValue; // kept for any downstream references
     const oemContact = oemMeta ? [oemMeta.contactName, oemMeta.contactEmail, oemMeta.contactPhone].filter(Boolean).join(' · ') : '';
 
     const ccySymbol = { INR: '₹', USD: '$', GBP: '£', EUR: '€' };
@@ -22311,7 +22654,7 @@ function buildPOPDFHTMLDefault(po) {
                 <div style="font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">To (Vendor)</div>
                 <div style="font-size:14px; font-weight:700; color:#7c3aed; margin-bottom:4px;">${safe(po.oem)}${po.isForeignOem ? ' <span style="font-size:10px; color:#666; font-weight:400;">(Foreign supplier)</span>' : ''}</div>
                 ${oemAddrLines.map(l => `<div style="font-size:11px; color:#555;">${safe(l)}</div>`).join('')}
-                ${oemGstin ? `<div style="font-size:11px; color:#555; margin-top:4px;"><strong>GSTIN:</strong> ${safe(oemGstin)}</div>` : ''}
+                ${oemTaxIdValue ? `<div style="font-size:11px; color:#555; margin-top:4px;"><strong>${oemTaxIdLabel}:</strong> ${safe(oemTaxIdValue)}</div>` : ''}
                 ${oemContact ? `<div style="font-size:10.5px; color:#666; margin-top:3px;">${safe(oemContact)}</div>` : ''}
             </td>
             <td style="vertical-align:top; width:40%; background:#f3f4f6; padding:12px 14px; border-radius:4px;">
@@ -22380,6 +22723,9 @@ function buildPOPDFHTMLDefault(po) {
         ${po.terms ? `<div style="font-size:10.5px; color:#444; white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
     </div>` : ''}
 
+    <!-- REMITTANCE / BANK DETAILS (foreign OEM, only if OEM Master has the toggle on) -->
+    ${buildPOBankDetailsBlock(oemMeta, { color: '#7c3aed', muted: '#666', body: '#222', hairline: '#ccc' })}
+
     <!-- SIGNATORY -->
     <table style="width:100%; margin-top:24px;">
         <tr>
@@ -22418,11 +22764,20 @@ function buildPOPDFHTMLWithLetterhead(po) {
     } else if (oemMeta) {
         if (oemMeta.addressLine1) oemAddrLines.push(oemMeta.addressLine1);
         if (oemMeta.addressLine2) oemAddrLines.push(oemMeta.addressLine2);
-        const cityState = [oemMeta.city, oemMeta.stateCode ? getStateNameByCode(oemMeta.stateCode) : '', oemMeta.pincode].filter(Boolean).join(', ');
+        const regionalState = oemMeta.stateCode
+            ? getStateNameByCode(oemMeta.stateCode)
+            : (oemMeta.foreignState || '');
+        const cityState = [oemMeta.city, regionalState, (oemMeta.pincode || oemMeta.postalCode || '')].filter(Boolean).join(', ');
         if (cityState) oemAddrLines.push(cityState);
         if (oemMeta.country && oemMeta.country !== 'India') oemAddrLines.push(oemMeta.country);
+        if (oemAddrLines.length === 0 && oemMeta.address) {
+            oemAddrLines = oemMeta.address.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        }
     }
-    const oemGstin = oemMeta ? (oemMeta.gstin || '') : '';
+    const oemIsForeign = !!(oemMeta && oemMeta.country && oemMeta.country.trim().toLowerCase() !== 'india' && oemMeta.country.trim() !== '');
+    const oemTaxIdLabel = oemIsForeign ? 'Tax ID' : 'GSTIN';
+    const oemTaxIdValue = oemMeta ? (oemIsForeign ? (oemMeta.vatNumber || '') : (oemMeta.gstin || '')) : '';
+    const oemGstin = oemTaxIdValue;
 
     const ccySymbol = { INR: '₹', USD: '$', GBP: '£', EUR: '€' };
     const fmtCcy = (n) => (ccySymbol[po.currency] || '') + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -22500,7 +22855,7 @@ function buildPOPDFHTMLWithLetterhead(po) {
                     <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">To (Vendor)</div>
                     <div style="font-size:14px; font-weight:700; color:${COL_HEADER}; margin-bottom:4px;">${safe(po.oem)}${po.isForeignOem ? ' <span style="font-size:10px; color:' + COL_MUTED + '; font-weight:400;">(Foreign supplier)</span>' : ''}</div>
                     ${oemAddrLines.map(l => `<div style="font-size:11px; color:${COL_BODY};">${safe(l)}</div>`).join('')}
-                    ${oemGstin ? `<div style="font-size:11px; color:${COL_BODY}; margin-top:4px;"><strong>GSTIN:</strong> ${safe(oemGstin)}</div>` : ''}
+                    ${oemTaxIdValue ? `<div style="font-size:11px; color:${COL_BODY}; margin-top:4px;"><strong>${oemTaxIdLabel}:</strong> ${safe(oemTaxIdValue)}</div>` : ''}
                 </td>
                 <td style="vertical-align:top; width:42%; background:#f4f4f5; padding:12px 14px; border-radius:2px; border-left:3px solid ${COL_HEADER};">
                     <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Order Details</div>
@@ -22566,6 +22921,9 @@ function buildPOPDFHTMLWithLetterhead(po) {
             ${po.deliveryTerms ? `<div style="font-size:11px; margin-bottom:4px;"><strong>Delivery:</strong> ${safe(po.deliveryTerms)}</div>` : ''}
             ${po.terms ? `<div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
         </div>` : ''}
+
+        <!-- REMITTANCE / BANK DETAILS (foreign OEM, only if OEM Master has the toggle on) -->
+        ${buildPOBankDetailsBlock(oemMeta, { color: COL_HEADER, muted: COL_MUTED, body: COL_BODY, hairline: COL_HAIRLINE })}
 
         <!-- SIGNATORY -->
         <table style="width:100%; margin-top:20px;">
