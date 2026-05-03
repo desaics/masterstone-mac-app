@@ -6280,13 +6280,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                             <label>Bank Address</label>
                             <textarea id="oemMeta_bankAddress" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="e.g. 1 Centenary Square, Birmingham, B1 1HQ, United Kingdom" onchange="saveActiveOemMetadata()"></textarea>
                         </div>
-                        <div style="margin-top:10px; padding:8px 10px; background:rgba(0,217,255,0.04); border:1px solid var(--glass-border); border-radius:6px;">
-                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; margin:0; color:var(--text-main); font-size:12px;">
-                                <input type="checkbox" id="oemMeta_showBankOnPO" onchange="saveActiveOemMetadata()" style="margin:0;">
-                                Show bank details on Purchase Order
-                            </label>
-                            <div style="font-size:10.5px; color:var(--text-dim); margin-top:3px; margin-left:22px;">When ticked, a "Remittance" block with these bank details will be printed on the PO PDF for this OEM.</div>
-                        </div>
                     </div>
 
                     <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:10px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
@@ -7852,6 +7845,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <label>OEM Address</label>
       <textarea id="poOemAddress" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="OEM's registered / billing address — auto-fills from OEM Master when available"></textarea>
       <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Pre-filled from OEM Master. Edit here for this PO only (some OEMs have multiple branches).</div>
+    </div>
+    <div style="margin-top:12px; padding:10px 12px; background:rgba(0,217,255,0.04); border:1px solid var(--glass-border); border-radius:6px;">
+      <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; margin:0; color:var(--text-main); font-size:12px;">
+        <input type="checkbox" id="poShowOemBankOnPdf" style="margin:0;">
+        Include OEM remittance / bank details on PO PDF
+      </label>
+      <div style="font-size:10.5px; color:var(--text-dim); margin-top:3px; margin-left:22px;">Prints a "Remittance" block on this PO's PDF. Only shows if the OEM Master has bank details filled in for this OEM.</div>
     </div>
     <div class="prospect-form-grid-3" style="margin-top:14px;">
       <div>
@@ -10167,7 +10167,6 @@ function getOemMetadata(oemName) {
             sortCode: '',
             bankName: '',
             bankAddress: '',
-            showBankOnPO: false,
         };
     }
     return oemMetadata[oemName];
@@ -13587,7 +13586,6 @@ function renderOemMetadataPanel(oem) {
     if (forRadio) forRadio.checked = isForeign;
 
     const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-    const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
 
     // Domestic legal/tax
     const stateSel = document.getElementById('oemMeta_stateCode');
@@ -13636,7 +13634,6 @@ function renderOemMetadataPanel(oem) {
     setVal('oemMeta_sortCode', meta.sortCode);
     setVal('oemMeta_bankName', meta.bankName);
     setVal('oemMeta_bankAddress', meta.bankAddress);
-    setChk('oemMeta_showBankOnPO', meta.showBankOnPO);
 
     // Apply show/hide based on origin
     applyOemOriginVisibility(isForeign);
@@ -13672,7 +13669,6 @@ function saveActiveOemMetadata() {
     if (!activeMasterOem) return;
     const meta = getOemMetadata(activeMasterOem);
     const val = (id) => { const el = document.getElementById(id); return el ? (el.value || '').trim() : ''; };
-    const chk = (id) => { const el = document.getElementById(id); return el ? !!el.checked : false; };
 
     const isForeign = !!(document.getElementById('oemMeta_origin_foreign') && document.getElementById('oemMeta_origin_foreign').checked);
     meta.origin = isForeign ? 'foreign' : 'domestic';
@@ -13712,7 +13708,6 @@ function saveActiveOemMetadata() {
     meta.sortCode = val('oemMeta_sortCode');
     meta.bankName = val('oemMeta_bankName');
     meta.bankAddress = val('oemMeta_bankAddress');
-    meta.showBankOnPO = chk('oemMeta_showBankOnPO');
 
     saveOemMetadata();
     const hint = document.getElementById('oemMeta_saveHint');
@@ -21306,6 +21301,7 @@ function poBlank() {
         terms: '',
         notes: '',
         signatureShown: true,             // Per-PO toggle for showing the signature image on the PDF
+        showOemBankOnPdf: false,          // Phase 8G — per-PO toggle: include OEM remittance/bank block on PDF
         linkedApCycles: [],   // [{cIdx, yIdx}] — populated when PO is issued (T4b)
         acknowledgedAt: null,
         receivedAt: null,
@@ -21667,6 +21663,9 @@ function openPOForm(id) {
         val('poTerms', po.terms);
         val('poNotes', po.notes);
         val('poShowSignature', po.signatureShown === false ? 'false' : 'true');
+        // Phase 8G — bank-on-PDF toggle
+        const __bankChk = document.getElementById('poShowOemBankOnPdf');
+        if (__bankChk) __bankChk.checked = !!po.showOemBankOnPdf;
         val('poExternalLink', po.externalLink || '');
         val('poExternalLink__local', po.externalLinkLocalPath || '');
         try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
@@ -21700,6 +21699,9 @@ function openPOForm(id) {
         val('poTerms', (companyProfile && companyProfile.defaultPOTerms) || '');
         val('poNotes', '');
         val('poShowSignature', 'true');
+        // Phase 8G — bank-on-PDF toggle defaults off for new POs
+        const __bankChkNew = document.getElementById('poShowOemBankOnPdf');
+        if (__bankChkNew) __bankChkNew.checked = false;
         val('poExternalLink', '');
         val('poExternalLink__local', '');
         try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
@@ -22089,6 +22091,8 @@ function savePOFromForm() {
     rec.terms = document.getElementById('poTerms').value;
     rec.notes = document.getElementById('poNotes').value;
     rec.signatureShown = document.getElementById('poShowSignature').value === 'true';
+    // Phase 8G — bank-on-PDF toggle (per-PO)
+    rec.showOemBankOnPdf = !!(document.getElementById('poShowOemBankOnPdf') || {}).checked;
     rec.externalLink = (document.getElementById('poExternalLink').value || '').trim();
     rec.externalLinkLocalPath = ((document.getElementById('poExternalLink__local') || {}).value || '').trim();
     rec.isForeignOem = isOemForeign(oem);
@@ -22490,11 +22494,12 @@ function generatePOFromContract(contractIdx) {
    ====================================================================== */
 
 // Builds the optional Remittance/Bank Details block for a PO PDF. Returns an
-// empty string if the OEM Master does not have showBankOnPO toggled on, or if
-// no bank fields have been filled in. Uses an esc helper that mirrors the safe()
-// inside the PO renderers (we use pEsc here so this is renderer-agnostic).
-function buildPOBankDetailsBlock(oemMeta, palette) {
-    if (!oemMeta || !oemMeta.showBankOnPO) return '';
+// empty string unless the PO has the per-PO `showOemBankOnPdf` toggle on AND
+// at least one bank field has been filled in for this OEM in OEM Master.
+// Uses pEsc so the helper is renderer-agnostic.
+function buildPOBankDetailsBlock(po, oemMeta, palette) {
+    if (!po || !po.showOemBankOnPdf) return '';
+    if (!oemMeta) return '';
     const fields = [
         ['Account Name', oemMeta.bankAccountName],
         ['Account No.', oemMeta.bankAccountNo],
@@ -22723,8 +22728,8 @@ function buildPOPDFHTMLDefault(po) {
         ${po.terms ? `<div style="font-size:10.5px; color:#444; white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
     </div>` : ''}
 
-    <!-- REMITTANCE / BANK DETAILS (foreign OEM, only if OEM Master has the toggle on) -->
-    ${buildPOBankDetailsBlock(oemMeta, { color: '#7c3aed', muted: '#666', body: '#222', hairline: '#ccc' })}
+    <!-- REMITTANCE / BANK DETAILS (only if this PO has the toggle on AND OEM Master has bank data) -->
+    ${buildPOBankDetailsBlock(po, oemMeta, { color: '#7c3aed', muted: '#666', body: '#222', hairline: '#ccc' })}
 
     <!-- SIGNATORY -->
     <table style="width:100%; margin-top:24px;">
@@ -22922,8 +22927,8 @@ function buildPOPDFHTMLWithLetterhead(po) {
             ${po.terms ? `<div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
         </div>` : ''}
 
-        <!-- REMITTANCE / BANK DETAILS (foreign OEM, only if OEM Master has the toggle on) -->
-        ${buildPOBankDetailsBlock(oemMeta, { color: COL_HEADER, muted: COL_MUTED, body: COL_BODY, hairline: COL_HAIRLINE })}
+        <!-- REMITTANCE / BANK DETAILS (only if this PO has the toggle on AND OEM Master has bank data) -->
+        ${buildPOBankDetailsBlock(po, oemMeta, { color: COL_HEADER, muted: COL_MUTED, body: COL_BODY, hairline: COL_HAIRLINE })}
 
         <!-- SIGNATORY -->
         <table style="width:100%; margin-top:20px;">
