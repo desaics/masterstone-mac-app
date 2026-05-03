@@ -3097,10 +3097,10 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .ren-status-Confirmed    { background: rgba(52,211,153,0.15); color: var(--success); border-color: rgba(52,211,153,0.35); font-weight: 700; }
 .ren-status-Lost         { background: rgba(248,113,113,0.1); color: var(--danger); border-color: rgba(248,113,113,0.25); }
 
-/* Urgency timeline strip */
+/* Urgency timeline strip — 4-card grid (Phase 8N: Pipeline Gaps card joins) */
 .ren-urgency-strip {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 14px;
     margin-bottom: 24px;
 }
@@ -3133,11 +3133,91 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .ren-urgency-card.critical .ren-urgency-count { color: var(--danger); }
 .ren-urgency-card.soon     .ren-urgency-count { color: var(--warning); }
 .ren-urgency-card.upcoming .ren-urgency-count { color: var(--accent-cyan); }
+.ren-urgency-card.gaps    { border-top-color: var(--purple); }
+.ren-urgency-card.gaps .ren-urgency-count { color: var(--purple); }
 .ren-urgency-value {
     font-size: 11px; color: var(--text-dim);
     font-variant-numeric: tabular-nums;
     margin-top: 2px;
 }
+
+/* Phase 8N — Pipeline Gaps card breakdown lines (clickable filter rows) */
+.ren-gap-lines {
+    margin-top: 6px; display: flex; flex-direction: column; gap: 4px;
+}
+.ren-gap-line {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 8px;
+    font-size: 11.5px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    background: transparent;
+    transition: background 0.12s;
+    color: var(--text-main);
+}
+.ren-gap-line:hover { background: var(--hover-bg); }
+.ren-gap-line.active { background: rgba(167,139,250,0.12); border: 1px solid rgba(167,139,250,0.35); padding: 3px 7px; }
+.ren-gap-line-label {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--text-dim); font-size: 11px;
+}
+.ren-gap-line-count {
+    font-weight: 700; color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+
+/* Phase 8N — Active gap-filter pill, shown above the upcoming-renewals list
+   when a Pipeline-Gaps card line is clicked. Cleared by the × inside or by
+   changing any other filter. */
+.ren-gap-filter-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 10px 5px 12px;
+    margin-bottom: 12px;
+    background: rgba(167,139,250,0.12);
+    border: 1px solid rgba(167,139,250,0.4);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--text-main);
+}
+.ren-gap-filter-pill .pill-clear {
+    background: rgba(167,139,250,0.25);
+    border: none; border-radius: 999px;
+    width: 18px; height: 18px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-main); font-size: 11px; font-weight: 700;
+    padding: 0;
+}
+.ren-gap-filter-pill .pill-clear:hover { background: rgba(167,139,250,0.45); }
+
+/* Phase 8N — Milestone strip: three compact letter-circles per renewal row.
+   Q = Quote sent, C = Client PO received, O = OEM PO raised. Click toggles. */
+.ren-milestones {
+    display: inline-flex; gap: 4px;
+    margin-right: 6px;
+    align-items: center;
+}
+.ren-mile {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid var(--glass-border-strong);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 10.5px; font-weight: 700;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    padding: 0; line-height: 1;
+    font-family: inherit;
+}
+.ren-mile:hover { border-color: var(--accent-cyan); color: var(--text-main); transform: translateY(-1px); }
+.ren-mile.on {
+    background: var(--success);
+    border-color: var(--success);
+    color: #0b1715;
+}
+.ren-mile.on:hover { filter: brightness(1.05); }
 
 /* Renewal row — expandable list item */
 .ren-row {
@@ -5283,6 +5363,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                         <th>Client / Product</th>
                         <th style="text-align:right;">Annual Value</th>
                         <th>Days Left</th>
+                        <th>Milestones</th>
                         <th>Renewal Status</th>
                         <th style="text-align:right;">Action</th>
                     </tr>
@@ -8976,6 +9057,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <!-- Urgency strip (3 grouped cards) -->
   <div class="ren-urgency-strip" id="renUrgencyStrip"></div>
 
+  <!-- Phase 8N — Active Pipeline-Gaps filter pill (rendered when a gap-line
+       is clicked; otherwise empty). -->
+  <div id="renGapFilterPill"></div>
+
   <!-- All upcoming renewals list -->
   <div class="card" style="padding: 18px;">
     <h3 style="margin-bottom: 18px;"><i class="fas fa-list-ul" style="color:var(--accent-cyan);"></i> Upcoming Renewals</h3>
@@ -10091,7 +10176,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8M";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8N";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -27102,10 +27187,19 @@ function clearIRNForInvoice(invId) {
    Data model extensions live on contract records (no separate key).
    Fields used: renewalStatus, renewalNotes, renewalTargetDate,
                 renewalActivities[], renewalOutcome, renewalGeneratedProposalId
+   Phase 8N additions: renewalQuoteSent, renewalClientPOReceived,
+                       renewalOemPORaised — operational milestone flags
+                       distinct from the negotiation-status pill.
    ====================================================================== */
 
 const RENEWAL_STATUSES = ['Not Started', 'Contacted', 'Negotiating', 'At Risk', 'Confirmed', 'Lost'];
 let currentRenewalDetailContractIdx = null;
+
+// Phase 8N — transient gap filter (null = no filter; or one of:
+// 'NOT_QUOTED' | 'AWAITING_CLIENT_PO' | 'AWAITING_OEM_PO').
+// Set by clicking a Pipeline Gaps card line; cleared by the × pill or by
+// changing any other filter on the page.
+let currentRenewalGapFilter = null;
 
 function initRenewals() {
     // Migrate existing contracts so they have renewal fields (safe defaults)
@@ -27114,6 +27208,10 @@ function initRenewals() {
     contracts.forEach(c => {
         if (c.renewalStatus === undefined) { c.renewalStatus = 'Not Started'; changed = true; }
         if (!Array.isArray(c.renewalActivities)) { c.renewalActivities = []; changed = true; }
+        // Phase 8N — operational milestone flags. Seed false for older records.
+        if (c.renewalQuoteSent === undefined)        { c.renewalQuoteSent = false;        changed = true; }
+        if (c.renewalClientPOReceived === undefined) { c.renewalClientPOReceived = false; changed = true; }
+        if (c.renewalOemPORaised === undefined)      { c.renewalOemPORaised = false;      changed = true; }
     });
     if (changed) {
         try { safeSetStorage(JSON.stringify(contracts)); } catch (e) { console.warn("Renewals migration save:", e); }
@@ -27162,8 +27260,10 @@ function renderRenewalsPage() {
 
     const windowNum = windowFilter === 'all' ? 'all' : parseInt(windowFilter);
 
-    // Filter contracts
-    const candidates = (contracts || []).map((c, i) => ({ c, i })).filter(({ c }) => {
+    // Pass 1 — apply window/status/client/search filters (used by the urgency
+    // strip including the Pipeline Gaps card, so its breakdown always shows
+    // the full picture even while the user has clicked into one bucket).
+    const allCandidates = (contracts || []).map((c, i) => ({ c, i })).filter(({ c }) => {
         if (!c.endDate) return false;
         if (!isContractRenewable(c, windowNum)) return false;
         const st = c.renewalStatus || 'Not Started';
@@ -27177,9 +27277,19 @@ function renderRenewalsPage() {
         return true;
     });
 
+    // Pass 2 — additionally apply the Pipeline-Gaps bucket filter (used by the
+    // row list). When no gap filter is active this is identical to Pass 1.
+    const filteredCandidates = allCandidates.filter(({ c }) => {
+        if (currentRenewalGapFilter === 'NOT_QUOTED' && c.renewalQuoteSent) return false;
+        if (currentRenewalGapFilter === 'AWAITING_CLIENT_PO' && (!c.renewalQuoteSent || c.renewalClientPOReceived)) return false;
+        if (currentRenewalGapFilter === 'AWAITING_OEM_PO' && (!c.renewalClientPOReceived || c.renewalOemPORaised)) return false;
+        return true;
+    });
+
     renderRenewalKPIs();
-    renderRenewalUrgencyStrip(candidates);
-    renderRenewalList(candidates);
+    renderRenewalUrgencyStrip(allCandidates);
+    renderRenewalGapFilterPill();
+    renderRenewalList(filteredCandidates);
 }
 
 function populateRenewalClientFilter() {
@@ -27236,6 +27346,22 @@ function renderRenewalUrgencyStrip(candidates) {
         else if (days <= 90) upcoming.push({ c, i, days });
     });
     const sumVal = (list) => list.reduce((s, x) => s + getContractRenewalValue(x.c), 0);
+
+    // Phase 8N — Pipeline-Gaps breakdown across the same candidate set.
+    // The three buckets are sequential (each implies the prior milestone has
+    // happened), so the counts don't double-count the same contract.
+    let gNotQuoted = 0, gAwaitingClientPO = 0, gAwaitingOemPO = 0;
+    candidates.forEach(({ c }) => {
+        const st = c.renewalStatus || 'Not Started';
+        if (st === 'Lost') return;  // exclude lost from the operational view
+        if (!c.renewalQuoteSent) gNotQuoted++;
+        else if (!c.renewalClientPOReceived) gAwaitingClientPO++;
+        else if (!c.renewalOemPORaised) gAwaitingOemPO++;
+    });
+    const gapsTotal = gNotQuoted + gAwaitingClientPO + gAwaitingOemPO;
+    const activeGap = currentRenewalGapFilter;
+    const cls = (gapKey) => activeGap === gapKey ? ' active' : '';
+
     host.innerHTML = `
         <div class="ren-urgency-card critical">
             <div class="ren-urgency-head">
@@ -27258,7 +27384,63 @@ function renderRenewalUrgencyStrip(candidates) {
             </div>
             <div class="ren-urgency-value">${upcoming.length > 0 ? fmtMoneyShort(sumVal(upcoming)) + ' forecast' : 'Nothing forecast'}</div>
         </div>
+        <div class="ren-urgency-card gaps" title="Click a row to filter the renewals list to that bucket. Excludes Lost.">
+            <div class="ren-urgency-head">
+                <div class="ren-urgency-title"><i class="fas fa-list-check" style="color:var(--purple);"></i> Pipeline Gaps</div>
+                <div class="ren-urgency-count">${gapsTotal}</div>
+            </div>
+            <div class="ren-gap-lines">
+                <div class="ren-gap-line${cls('NOT_QUOTED')}" onclick="setRenewalGapFilter('NOT_QUOTED')" title="Renewals in window where no quote has been sent yet">
+                    <div class="ren-gap-line-label"><i class="far fa-circle" style="color:var(--text-dim); font-size:9px;"></i> Not yet quoted</div>
+                    <div class="ren-gap-line-count">${gNotQuoted}</div>
+                </div>
+                <div class="ren-gap-line${cls('AWAITING_CLIENT_PO')}" onclick="setRenewalGapFilter('AWAITING_CLIENT_PO')" title="Quote has been sent; waiting for the client's renewal PO">
+                    <div class="ren-gap-line-label"><i class="fas fa-hourglass-half" style="color:var(--warning); font-size:9px;"></i> Quote sent, awaiting client PO</div>
+                    <div class="ren-gap-line-count">${gAwaitingClientPO}</div>
+                </div>
+                <div class="ren-gap-line${cls('AWAITING_OEM_PO')}" onclick="setRenewalGapFilter('AWAITING_OEM_PO')" title="Client PO received; need to raise the OEM PO">
+                    <div class="ren-gap-line-label"><i class="fas fa-arrow-right-from-bracket" style="color:var(--accent-cyan); font-size:9px;"></i> Client PO in, OEM PO pending</div>
+                    <div class="ren-gap-line-count">${gAwaitingOemPO}</div>
+                </div>
+            </div>
+        </div>
     `;
+}
+
+// Phase 8N — Pipeline Gaps card line click handler. Sets / toggles the
+// transient gap filter and re-renders. Clicking the already-active line
+// clears the filter (toggle behaviour).
+function setRenewalGapFilter(gapKey) {
+    if (currentRenewalGapFilter === gapKey) {
+        currentRenewalGapFilter = null;
+    } else {
+        currentRenewalGapFilter = gapKey;
+    }
+    renderRenewalsPage();
+}
+
+// Phase 8N — Render (or clear) the small pill above the upcoming-renewals
+// list that shows the active gap filter and offers a × to clear it.
+function renderRenewalGapFilterPill() {
+    const host = document.getElementById('renGapFilterPill');
+    if (!host) return;
+    if (!currentRenewalGapFilter) { host.innerHTML = ''; return; }
+    const labels = {
+        'NOT_QUOTED':         'Not yet quoted',
+        'AWAITING_CLIENT_PO': 'Quote sent, awaiting client PO',
+        'AWAITING_OEM_PO':    'Client PO in, OEM PO pending'
+    };
+    const label = labels[currentRenewalGapFilter] || currentRenewalGapFilter;
+    host.innerHTML = `<div class="ren-gap-filter-pill">
+        <i class="fas fa-filter" style="color:var(--purple); font-size:11px;"></i>
+        <span>Showing: <strong>${pEsc(label)}</strong></span>
+        <button class="pill-clear" onclick="clearRenewalGapFilter()" title="Clear this filter">×</button>
+    </div>`;
+}
+
+function clearRenewalGapFilter() {
+    currentRenewalGapFilter = null;
+    renderRenewalsPage();
 }
 
 function renderRenewalList(candidates) {
@@ -27300,6 +27482,7 @@ function renderRenewalList(candidates) {
                 </div>
                 <div class="ren-row-value">${fmtMoneyShort(val)}<div style="font-size:10px; font-weight:400; color:var(--text-dim); margin-top:2px;">Annual</div></div>
                 <div class="ren-row-actions">
+                    ${renderRenewalMilestoneStrip(c, i)}
                     <select class="ren-status-select ren-status-${stSlug}" onchange="quickChangeRenewalStatus(${i}, this.value)" onclick="event.stopPropagation()" title="Change renewal status">
                         ${RENEWAL_STATUSES.map(s => `<option value="${pEsc(s)}"${s === st ? ' selected' : ''}>${pEsc(s)}</option>`).join('')}
                     </select>
@@ -27326,6 +27509,65 @@ function quickChangeRenewalStatus(contractIdx, newStatus) {
     renderRenewalsPage();
     if (typeof showProspectToast === 'function') {
         showProspectToast(`<i class="fas fa-sync-alt" style="color:var(--accent-cyan);"></i> ${pEsc(c.client)} — renewal status: <strong>${pEsc(newStatus)}</strong>`);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 8N — Renewal milestone flags (Q / C / O strip)
+//
+// Three operational booleans on each contract record:
+//   renewalQuoteSent         — proposal/quote out to client
+//   renewalClientPOReceived  — client's renewal PO arrived
+//   renewalOemPORaised       — outbound PO to OEM raised for the renewal
+//
+// These are distinct from renewalStatus (negotiation: Not Started → Lost).
+// Status answers "are we talking?". Milestones answer "is the paperwork
+// flowing?". Both layers are useful and don't replace each other.
+//
+// The strip is rendered inline in the renewal row; click each circle to
+// toggle. Toggles auto-write a small entry into renewalActivities[].
+// ─────────────────────────────────────────────────────────────────────────
+
+const RENEWAL_MILESTONES = [
+    { key: 'renewalQuoteSent',        letter: 'Q', label: 'Quote sent',         on: 'Marked Quote sent',        off: 'Cleared Quote-sent flag' },
+    { key: 'renewalClientPOReceived', letter: 'C', label: 'Client PO received', on: 'Marked Client PO received', off: 'Cleared Client-PO flag' },
+    { key: 'renewalOemPORaised',      letter: 'O', label: 'OEM PO raised',      on: 'Marked OEM PO raised',      off: 'Cleared OEM-PO flag' }
+];
+
+function renderRenewalMilestoneStrip(c, contractIdx) {
+    if (!c) return '';
+    return '<div class="ren-milestones" onclick="event.stopPropagation()">' +
+        RENEWAL_MILESTONES.map(m => {
+            const isOn = !!c[m.key];
+            const tip = `${m.label} — ${isOn ? 'done' : 'not yet'}. Click to toggle.`;
+            return `<button type="button" class="ren-mile${isOn ? ' on' : ''}" onclick="toggleRenewalMilestone(${contractIdx}, '${m.key}')" title="${pEsc(tip)}" aria-label="${pEsc(m.label)}">${m.letter}</button>`;
+        }).join('') +
+    '</div>';
+}
+
+function toggleRenewalMilestone(contractIdx, flagKey) {
+    const c = contracts[contractIdx];
+    if (!c) return;
+    const meta = RENEWAL_MILESTONES.find(m => m.key === flagKey);
+    if (!meta) return;
+    const wasOn = !!c[flagKey];
+    c[flagKey] = !wasOn;
+    c.renewalActivities = c.renewalActivities || [];
+    c.renewalActivities.push({
+        date: new Date().toISOString().slice(0, 10),
+        type: 'Milestone',
+        summary: wasOn ? meta.off : meta.on
+    });
+    try { safeSetStorage(JSON.stringify(contracts)); } catch (e) { console.warn('Contracts save:', e); }
+    renderRenewalsPage();
+    // Also keep the dashboard tile in sync if the dashboard happens to be
+    // rendered in another tab's DOM (cheap call — guarded inside).
+    if (typeof renderDashboardRenewals === 'function') {
+        try { renderDashboardRenewals(); } catch (_) {}
+    }
+    if (typeof showProspectToast === 'function') {
+        const action = wasOn ? meta.off : meta.on;
+        showProspectToast(`<i class="fas fa-list-check" style="color:var(--purple);"></i> ${pEsc(c.client)} — <strong>${pEsc(action)}</strong>`);
     }
 }
 
@@ -27630,7 +27872,7 @@ function renderDashboardRenewals() {
     });
 
     if (candidates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px 12px; color:var(--text-dim); font-style:italic;"><i class="fas fa-check-circle" style="color:var(--success); display:block; font-size:18px; margin-bottom:6px;"></i>No renewals due in the next 90 days. Your pipeline is secure!</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:24px 12px; color:var(--text-dim); font-style:italic;"><i class="fas fa-check-circle" style="color:var(--success); display:block; font-size:18px; margin-bottom:6px;"></i>No renewals due in the next 90 days. Your pipeline is secure!</td></tr>';
         return;
     }
 
@@ -27651,6 +27893,7 @@ function renderDashboardRenewals() {
             <td><strong>${getClientDisplayHtml(c.client)}</strong><div style="font-size:11px; color:var(--text-dim);">${pEsc(c.product)}</div></td>
             <td style="text-align:right; font-weight:600;">${fmtMoneyShort(val)}</td>
             <td>${daysLabel}</td>
+            <td>${renderRenewalMilestoneStrip(c, i)}</td>
             <td><span class="stage-badge ren-status-${stSlug}">${pEsc(st)}</span></td>
             <td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="showTab('renewalsTab'); setTimeout(()=>openRenewalDetail(${i}), 250);" title="Open renewal details"><i class="fas fa-arrow-right"></i> Manage</button></td>
         </tr>`;
