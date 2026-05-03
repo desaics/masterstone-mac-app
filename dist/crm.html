@@ -21277,6 +21277,95 @@ ${pdfFitScript()}`;
 
 // ===== Proposal PDF actions =====
 
+// ---------------------------------------------------------------------------
+// Phase 8J — popup-blocker fallback for document preview windows
+// ---------------------------------------------------------------------------
+// Tauri's webview blocks window.open() under some configurations, which
+// historically broke the Preview / Save-as-PDF flow for proposals, POs,
+// invoices, and attachment images/PDFs (5 call sites). Each used a pattern
+// like:
+//
+//     const w = window.open('', '_blank', '...');
+//     if (!w) { alert("Allow popups for this site"); return; }
+//     w.document.write(html);
+//     w.document.close();
+//
+// Now those sites build the full HTML document string first, then try
+// window.open. If the popup succeeds → unchanged behaviour (real browsers
+// stay on the popup path because it's nicer: resizable, can stay open
+// alongside the form). If window.open returns null (blocked) → this
+// helper renders the same HTML in an in-page modal whose body is a
+// full-bleed iframe loading the document via `srcdoc`. Print uses the
+// iframe's own window.print() so the printed PDF is byte-identical to
+// the popup version. Escape closes; an outer Close button also closes.
+//
+// One detail: the existing HTML strings include their own #toolbar with
+// in-document Close + Print buttons. When loaded inside our modal, that
+// toolbar would be redundant (and its `window.close()` Close button
+// wouldn't work in an iframe context). We inject a small `<style>` rule
+// before </head> in the iframe's HTML to hide #toolbar — purely cosmetic;
+// the existing print rules already hide #toolbar on print, so this just
+// hides it on screen while inside the modal too.
+function openPreviewInPageModal(fullHtml, opts) {
+    opts = opts || {};
+    const headerLabel = opts.headerLabel || 'Preview';
+    const subtitle = opts.subtitle || '';
+    const autoPrint = !!opts.autoPrint;
+
+    // Wipe any existing preview modal first (no stacking).
+    const stale = document.getElementById('msPreviewModal');
+    if (stale) stale.remove();
+
+    // Hide the in-iframe #toolbar (we provide our own outer one).
+    const iframeHtml = (typeof fullHtml === 'string' && fullHtml.indexOf('</head>') !== -1)
+        ? fullHtml.replace('</head>', '<style>#toolbar { display: none !important; }</style></head>')
+        : fullHtml;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'msPreviewModal';
+    overlay.style.cssText = 'position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.78); display:flex; flex-direction:column;';
+
+    const subtitleHtml = subtitle ? ` · <strong>${subtitle}</strong>` : '';
+    overlay.innerHTML = `
+        <div style="background:#1f2937; color:#fff; padding:12px 20px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15); flex:0 0 auto;">
+            <div style="font-size:14px;">${headerLabel}${subtitleHtml}</div>
+            <div>
+                <button id="msPreviewCloseBtn" style="background:#4b5563; color:#fff; border:none; padding:8px 18px; font-size:13px; border-radius:4px; cursor:pointer; font-weight:600; margin-left:8px;">Close (Esc)</button>
+                <button id="msPreviewPrintBtn" style="background:#7c3aed; color:#fff; border:none; padding:8px 18px; font-size:13px; border-radius:4px; cursor:pointer; font-weight:600; margin-left:8px;">Print / Save as PDF</button>
+            </div>
+        </div>
+        <iframe id="msPreviewIframe" style="border:none; width:100%; flex:1 1 auto; background:#eee;"></iframe>
+    `;
+    document.body.appendChild(overlay);
+
+    const iframe = document.getElementById('msPreviewIframe');
+    const closeBtn = document.getElementById('msPreviewCloseBtn');
+    const printBtn = document.getElementById('msPreviewPrintBtn');
+
+    function closeModal() {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        document.removeEventListener('keydown', escHandler);
+    }
+    function escHandler(e) { if (e.key === 'Escape') closeModal(); }
+
+    closeBtn.onclick = closeModal;
+    printBtn.onclick = function () {
+        try { iframe.contentWindow.print(); }
+        catch (e) { try { window.print(); } catch (_) {} }
+    };
+    document.addEventListener('keydown', escHandler);
+
+    iframe.srcdoc = iframeHtml;
+
+    if (autoPrint) {
+        iframe.addEventListener('load', function () {
+            setTimeout(function () {
+                try { iframe.contentWindow.print(); } catch (e) {}
+            }, 350);
+        });
+    }
+}
+
 // Opens a new window showing the rendered proposal — usable for print preview
 function previewProposalPDF(proposalId, opts) {
     opts = opts || {};
@@ -21288,11 +21377,9 @@ function previewProposalPDF(proposalId, opts) {
         if (!confirm("Your Company Profile is incomplete — the PDF will be missing fields (GSTIN, bank details, or signatory). Continue anyway?\n\nYou can fix this in System Controls → Company Profile.")) return;
     }
     const html = buildProposalPDFHTML(p);
-    const w = window.open('', '_blank', 'width=900,height=1000');
-    if (!w) { alert("Could not open preview window. Please allow popups for this site."); return; }
     const titleSuffix = autoPrint ? 'Save as PDF' : 'Preview';
     const headerLabel = autoPrint ? 'Save as PDF' : 'Proposal Preview';
-    w.document.write(`<!DOCTYPE html>
+    const fullHtml = `<!DOCTYPE html>
 <html><head>
 <title>Proposal ${pEsc(p.proposalNumber)} — ${titleSuffix}</title>
 <style>
@@ -21339,7 +21426,14 @@ window.addEventListener('load', function () {
     setTimeout(function () { window.print(); }, 250);
 });
 <` + `/script>` : ''}
-</body></html>`);
+</body></html>`;
+    const w = window.open('', '_blank', 'width=900,height=1000');
+    if (!w) {
+        // Phase 8J — popup blocked (typical in Tauri webview); fall back to in-page modal
+        openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(p.proposalNumber) + ' · ' + pEsc(p.clientName), autoPrint: autoPrint });
+        return;
+    }
+    w.document.write(fullHtml);
     w.document.close();
 }
 
@@ -22048,6 +22142,10 @@ function onPOOemChange() {
     } else {
         hint.innerHTML = `<span style="color:var(--warning);"><i class="fas fa-exclamation-triangle"></i> OEM state not set in OEM Master. GST mode undetermined — defaulting to IGST.</span>`;
     }
+    // Phase 8J — rebuild the line item product pickers so they show the
+    // new OEM's product list. Existing typed product values are preserved
+    // (only the dropdown options rebuild; the text input value is unchanged).
+    renderPOLineItems();
     updatePOTotalsDisplay();
 }
 
@@ -22192,10 +22290,32 @@ function renderPOLineItems() {
         tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:14px; color:var(--text-dim); font-style:italic;">No line items. Click <strong>+ Add Line Item</strong> to begin.</td></tr>';
         return;
     }
+    // Phase 8J — build the OEM Master product picker once per render, used in
+    // every row's Product cell. Reads from oemMasterData[currentOem]; the
+    // picker stays a UI affordance only — picking a value just writes it
+    // into the existing free-text product input, which is what actually
+    // persists to the line item record.
+    const _currentPoOem = (document.getElementById('poOem') || {}).value || '';
+    const _oemProducts = (_currentPoOem && typeof oemMasterData === 'object' && Array.isArray(oemMasterData[_currentPoOem]))
+        ? oemMasterData[_currentPoOem].slice().sort()
+        : [];
+    let _pickerHtml;
+    if (!_currentPoOem) {
+        _pickerHtml = '<select disabled style="width:100%; margin-bottom:4px; font-size:11px; color:var(--text-dim);"><option>— Select OEM first —</option></select>';
+    } else if (_oemProducts.length === 0) {
+        _pickerHtml = '<select disabled style="width:100%; margin-bottom:4px; font-size:11px; color:var(--text-dim);"><option>— No products defined for this OEM —</option></select>';
+    } else {
+        const _opts = _oemProducts.map(p => `<option value="${pEsc(p)}">${pEsc(p)}</option>`).join('');
+        // Title/header on the picker mentions the OEM so it's clear where the list comes from
+        _pickerHtml = `<select class="po-li-product-picker" style="width:100%; margin-bottom:4px; font-size:11px;" onchange="onPOLineItemPickProduct(this.dataset.idx, this.value); this.value='';" title="Pick a product from ${pEsc(_currentPoOem)} (OEM Master). The text field below stays editable."><option value="">— Pick from ${pEsc(_currentPoOem)} —</option>${_opts}</select>`;
+    }
     tbody.innerHTML = poFormLineItems.map((li, idx) => {
         const { net } = computePOLineItemSubtotal(li);
+        // Inject this row's idx into the picker via data-idx so the inline
+        // onchange handler knows which row it is.
+        const _rowPicker = _pickerHtml.replace('class="po-li-product-picker"', `class="po-li-product-picker" data-idx="${idx}"`);
         return `<tr data-po-li-idx="${idx}">
-            <td><input type="text" value="${pEsc(li.product || '')}" onchange="onPOLineItemFieldChange(${idx}, 'product', this.value)" placeholder="Product / description"></td>
+            <td>${_rowPicker}<input type="text" value="${pEsc(li.product || '')}" onchange="onPOLineItemFieldChange(${idx}, 'product', this.value)" placeholder="Product / description"></td>
             <td><input type="text" value="${pEsc(li.sku || '')}" onchange="onPOLineItemFieldChange(${idx}, 'sku', this.value)" placeholder="SKU / Part #"></td>
             <td><input type="number" value="${li.qty}" min="0" step="1" onchange="onPOLineItemFieldChange(${idx}, 'qty', this.value)"></td>
             <td><input type="number" value="${li.unitCost}" min="0" step="0.01" onchange="onPOLineItemFieldChange(${idx}, 'unitCost', this.value)"></td>
@@ -22205,6 +22325,23 @@ function renderPOLineItems() {
             <td><button class="prop-line-delete-btn" onclick="removePOLineItem(${idx})" title="Remove"><i class="fas fa-times"></i></button></td>
         </tr>`;
     }).join('');
+}
+
+// Phase 8J — Handler for the Product-cell dropdown picker. Picking a value
+// fills the row's free-text product input with that value, then resets the
+// dropdown back to the placeholder so it's ready for another pick. Does
+// NOT re-render the whole table (would lose focus on other inputs).
+function onPOLineItemPickProduct(idx, value) {
+    idx = parseInt(idx);
+    if (isNaN(idx) || !poFormLineItems[idx]) return;
+    if (!value) return; // user picked the placeholder — no-op
+    poFormLineItems[idx].product = value;
+    const row = document.querySelector(`tr[data-po-li-idx="${idx}"]`);
+    if (row) {
+        // The product text input is the first <input type="text"> in the row's first cell
+        const productInput = row.querySelector('td:first-child input[type="text"]');
+        if (productInput) productInput.value = value;
+    }
 }
 
 function addPOLineItem() { poFormLineItems.push(poLineItemBlank()); renderPOLineItems(); updatePOTotalsDisplay(); }
@@ -23234,11 +23371,9 @@ function previewPOPDF(poId, opts) {
         if (!confirm("Your Company Profile is incomplete. The PDF will be missing GSTIN/bank/signatory. Continue?")) return;
     }
     const html = buildPOPDFHTML(po);
-    const w = window.open('', '_blank', 'width=900,height=1000');
-    if (!w) { alert("Could not open preview window. Allow popups for this site."); return; }
     const titleSuffix = autoPrint ? 'Save as PDF' : 'Preview';
     const headerLabel = autoPrint ? 'Save as PDF' : 'PO Preview';
-    w.document.write(`<!DOCTYPE html>
+    const fullHtml = `<!DOCTYPE html>
 <html><head>
 <title>PO ${pEsc(po.poNumber)} — ${titleSuffix}</title>
 <style>
@@ -23271,7 +23406,14 @@ window.addEventListener('load', function () {
     setTimeout(function () { window.print(); }, 250);
 });
 <` + `/script>` : ''}
-</body></html>`);
+</body></html>`;
+    const w = window.open('', '_blank', 'width=900,height=1000');
+    if (!w) {
+        // Phase 8J — popup blocked; fall back to in-page modal
+        openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(po.poNumber) + ' · ' + pEsc(po.oem), autoPrint: autoPrint });
+        return;
+    }
+    w.document.write(fullHtml);
     w.document.close();
 }
 
@@ -25919,8 +26061,6 @@ function previewInvoicePDF(invId, opts) {
         if (!confirm("Your Company Profile is incomplete. The invoice PDF will be missing GSTIN/bank/signatory. Continue?")) return;
     }
     const html = buildInvoicePDFHTML(inv, { editableQrIrn: editableQrIrn });
-    const w = window.open('', '_blank', 'width=900,height=1000');
-    if (!w) { alert("Could not open preview window. Allow popups for this site."); return; }
     const titleSuffix = editableQrIrn ? 'Editable for CA' : (autoPrint ? 'Save as PDF' : 'Preview');
     const headerLabel = editableQrIrn ? 'Editable for CA — paste QR + type IRN, then Save as PDF'
                        : (autoPrint ? 'Save as PDF' : 'Invoice Preview');
@@ -26140,7 +26280,7 @@ function previewInvoicePDF(invId, opts) {
 })();
 <` + `/script>` : '';
 
-    w.document.write(`<!DOCTYPE html>
+    const fullHtml = `<!DOCTYPE html>
 <html><head>
 <title>Invoice ${pEsc(inv.invoiceNumber)} — ${titleSuffix}</title>
 <style>
@@ -26174,7 +26314,14 @@ window.addEventListener('load', function () {
 });
 <` + `/script>` : ''}
 ${editableScript}
-</body></html>`);
+</body></html>`;
+    const w = window.open('', '_blank', 'width=900,height=1000');
+    if (!w) {
+        // Phase 8J — popup blocked; fall back to in-page modal
+        openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(inv.invoiceNumber) + ' · ' + pEsc(inv.clientName), autoPrint: autoPrint });
+        return;
+    }
+    w.document.write(fullHtml);
     w.document.close();
 }
 
@@ -27352,22 +27499,32 @@ function previewAttachment(attId) {
     const att = info.att;
     const m = (att.mimeType || '').toLowerCase();
     if (m.startsWith('image/')) {
-        const w = window.open('', '_blank', 'width=900,height=700');
-        if (!w) { alert("Could not open preview. Enable popups for this site."); return; }
-        w.document.write(`<!DOCTYPE html><html><head><title>${pEsc(att.filename)}</title>
+        const fullHtml = `<!DOCTYPE html><html><head><title>${pEsc(att.filename)}</title>
 <style>body{margin:0;background:#1f2937;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;color:#fff;}
 .wrap{max-width:95vw;max-height:95vh;text-align:center;}
 .wrap img{max-width:100%;max-height:90vh;box-shadow:0 4px 24px rgba(0,0,0,0.4);border-radius:4px;}
 .meta{margin-top:10px;font-size:13px;color:#9ca3af;}</style>
 </head><body><div class="wrap"><img src="${att.dataUrl}" alt="${pEsc(att.filename)}">
-<div class="meta">${pEsc(att.filename)} · ${fmtBytes(att.sizeBytes)}</div></div></body></html>`);
+<div class="meta">${pEsc(att.filename)} · ${fmtBytes(att.sizeBytes)}</div></div></body></html>`;
+        const w = window.open('', '_blank', 'width=900,height=700');
+        if (!w) {
+            // Phase 8J — popup blocked; fall back to in-page modal
+            openPreviewInPageModal(fullHtml, { headerLabel: 'Image Preview', subtitle: pEsc(att.filename), autoPrint: false });
+            return;
+        }
+        w.document.write(fullHtml);
         w.document.close();
     } else if (m === 'application/pdf') {
-        const w = window.open('', '_blank', 'width=900,height=1000');
-        if (!w) { alert("Could not open preview. Enable popups for this site."); return; }
-        w.document.write(`<!DOCTYPE html><html><head><title>${pEsc(att.filename)}</title>
+        const fullHtml = `<!DOCTYPE html><html><head><title>${pEsc(att.filename)}</title>
 <style>body{margin:0;}iframe{border:none;width:100vw;height:100vh;}</style>
-</head><body><iframe src="${att.dataUrl}"></iframe></body></html>`);
+</head><body><iframe src="${att.dataUrl}"></iframe></body></html>`;
+        const w = window.open('', '_blank', 'width=900,height=1000');
+        if (!w) {
+            // Phase 8J — popup blocked; fall back to in-page modal
+            openPreviewInPageModal(fullHtml, { headerLabel: 'PDF Preview', subtitle: pEsc(att.filename), autoPrint: false });
+            return;
+        }
+        w.document.write(fullHtml);
         w.document.close();
     } else {
         if (confirm(`Preview is only supported for images and PDFs. Download "${att.filename}" instead?`)) {
