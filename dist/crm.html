@@ -2665,7 +2665,8 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     font-size: 11.5px;
 }
 
-/* OEM metadata panel (inside OEM Master modal) */
+/* OEM metadata panel (inside the OEM & Product Master inline editor on
+   System Controls → OEM sub-tab) */
 .oem-meta-panel {
     margin-top: 14px; padding-top: 14px;
     border-top: 1px solid var(--glass-border);
@@ -6079,13 +6080,80 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         </div>
     </div>
 
-    <!-- #14 Batch 5 — OEM & Product Master launcher card (sub-tab "oem"). -->
-    <div class="card" data-syscat="oem" style="margin-top:0; border-top: 3px solid var(--success);">
+    <!-- #14 Batch 5 — OEM & Product Master inline editor (sub-tab "oem").
+         Phase B-fix-8-E (2026-05-03): was a launcher card opening a modal popup;
+         now the editor lives directly in the sub-tab, no popup. The two-pane
+         layout (vendors left, products + OEM details right) is unchanged from
+         the old modal — only the wrapping moved. openOemMaster() now navigates
+         to this sub-tab and scrolls into view instead of opening a popup. -->
+    <div class="card" data-syscat="oem" id="oemMasterCard" style="margin-top:0; border-top: 3px solid var(--success);">
         <h3><i class="fas fa-database" style="color:var(--success);"></i> OEM &amp; Product Master</h3>
-        <p class="control-info-text" style="margin-bottom:14px;">
+        <p class="control-info-text" style="margin-bottom:20px;">
             Maintain the central catalog of OEMs (vendors / principals) and the products you sell from each. Used to populate dropdowns across prospects, proposals, POs, and invoices. Includes contact info, registered address, and optional default GST treatment.
         </p>
-        <button class="btn btn-primary" onclick="openOemMaster()" style="min-width:240px;"><i class="fas fa-external-link-alt"></i> Open OEM &amp; Product Master</button>
+
+        <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
+            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
+                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Vendors / OEMs</h4>
+                <div style="display:flex; gap:8px; margin-bottom:16px;">
+                    <input type="text" id="newOemName" placeholder="E.g., Cloudflare">
+                    <button class="btn btn-primary" onclick="addNewOem()"><i class="fas fa-plus"></i></button>
+                </div>
+                <div id="oemListContainer" class="scroll-container" style="max-height: 300px; border:1px solid var(--glass-border); border-radius:6px;"></div>
+            </div>
+            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
+                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Products for <span id="masterSelectedOem" style="color:var(--accent-cyan);">Select an OEM</span></h4>
+                <div style="display:flex; gap:8px; margin-bottom:16px;">
+                    <input type="text" id="newProductName" placeholder="E.g., Web Application Firewall" disabled>
+                    <button class="btn btn-primary" id="addProductBtn" onclick="addNewProductToMaster()" disabled><i class="fas fa-plus"></i></button>
+                </div>
+                <div id="masterProductListContainer" class="scroll-container" style="max-height: 200px; border:1px solid var(--glass-border); border-radius:6px; padding:10px;">
+                    <span style="color:var(--text-dim); font-size:12px; font-style:italic;">Select an OEM from the left to view and manage products.</span>
+                </div>
+
+                <!-- OEM metadata (state code, GSTIN, address, contact) — used for POs -->
+                <div class="oem-meta-panel" id="oemMetaPanel" style="display:none;">
+                    <h4 style="margin:0 0 10px 0; font-size:13px; color:var(--text-main);"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> OEM Details <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(used on Purchase Orders)</span></h4>
+                    <div class="oem-meta-grid-2">
+                        <div>
+                            <label>State (for GST)</label>
+                            <select id="oemMeta_stateCode" onchange="saveActiveOemMetadata()">
+                                <!-- Populated via JS -->
+                            </select>
+                        </div>
+                        <div>
+                            <label>GSTIN</label>
+                            <input type="text" id="oemMeta_gstin" placeholder="e.g. 27AADCC1234F1ZX" maxlength="15" style="text-transform:uppercase;" oninput="oemMetaOnGstinInput()" onchange="saveActiveOemMetadata()">
+                        </div>
+                    </div>
+                    <div class="oem-meta-grid-2">
+                        <div>
+                            <label>PAN</label>
+                            <input type="text" id="oemMeta_pan" placeholder="e.g. AADCC1234F" maxlength="10" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>Contact Person</label>
+                            <input type="text" id="oemMeta_contactName" placeholder="e.g. Sales Manager" onchange="saveActiveOemMetadata()">
+                        </div>
+                    </div>
+                    <div class="oem-meta-grid-2">
+                        <div>
+                            <label>Contact Email</label>
+                            <input type="email" id="oemMeta_contactEmail" placeholder="sales@oem.com" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div>
+                            <label>Contact Phone</label>
+                            <input type="tel" id="oemMeta_contactPhone" placeholder="+91 XX XXXX XXXX" onchange="saveActiveOemMetadata()">
+                        </div>
+                    </div>
+                    <div>
+                        <label>Address</label>
+                        <textarea id="oemMeta_address" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="Registered address..." onchange="saveActiveOemMetadata()"></textarea>
+                    </div>
+                    <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:6px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Attachments Storage Management (Phase 3 ATT-1) -->
@@ -9670,78 +9738,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     </div>
 </div>
 
-<div id="oemMasterModal" class="modal">
-    <div class="modal-content" style="max-width: 800px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-            <h2 style="color: var(--text-main); margin:0;"><i class="fas fa-database"></i> OEM & Product Master</h2>
-            <button class="btn btn-ghost" onclick="closeOemMaster()" style="border:none; background:transparent; padding:0;"><i class="fas fa-times" style="font-size: 20px;"></i></button>
-        </div>
-        <p style="color:var(--text-dim); font-size:13px; margin-top:-16px; margin-bottom:24px;">Manage the list of available vendors and their respective product lines for dropdown selection.</p>
-        
-        <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
-            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
-                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Vendors / OEMs</h4>
-                <div style="display:flex; gap:8px; margin-bottom:16px;">
-                    <input type="text" id="newOemName" placeholder="E.g., Cloudflare">
-                    <button class="btn btn-primary" onclick="addNewOem()"><i class="fas fa-plus"></i></button>
-                </div>
-                <div id="oemListContainer" class="scroll-container" style="max-height: 300px; border:1px solid var(--glass-border); border-radius:6px;"></div>
-            </div>
-            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
-                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Products for <span id="masterSelectedOem" style="color:var(--accent-cyan);">Select an OEM</span></h4>
-                <div style="display:flex; gap:8px; margin-bottom:16px;">
-                    <input type="text" id="newProductName" placeholder="E.g., Web Application Firewall" disabled>
-                    <button class="btn btn-primary" id="addProductBtn" onclick="addNewProductToMaster()" disabled><i class="fas fa-plus"></i></button>
-                </div>
-                <div id="masterProductListContainer" class="scroll-container" style="max-height: 200px; border:1px solid var(--glass-border); border-radius:6px; padding:10px;">
-                    <span style="color:var(--text-dim); font-size:12px; font-style:italic;">Select an OEM from the left to view and manage products.</span>
-                </div>
-
-                <!-- OEM metadata (state code, GSTIN, address, contact) — used for POs -->
-                <div class="oem-meta-panel" id="oemMetaPanel" style="display:none;">
-                    <h4 style="margin:0 0 10px 0; font-size:13px; color:var(--text-main);"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> OEM Details <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(used on Purchase Orders)</span></h4>
-                    <div class="oem-meta-grid-2">
-                        <div>
-                            <label>State (for GST)</label>
-                            <select id="oemMeta_stateCode" onchange="saveActiveOemMetadata()">
-                                <!-- Populated via JS -->
-                            </select>
-                        </div>
-                        <div>
-                            <label>GSTIN</label>
-                            <input type="text" id="oemMeta_gstin" placeholder="e.g. 27AADCC1234F1ZX" maxlength="15" style="text-transform:uppercase;" oninput="oemMetaOnGstinInput()" onchange="saveActiveOemMetadata()">
-                        </div>
-                    </div>
-                    <div class="oem-meta-grid-2">
-                        <div>
-                            <label>PAN</label>
-                            <input type="text" id="oemMeta_pan" placeholder="e.g. AADCC1234F" maxlength="10" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
-                        </div>
-                        <div>
-                            <label>Contact Person</label>
-                            <input type="text" id="oemMeta_contactName" placeholder="e.g. Sales Manager" onchange="saveActiveOemMetadata()">
-                        </div>
-                    </div>
-                    <div class="oem-meta-grid-2">
-                        <div>
-                            <label>Contact Email</label>
-                            <input type="email" id="oemMeta_contactEmail" placeholder="sales@oem.com" onchange="saveActiveOemMetadata()">
-                        </div>
-                        <div>
-                            <label>Contact Phone</label>
-                            <input type="tel" id="oemMeta_contactPhone" placeholder="+91 XX XXXX XXXX" onchange="saveActiveOemMetadata()">
-                        </div>
-                    </div>
-                    <div>
-                        <label>Address</label>
-                        <textarea id="oemMeta_address" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="Registered address..." onchange="saveActiveOemMetadata()"></textarea>
-                    </div>
-                    <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:6px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Phase B-fix-8-E (2026-05-03): the OEM & Product Master modal popup that
+     used to live here was retired. Editing now happens inline on the
+     System Controls → OEM & Product Master sub-tab. openOemMaster()
+     navigates to that sub-tab; closeOemMaster() removed (nothing to close). -->
 
 <script>
 
@@ -12989,6 +12989,13 @@ function initOemMaster() {
         saveOemMaster();
     }
     renderProvisioningOemSelect();
+    // Phase B-fix-8-E: also populate the inline OEM Master editor on the
+    // System Controls → OEM sub-tab. The element is in the DOM from page
+    // load (it used to be inside a hidden modal; now it's inside a hidden
+    // sub-tab card). renderOemMasterList writes into oemListContainer.
+    if (document.getElementById('oemListContainer')) {
+        renderOemMasterList();
+    }
 }
 
 function saveOemMaster() {
@@ -13333,18 +13340,28 @@ function updateHiddenProductString() {
     document.getElementById('product').value = strArr.join(' + ');
 }
 
-// --- OEM MASTER MODAL FUNCTIONS ---
+// --- OEM MASTER NAVIGATION (Phase B-fix-8-E) ---
+// Was: open the OEM Master modal popup. Now: navigate to System Controls →
+// OEM & Product Master sub-tab, where the editor lives inline. Three places
+// still call this — the contract editor's "Master" button, the prospect
+// form's "Manage OEMs" link, and the prospect form's empty-state hint —
+// they all keep working unchanged, just land on the inline editor instead
+// of a popup.
 function openOemMaster() {
-    document.getElementById('oemMasterModal').style.display = 'flex';
-    renderOemMasterList();
-    // Hide OEM metadata panel until an OEM is selected
-    const metaPanel = document.getElementById('oemMetaPanel');
-    if (metaPanel) metaPanel.style.display = 'none';
-}
-
-function closeOemMaster() {
-    document.getElementById('oemMasterModal').style.display = 'none';
-    renderProvisioningOemSelect(); // Refresh dropdowns
+    showTab('backupTab');
+    showSysCtrlSubTab('oem');
+    // Wait for the sub-tab show/hide to settle before scrolling.
+    setTimeout(() => {
+        renderOemMasterList();
+        const card = document.getElementById('oemMasterCard');
+        if (card && typeof card.scrollIntoView === 'function') {
+            card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        // Hide OEM metadata panel until an OEM is selected (mirrors old
+        // modal-open behaviour — keeps UI predictable on each entry).
+        const metaPanel = document.getElementById('oemMetaPanel');
+        if (metaPanel && !activeMasterOem) metaPanel.style.display = 'none';
+    }, 50);
 }
 
 function renderOemMasterList() {
@@ -13468,6 +13485,9 @@ function addNewOem() {
         input.value = '';
         renderOemMasterList();
         selectMasterOem(val);
+        // Phase B-fix-8-E: refresh contract-form OEM dropdown immediately;
+        // the old modal-close hook used to do this on dismiss.
+        renderProvisioningOemSelect();
     }
 }
 
@@ -13491,6 +13511,8 @@ function deleteMasterOem(oem) {
             if (metaPanel) metaPanel.style.display = 'none';
         }
         renderOemMasterList();
+        // Phase B-fix-8-E: refresh contract-form OEM dropdown immediately.
+        renderProvisioningOemSelect();
     }
 }
 
@@ -13503,6 +13525,10 @@ function addNewProductToMaster() {
              saveOemMaster();
              input.value = '';
              renderMasterProductList();
+             // Phase B-fix-8-E: refresh contract-form Product dropdown
+             // immediately (renderProvisioningOemSelect() also re-renders
+             // the product list via its renderProductSelect() tail call).
+             renderProvisioningOemSelect();
         }
     }
 }
@@ -13512,6 +13538,8 @@ function deleteMasterProduct(oem, idx) {
         oemMasterData[oem].splice(idx, 1);
         saveOemMaster();
         renderMasterProductList();
+        // Phase B-fix-8-E: refresh contract-form Product dropdown immediately.
+        renderProvisioningOemSelect();
     }
 }
 
