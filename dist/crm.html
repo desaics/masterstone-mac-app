@@ -311,17 +311,13 @@ body.nav-collapsed #sidebarCollapseBtn {
     margin: 0 auto;
 }
 
-.light-mode .brand-logo-img {
-    /* Light mode: use natural logo colors */
-}
-
-body:not(.light-mode) .brand-logo-img {
-    /* Dark mode: invert grayscale logos so they're visible on dark sidebar.
-       The embedded default logo is monochrome grey-on-white, so inversion works cleanly.
-       User-uploaded color logos won't get inverted thanks to the has-color class. */
-    filter: invert(1) brightness(1.15) contrast(1.05);
-}
-body:not(.light-mode) .brand-logo-img.has-color {
+/* Hotfix 8Z.1 (Bug 2): logo theme adaptation now done via src-swap, not CSS filter.
+   The sidebar logo image carries data-light-src and data-dark-src attributes;
+   toggleTheme() and syncSidebarLogo() pick the right src based on body class.
+   For user-uploaded company logos (`.has-color`), we apply NO filter in either
+   theme — the user-uploaded image is shown as-is. */
+body.dark-mode .brand-logo-img.has-color,
+.brand-logo-img.has-color {
     filter: none;
 }
 
@@ -10194,18 +10190,27 @@ function toggleTheme() {
 }
 
 // Theme init — default is LIGHT. Apply .dark-mode class only if user previously chose dark.
+// Hotfix 8Z.1 (Bug 3): always normalize button label based on resulting theme.
 (function initTheme() {
     var saved = null;
     try { saved = localStorage.getItem('ms_theme'); } catch (e) {}
     if (saved === 'dark') {
         document.body.classList.add('dark-mode');
-        var btn = document.getElementById('themeToggleBtn');
-        if (btn) btn.innerHTML = '<i class="fas fa-sun"></i> Light Mode';
     }
-    // Apply dark logo if dark mode is active
+    // Always set the button label correctly. Button shows the action that
+    // clicking it will perform (so "Dark Mode" when currently in light, etc.).
+    var isDark = document.body.classList.contains('dark-mode');
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) {
+        btn.innerHTML = isDark
+            ? '<i class="fas fa-sun"></i> Light Mode'
+            : '<i class="fas fa-moon"></i> Dark Mode';
+    }
+    // Set the sidebar logo src to match the initial theme.
     var logo = document.getElementById('sidebarLogo');
-    if (logo && document.body.classList.contains('dark-mode')) {
-        if (logo.dataset.darkSrc) logo.src = logo.dataset.darkSrc;
+    if (logo) {
+        var wantSrc = isDark ? logo.dataset.darkSrc : logo.dataset.lightSrc;
+        if (wantSrc && logo.src !== wantSrc) logo.src = wantSrc;
     }
 })();
 
@@ -13156,7 +13161,14 @@ function cpRenderLogoPreview() {
 }
 
 // Sync the sidebar logo image. Uses user-uploaded logo from Company Profile
-// if present, otherwise keeps the embedded default Masterstone logo.
+// if present, otherwise picks the embedded default Masterstone lockup variant
+// matching the current theme (light or dark).
+//
+// Hotfix 8Z.1 (Bug 2): when no company logo is set, restore the correct
+// theme-matched variant from data-light-src / data-dark-src attributes.
+// Previously this function did nothing in the no-logo branch, which meant
+// after toggleTheme swapped the src, any later call to syncSidebarLogo would
+// strip the .has-color class but leave the wrong-theme variant showing.
 function syncSidebarLogo() {
     const img = document.getElementById('sidebarLogo');
     const fallback = document.getElementById('fallback-logo');
@@ -13168,8 +13180,13 @@ function syncSidebarLogo() {
         img.style.display = 'block';
         if (fallback) fallback.style.display = 'none';
     } else {
-        // Keep default embedded logo (already set via src in HTML)
+        // No company logo — use the embedded Masterstone lockup, theme-aware.
         img.classList.remove('has-color');
+        const isDark = document.body.classList.contains('dark-mode');
+        const wantSrc = isDark ? img.dataset.darkSrc : img.dataset.lightSrc;
+        if (wantSrc && img.src !== wantSrc) {
+            img.src = wantSrc;
+        }
         img.style.display = 'block';
         if (fallback) fallback.style.display = 'none';
     }
@@ -21527,9 +21544,34 @@ function buildProposalPDFHTML(proposal) {
 //   document.body.appendChild(wrapper);
 //   // ... html2pdf ... in BOTH .then() and .catch(): cleanupCss(); document.body.removeChild(wrapper);
 function _pdfIsolateWrapper(wrapper, htmlContent) {
-    // Wrapper-level base: gives inheritance a sensible default (var(--text-main) text on
-    // var(--glass-panel)) for any descendant chain that doesn't set its own color.
-    wrapper.style.color = 'var(--text-main)';
+    // ====================================================================
+    // Hotfix 8Z.1 (Bug 1): force light-theme CSS vars on the wrapper itself.
+    // html2pdf uses html2canvas which DOES NOT respect @media print, so our
+    // print override never fires for PDF generation. Variables defined here
+    // as inline style win over :root and body.dark-mode declarations.
+    // PDFs are always rendered with the light palette regardless of UI theme.
+    // ====================================================================
+    wrapper.style.setProperty('--bg-deep', '#ffffff');
+    wrapper.style.setProperty('--glass-panel', '#ffffff');
+    wrapper.style.setProperty('--glass-border', 'rgba(20, 20, 15, 0.10)');
+    wrapper.style.setProperty('--glass-border-strong', 'rgba(20, 20, 15, 0.20)');
+    wrapper.style.setProperty('--text-main', '#14140f');
+    wrapper.style.setProperty('--text-dim', '#6b7280');
+    wrapper.style.setProperty('--text-subtle', '#9ca3af');
+    wrapper.style.setProperty('--detail-bg', '#f5f5f5');
+    wrapper.style.setProperty('--accent-cyan', '#0c5e5b');
+    wrapper.style.setProperty('--accent-blue', '#084744');
+    wrapper.style.setProperty('--success', '#1e6135');
+    wrapper.style.setProperty('--danger', '#8a2424');
+    wrapper.style.setProperty('--warning', '#8a4d12');
+    wrapper.style.setProperty('--purple', '#614b8a');
+    wrapper.style.setProperty('--info', '#2a4a7a');
+    wrapper.style.setProperty('--accent-tint-low', 'rgba(12, 94, 91, 0.08)');
+    wrapper.style.setProperty('--accent-tint-mid', 'rgba(12, 94, 91, 0.15)');
+    wrapper.style.setProperty('--accent-tint-strong', 'rgba(12, 94, 91, 0.25)');
+    // Now the standard wrapper styling — color ink on white, sensible default
+    // for any descendant chain that doesn't set its own color.
+    wrapper.style.color = '#14140f';
     wrapper.style.background = '#ffffff';
     wrapper.style.fontFamily = 'Helvetica, Arial, sans-serif';
     wrapper.style.fontSize = '12px';
