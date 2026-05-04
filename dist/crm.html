@@ -4807,6 +4807,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             var backupMode        = s['ms_app__backup_destination_mode']  || 'local';
             var backupRetention   = s['ms_app__backup_retention']          || '14';
             var conflictGuard     = s['ms_app__conflict_guard_enabled']  !== '0'; // default on
+            // Phase 8O — per-doc-type save folders
+            var docFolderPO       = s['ms_app__doc_folder_po']             || '';
+            var docFolderProposal = s['ms_app__doc_folder_proposal']       || '';
+            var docFolderInvoice  = s['ms_app__doc_folder_invoice']        || '';
 
             var setVal = function (id, v) {
                 var el = document.getElementById(id);
@@ -4816,6 +4820,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             setVal('msSetSnapshotRetention', snapshotRetention);
             setVal('msSetBackupFolder',      backupFolder);
             setVal('msSetBackupRetention',   backupRetention);
+            setVal('msSetDocFolderPO',       docFolderPO);
+            setVal('msSetDocFolderProposal', docFolderProposal);
+            setVal('msSetDocFolderInvoice',  docFolderInvoice);
 
             var cg = document.getElementById('msSetConflictGuard');
             if (cg) cg.checked = !!conflictGuard;
@@ -4879,6 +4886,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             var modeRadio = document.querySelector('input[name="msSetBackupMode"]:checked');
             var backupMode = modeRadio ? modeRadio.value : 'local';
             var conflictGuard = (document.getElementById('msSetConflictGuard') || {}).checked ? '1' : '0';
+            // Phase 8O — per-doc-type save folders
+            var docFolderPO       = (document.getElementById('msSetDocFolderPO') || {}).value || '';
+            var docFolderProposal = (document.getElementById('msSetDocFolderProposal') || {}).value || '';
+            var docFolderInvoice  = (document.getElementById('msSetDocFolderInvoice') || {}).value || '';
 
             var keys = [
                 ['ms_app__snapshot_folder', snapshotFolder],
@@ -4886,7 +4897,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 ['ms_app__backup_folder', backupFolder],
                 ['ms_app__backup_retention', backupRetention],
                 ['ms_app__backup_destination_mode', backupMode],
-                ['ms_app__conflict_guard_enabled', conflictGuard]
+                ['ms_app__conflict_guard_enabled', conflictGuard],
+                ['ms_app__doc_folder_po', docFolderPO],
+                ['ms_app__doc_folder_proposal', docFolderProposal],
+                ['ms_app__doc_folder_invoice', docFolderInvoice]
             ];
 
             for (var i = 0; i < keys.length; i++) {
@@ -4898,6 +4912,203 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) {
             showActionToast('Settings save error: ' + e, 'error');
             console.error('[ms] save settings error:', e);
+        }
+    };
+
+    // ====================================================================
+    // Phase 8O — Save a generated document HTML to its configured folder.
+    //
+    // docType: 'po' | 'proposal' | 'invoice'
+    // recordId: id of the record (used to find it in the global array and
+    //   stamp externalLinkLocalPath after save)
+    // fullHtml: the rendered HTML string (already complete <!DOCTYPE> doc)
+    // filenameBase: e.g. "PO-2024-001" — extension is appended below
+    //
+    // Returns the saved path on success, null on failure (toast shown).
+    // The on-disk file is overwritten silently if it exists (re-download
+    // replaces the stale copy).
+    // ====================================================================
+    window.__msSaveDocToFolder = async function (docType, recordId, fullHtml, filenameBase) {
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Download requires the Mac app (browser preview can only print).', 'error');
+                return null;
+            }
+            // Read the configured folder for this doc type.
+            var settingsKey = 'ms_app__doc_folder_' + docType;
+            var labelMap = { po: 'Purchase Order', proposal: 'Proposal', invoice: 'Invoice' };
+            var label = labelMap[docType] || docType;
+            var settings = await t.invoke('get_app_settings');
+            var s = (settings && settings.ok && settings.settings) ? settings.settings : {};
+            var folder = (s[settingsKey] || '').trim();
+            if (!folder) {
+                showActionToast(
+                    label + ' folder not configured. Set it in System Controls → Mac App → Document Folders.',
+                    'error'
+                );
+                return null;
+            }
+            // Sanitise the filename base: keep alnum, dash, underscore, dot,
+            // and space. Replace anything else with '-'. Collapse runs.
+            var safeBase = String(filenameBase || (docType + '-' + recordId))
+                .replace(/[^A-Za-z0-9._\- ]+/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .trim() || (docType + '-' + recordId);
+            // Build the full path. Folder separator: forward slash works on
+            // macOS; the Rust side normalises via PathBuf.
+            var fullPath = folder.replace(/\/+$/, '') + '/' + safeBase + '.html';
+            var res = await t.invoke('save_text_file', { path: fullPath, contents: fullHtml });
+            if (!res || !res.ok) {
+                var err = (res && res.error) ? res.error : 'Unknown save error';
+                showActionToast('Save failed: ' + err, 'error');
+                return null;
+            }
+            var savedPath = res.path || fullPath;
+            // Stamp the path on the record so future "open" clicks resolve
+            // via open_local_file. We update the in-memory copy and trigger
+            // a save through the existing module's persist function.
+            try {
+                if (docType === 'po' && typeof purchaseOrders !== 'undefined') {
+                    var po = purchaseOrders.find(function (x) { return x.id === recordId; });
+                    if (po) {
+                        po.externalLinkLocalPath = savedPath;
+                        if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
+                    }
+                } else if (docType === 'proposal' && typeof proposals !== 'undefined') {
+                    var pr = proposals.find(function (x) { return x.id === recordId; });
+                    if (pr) {
+                        pr.externalLinkLocalPath = savedPath;
+                        if (typeof saveProposals === 'function') saveProposals();
+                    }
+                } else if (docType === 'invoice' && typeof invoices !== 'undefined') {
+                    var inv = invoices.find(function (x) { return x.id === recordId; });
+                    if (inv) {
+                        inv.externalLinkLocalPath = savedPath;
+                        if (typeof saveInvoices === 'function') saveInvoices();
+                    }
+                }
+            } catch (stampErr) {
+                console.warn('[ms 8O] localPath stamp failed:', stampErr);
+                // The file is saved, just the path-link wasn't stamped. Non-fatal.
+            }
+            // Show a success toast with an Open shortcut. Toast lib here
+            // is the existing showActionToast — it does not support inline
+            // buttons, so we show a plain success message and the "open"
+            // affordance is the row's link icon (already wired to
+            // __msRegisterLocalFileIcon → open_local_file).
+            showActionToast(label + ' saved to ' + savedPath, 'success');
+            // Re-render any visible list so the new local-file icon shows
+            // up immediately on the row that was just downloaded.
+            try {
+                if (docType === 'po' && typeof renderPOsPage === 'function') renderPOsPage();
+                if (docType === 'proposal' && typeof renderProposalsPage === 'function') renderProposalsPage();
+                if (docType === 'invoice' && typeof renderInvoicesPage === 'function') renderInvoicesPage();
+            } catch (_) {}
+            return savedPath;
+        } catch (e) {
+            showActionToast('Save error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('[ms 8O] save doc error:', e);
+            return null;
+        }
+    };
+
+    // Wrappers used by the per-doc-type Download buttons. Each builds the
+    // HTML via the existing buildXxxPDFHTML + the same wrapper template the
+    // preview popup uses, then hands off to __msSaveDocToFolder.
+    window.__msDownloadPOToFolder = async function (poId) {
+        try {
+            if (typeof purchaseOrders === 'undefined') return;
+            var po = purchaseOrders.find(function (x) { return x.id === poId; });
+            if (!po) { showActionToast('PO not found.', 'error'); return; }
+            if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
+                if (!confirm('Your Company Profile is incomplete. The saved file will be missing GSTIN/bank/signatory. Continue?')) return;
+            }
+            var html = (typeof buildPOPDFHTML === 'function') ? buildPOPDFHTML(po) : null;
+            if (!html) { showActionToast('PO renderer unavailable.', 'error'); return; }
+            // Wrap in a self-contained printable document — same shell as the
+            // preview popup, but with no toolbar.
+            var fullHtml = '<!DOCTYPE html>\n' +
+                '<html><head>\n' +
+                '<meta charset="utf-8">\n' +
+                '<title>PO ' + (po.poNumber || '') + '</title>\n' +
+                '<style>\n' +
+                '@page { margin: ' + ((typeof companyProfile !== 'undefined' && companyProfile && companyProfile.letterheadDataUrl) ? '0' : '10mm') + '; size: A4; }\n' +
+                'body { margin: 0; padding: 0; background: #fff; font-family: Helvetica, Arial, sans-serif; }\n' +
+                '#container { padding: 20px; max-width: 900px; margin: 0 auto; }\n' +
+                '@media print { #container { padding: 0 !important; max-width: none !important; margin: 0 !important; } #container > div { box-shadow: none !important; } }\n' +
+                '</style>\n' +
+                '</head><body>\n' +
+                '<div id="container">' + html + '</div>\n' +
+                '</body></html>';
+            var base = 'PO-' + (po.poNumber || poId);
+            await window.__msSaveDocToFolder('po', poId, fullHtml, base);
+        } catch (e) {
+            showActionToast('PO download error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('[ms 8O] PO download error:', e);
+        }
+    };
+
+    window.__msDownloadProposalToFolder = async function (proposalId) {
+        try {
+            if (typeof proposals === 'undefined') return;
+            var p = proposals.find(function (x) { return x.id === proposalId; });
+            if (!p) { showActionToast('Proposal not found.', 'error'); return; }
+            if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
+                if (!confirm('Your Company Profile is incomplete. The saved file will be missing GSTIN/bank/signatory. Continue?')) return;
+            }
+            var html = (typeof buildProposalPDFHTML === 'function') ? buildProposalPDFHTML(p) : null;
+            if (!html) { showActionToast('Proposal renderer unavailable.', 'error'); return; }
+            var fullHtml = '<!DOCTYPE html>\n' +
+                '<html><head>\n' +
+                '<meta charset="utf-8">\n' +
+                '<title>Proposal ' + (p.proposalNumber || '') + '</title>\n' +
+                '<style>\n' +
+                '@page { margin: ' + ((typeof companyProfile !== 'undefined' && companyProfile && companyProfile.letterheadDataUrl) ? '0' : '10mm') + '; size: A4; }\n' +
+                'body { margin: 0; padding: 0; background: #fff; font-family: Helvetica, Arial, sans-serif; }\n' +
+                '#container { padding: 20px; max-width: 900px; margin: 0 auto; }\n' +
+                '@media print { #container { padding: 0 !important; max-width: none !important; margin: 0 !important; } #container > div { box-shadow: none !important; } }\n' +
+                '</style>\n' +
+                '</head><body>\n' +
+                '<div id="container">' + html + '</div>\n' +
+                '</body></html>';
+            var base = 'Proposal-' + (p.proposalNumber || proposalId);
+            await window.__msSaveDocToFolder('proposal', proposalId, fullHtml, base);
+        } catch (e) {
+            showActionToast('Proposal download error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('[ms 8O] Proposal download error:', e);
+        }
+    };
+
+    window.__msDownloadInvoiceToFolder = async function (invId) {
+        try {
+            if (typeof invoices === 'undefined') return;
+            var inv = invoices.find(function (x) { return x.id === invId; });
+            if (!inv) { showActionToast('Invoice not found.', 'error'); return; }
+            if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
+                if (!confirm('Your Company Profile is incomplete. The saved file will be missing GSTIN/bank/signatory. Continue?')) return;
+            }
+            var html = (typeof buildInvoicePDFHTML === 'function') ? buildInvoicePDFHTML(inv) : null;
+            if (!html) { showActionToast('Invoice renderer unavailable.', 'error'); return; }
+            var fullHtml = '<!DOCTYPE html>\n' +
+                '<html><head>\n' +
+                '<meta charset="utf-8">\n' +
+                '<title>Invoice ' + (inv.invoiceNumber || '') + '</title>\n' +
+                '<style>\n' +
+                '@page { margin: ' + ((typeof companyProfile !== 'undefined' && companyProfile && companyProfile.letterheadDataUrl) ? '0' : '10mm') + '; size: A4; }\n' +
+                'body { margin: 0; padding: 0; background: #fff; font-family: Helvetica, Arial, sans-serif; }\n' +
+                '#container { padding: 20px; max-width: 900px; margin: 0 auto; }\n' +
+                '@media print { #container { padding: 0 !important; max-width: none !important; margin: 0 !important; } #container > div { box-shadow: none !important; } }\n' +
+                '</style>\n' +
+                '</head><body>\n' +
+                '<div id="container">' + html + '</div>\n' +
+                '</body></html>';
+            var base = 'Invoice-' + (inv.invoiceNumber || invId);
+            await window.__msSaveDocToFolder('invoice', invId, fullHtml, base);
+        } catch (e) {
+            showActionToast('Invoice download error: ' + (e && e.message ? e.message : e), 'error');
+            console.error('[ms 8O] Invoice download error:', e);
         }
     };
 
@@ -6558,6 +6769,43 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <span style="display:block; font-size:11px; color:var(--text-subtle); font-weight:400; margin-top:2px;">Warn if migrate.py or another tool modifies the database file while the app is open.</span>
                 </span>
             </label>
+        </div>
+
+        <!-- Phase 8O — per-doc-type save folders -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--danger); border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:6px;"><i class="fas fa-folder-open" style="color:var(--danger);"></i> Document Folders</div>
+            <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:14px; line-height:1.55;">
+                When you click <strong>Download</strong> on a Purchase Order, Proposal, or Invoice, the rendered file is saved silently into the matching folder below. Click the file icon next to a document number to re-open the saved file in Preview/your browser. Empty = Download is disabled for that type until you set a folder. Use <strong>Print</strong> instead if you want today's preview-and-print flow.
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr; gap:12px;">
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Purchase Orders folder</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="msSetDocFolderPO" placeholder="(empty — Download disabled for POs)" style="flex:1; font-size:12px;" />
+                        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msPickFolder('msSetDocFolderPO')" style="background:var(--input-bg);">Browse…</button>
+                    </div>
+                    <div style="font-size:10.5px; color:var(--text-subtle); margin-top:4px;">Files are saved as <code>PO-&lt;number&gt;.html</code>. Existing files are overwritten on re-download.</div>
+                </div>
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Proposals folder</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="msSetDocFolderProposal" placeholder="(empty — Download disabled for Proposals)" style="flex:1; font-size:12px;" />
+                        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msPickFolder('msSetDocFolderProposal')" style="background:var(--input-bg);">Browse…</button>
+                    </div>
+                    <div style="font-size:10.5px; color:var(--text-subtle); margin-top:4px;">Files are saved as <code>Proposal-&lt;number&gt;.html</code>.</div>
+                </div>
+                <div>
+                    <label style="font-size:11.5px; color:var(--text-dim); display:block; margin-bottom:4px;">Invoices folder</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="msSetDocFolderInvoice" placeholder="(empty — Download disabled for Invoices)" style="flex:1; font-size:12px;" />
+                        <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msPickFolder('msSetDocFolderInvoice')" style="background:var(--input-bg);">Browse…</button>
+                    </div>
+                    <div style="font-size:10.5px; color:var(--text-subtle); margin-top:4px;">Files are saved as <code>Invoice-&lt;number&gt;.html</code>.</div>
+                </div>
+            </div>
+            <div style="font-size:10.5px; color:var(--text-subtle); margin-top:12px; padding-top:10px; border-top:1px dashed var(--glass-border); line-height:1.55;">
+                <strong>Why <code>.html</code> not <code>.pdf</code>:</strong> the browser only produces a true vector PDF through its print pipeline. The saved <code>.html</code> file opens instantly in Preview/your browser and prints to PDF identically to the in-app preview if you ever need a PDF copy. A future build can swap this for direct PDF output if needed — your saved files and folder layout will continue to work.
+            </div>
         </div>
 
         <!-- Top banner recovery -->
@@ -19414,7 +19662,8 @@ function renderProposalsListView(filtered) {
             <td>${p.issueDate ? formatDateReadable(p.issueDate) : '—'}</td>
             <td>${p.validUntil ? formatDateReadable(p.validUntil) : '—'}</td>
             <td style="text-align:right;">
-                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadProposalPDF('${p.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); previewProposalPDF('${p.id}', {autoPrint: true})" title="Print / Save as PDF (opens preview)"><i class="fas fa-print" style="color:var(--accent-cyan);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); window.__msDownloadProposalToFolder('${p.id}')" title="Download to configured Proposals folder"><i class="fas fa-download" style="color:var(--success);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openProposalDetail('${p.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
         </tr>`;
@@ -20694,8 +20943,8 @@ function renderProposalDetail(p) {
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openProposalForm('${p.id}')"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}')" title="Preview the proposal PDF in a new window"><i class="fas fa-eye" style="color:var(--accent-cyan);"></i> Preview PDF</button>
-                <button class="btn btn-ghost btn-sm" onclick="downloadProposalPDF('${p.id}')" title="Download the proposal as a PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i> Download PDF</button>
+                <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}', {autoPrint: true})" title="Open preview window — print or save-as-PDF from inside"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print</button>
+                <button class="btn btn-ghost btn-sm" onclick="window.__msDownloadProposalToFolder('${p.id}')" title="Save directly to the configured Proposals folder"><i class="fas fa-download" style="color:var(--success);"></i> Download</button>
                 ${p.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(p.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="resyncProposalToPipeline('${p.id}')" title="Create or refresh the linked prospect in Prospect Pipeline"><i class="fas fa-link" style="color:var(--purple);"></i> Sync to Pipeline</button>
                 ${p.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markProposalSent('${p.id}')"><i class="fas fa-paper-plane"></i> Mark Sent</button>` : ''}
@@ -22291,7 +22540,8 @@ function renderPOsListView(filtered) {
             <td>${po.issueDate ? formatDateReadable(po.issueDate) : '—'}</td>
             <td>${po.expectedDelivery ? formatDateReadable(po.expectedDelivery) : '—'}</td>
             <td style="text-align:right;">
-                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadPOPDF('${po.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); previewPOPDF('${po.id}', {autoPrint: true})" title="Print / Save as PDF (opens preview)"><i class="fas fa-print" style="color:var(--accent-cyan);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); window.__msDownloadPOToFolder('${po.id}')" title="Download to configured PO folder"><i class="fas fa-download" style="color:var(--success);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openPODetail('${po.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
         </tr>`;
@@ -22994,8 +23244,8 @@ function renderPODetail(po) {
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openPOForm('${po.id}')"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview PDF"><i class="fas fa-eye" style="color:var(--accent-cyan);"></i> Preview PDF</button>
-                <button class="btn btn-ghost btn-sm" onclick="downloadPOPDF('${po.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i> Download PDF</button>
+                <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}', {autoPrint: true})" title="Open preview window — print or save-as-PDF from inside"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print</button>
+                <button class="btn btn-ghost btn-sm" onclick="window.__msDownloadPOToFolder('${po.id}')" title="Save directly to the configured PO folder"><i class="fas fa-download" style="color:var(--success);"></i> Download</button>
                 ${po.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(po.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
                 ${po.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markPOIssued('${po.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
@@ -24559,7 +24809,8 @@ function renderInvoicesListView(filtered) {
             <td>${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</td>
             <td>${daysCell}</td>
             <td style="text-align:right;">
-                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); previewInvoicePDF('${inv.id}', {autoPrint: true})" title="Print / Save as PDF (opens preview)"><i class="fas fa-print" style="color:var(--accent-cyan);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); window.__msDownloadInvoiceToFolder('${inv.id}')" title="Download to configured Invoices folder"><i class="fas fa-download" style="color:var(--success);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceDetail('${inv.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
         </tr>`;
@@ -25371,8 +25622,8 @@ function renderInvoiceDetail(inv) {
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; align-items:center; margin-bottom:12px;">
             <button class="btn btn-ghost btn-sm" onclick="openInvoiceForm('${inv.id}')"><i class="fas fa-edit"></i> Edit</button>
-            <button class="btn btn-ghost btn-sm" onclick="previewInvoicePDF('${inv.id}')" title="Preview PDF"><i class="fas fa-eye" style="color:var(--accent-cyan);"></i> Preview PDF</button>
-            <button class="btn btn-ghost btn-sm" onclick="downloadInvoicePDF('${inv.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i> Download PDF</button>
+            <button class="btn btn-ghost btn-sm" onclick="previewInvoicePDF('${inv.id}', {autoPrint: true})" title="Open preview window — print or save-as-PDF from inside"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.__msDownloadInvoiceToFolder('${inv.id}')" title="Save directly to the configured Invoices folder"><i class="fas fa-download" style="color:var(--success);"></i> Download</button>
             <button class="btn btn-ghost btn-sm" onclick="openInvoicePDFForCA('${inv.id}')" title="Open in editable mode so QR + IRN can be filled in (by you or by your CA via the downloaded HTML), then printed to PDF and DSC-signed"><i class="fas fa-paper-plane" style="color:var(--warning);"></i> Send to CA</button>
             <button class="btn btn-ghost btn-sm" onclick="exportInvoiceEInvoiceJSON('${inv.id}')" title="Export GSTN e-invoice JSON"><i class="fas fa-code" style="color:var(--purple);"></i> e-Invoice JSON</button>
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid' || inv.status === 'Paid') ? `<button class="btn btn-ghost btn-sm" onclick="openIRNModal('${inv.id}')" title="Record IRN from IRP portal"><i class="fas fa-qrcode" style="color:var(--success);"></i> ${inv.irn ? 'Update IRN' : 'Record IRN'}</button>` : ''}
