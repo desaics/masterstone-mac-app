@@ -4433,6 +4433,72 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     }
 
+    // ── Phase 8O — print-to-browser bridge ───────────────────────────────
+    // window.print() is a no-op in macOS WKWebView. printToBrowser() lands
+    // the rendered HTML in system temp via the save_text_file Tauri command,
+    // then opens it in the user's default browser via open_local_file. The
+    // browser's own window.print() works normally; we inject an auto-fire
+    // script so the print dialog appears automatically once the page loads.
+    function isTauriEnv() {
+        return !!getTauri();
+    }
+
+    async function printToBrowser(html, filename, opts) {
+        opts = opts || {};
+        var injectAutoPrint = opts.autoPrint !== false; // default true
+        var t = getTauri();
+        // Tauri WKWebView silently no-ops native alert(); use __msAlert when
+        // available (defined later in this same IIFE; always present at call time).
+        function notify(msg) {
+            if (typeof window.__msAlert === 'function') {
+                try { window.__msAlert(msg); return; } catch (_) {}
+            }
+            try { alert(msg); } catch (_) {}
+        }
+        if (!t) {
+            // Defensive fallback — callers gate on isTauriEnv() before calling.
+            try { window.print(); } catch (_) {}
+            return;
+        }
+        var finalHtml = html || '';
+        if (injectAutoPrint) {
+            var fire = '<scr' + 'ipt>(function(){function p(){try{window.print()}catch(e){}}'
+                     + 'if(document.readyState==="complete"){setTimeout(p,300)}else{'
+                     + 'window.addEventListener("load",function(){setTimeout(p,300)})}})();'
+                     + '<' + '/scr' + 'ipt>';
+            if (finalHtml.indexOf('</body>') !== -1) {
+                finalHtml = finalHtml.replace('</body>', fire + '</body>');
+            } else {
+                finalHtml = finalHtml + fire;
+            }
+        }
+        var safeName = (filename && String(filename).trim()) || ('Masterstone_print_' + Date.now() + '.html');
+        safeName = safeName.replace(/[\\/\x00]/g, '_');
+        if (!/\.html?$/i.test(safeName)) safeName += '.html';
+        try {
+            var saved = await t.invoke('save_text_file', { contents: finalHtml, filename: safeName });
+            if (!saved || !saved.ok) {
+                notify('Could not save print file: ' + (saved && saved.error ? saved.error : 'unknown error'));
+                return;
+            }
+            var opened = await t.invoke('open_local_file', { path: saved.path });
+            if (!opened || !opened.ok) {
+                notify('File saved but could not open in browser: '
+                      + (opened && opened.error ? opened.error : 'unknown error')
+                      + '\n\nFile location: ' + saved.path);
+            }
+        } catch (e) {
+            notify('Print failed: ' + (e && e.message ? e.message : String(e)));
+        }
+    }
+
+    // Expose to window so callers outside the macAppShim IIFE (printClientSummary,
+    // preview functions, modal Print button) can use them.
+    try {
+        window.printToBrowser = printToBrowser;
+        window.isTauriEnv = isTauriEnv;
+    } catch (_) { /* read-only window in some contexts; ignore */ }
+
     // ── Inline modal helpers (Build B-fix-3) ─────────────────────────────
     // Tauri's WebView on macOS silently no-ops native window.prompt(),
     // window.confirm(), and window.alert(). These replacements use a styled
@@ -10161,6 +10227,21 @@ function printClientSummary() {
     const clientName = document.getElementById('csClientName')?.innerText || 'Client';
     const originalTitle = document.title;
     document.title = `Masterstone | ${clientName} — Client Summary`;
+    if (window.isTauriEnv && window.isTauriEnv()) {
+        // Phase 8O — WKWebView's window.print() is a no-op. Serialise the
+        // current document and hand off to the OS default browser, where
+        // print works normally and the auto-fire script triggers the dialog.
+        // Note: we don't try to clean up the chrome on screen — the browser
+        // prints what's *in* the print stylesheet, not what's visible.
+        const safeClient = clientName.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60) || 'Client';
+        const fname = 'Masterstone_ClientSummary_' + safeClient + '.html';
+        const snapshot = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+        // Fire-and-forget; printToBrowser handles its own errors via alert().
+        window.printToBrowser(snapshot, fname).finally(function () {
+            document.title = originalTitle;
+        });
+        return;
+    }
     window.print();
     document.title = originalTitle;
 }
@@ -10176,7 +10257,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8N";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8O";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -21725,6 +21806,13 @@ function openPreviewInPageModal(fullHtml, opts) {
 
     closeBtn.onclick = closeModal;
     printBtn.onclick = function () {
+        // Phase 8O — in Tauri, iframe.contentWindow.print() is a no-op (WKWebView).
+        // Hand the same HTML we put in the iframe to the OS default browser instead.
+        if (window.isTauriEnv && window.isTauriEnv()) {
+            var fname = 'Masterstone_print_' + ((opts && opts.subtitle) ? String(opts.subtitle).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 50) : 'preview') + '.html';
+            window.printToBrowser(iframeHtml, fname);
+            return;
+        }
         try { iframe.contentWindow.print(); }
         catch (e) { try { window.print(); } catch (_) {} }
     };
@@ -21802,6 +21890,17 @@ window.addEventListener('load', function () {
 });
 <` + `/script>` : ''}
 </body></html>`;
+    // Phase 8O — In Tauri, the "Download" path (autoPrint=true) bypasses the
+    // popup/modal entirely: WKWebView's print() is broken, so we hand the HTML
+    // (which already embeds the auto-fire script) to the OS default browser
+    // via printToBrowser. The print dialog appears in the browser tab.
+    // The preview path (autoPrint=false) still falls through to the in-page
+    // modal so the user can inspect the document before printing.
+    if (autoPrint && window.isTauriEnv && window.isTauriEnv()) {
+        const fname = 'Masterstone_Proposal_' + String(p.proposalNumber || 'preview').replace(/[^A-Za-z0-9_-]/g, '_') + '.html';
+        window.printToBrowser(fullHtml, fname, { autoPrint: false });
+        return;
+    }
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
         // Phase 8J — popup blocked (typical in Tauri webview); fall back to in-page modal
@@ -23846,6 +23945,12 @@ window.addEventListener('load', function () {
 });
 <` + `/script>` : ''}
 </body></html>`;
+    // Phase 8O — Tauri autoPrint short-circuit (see proposal preview for rationale).
+    if (autoPrint && window.isTauriEnv && window.isTauriEnv()) {
+        const fname = 'Masterstone_PO_' + String(po.poNumber || 'preview').replace(/[^A-Za-z0-9_-]/g, '_') + '.html';
+        window.printToBrowser(fullHtml, fname, { autoPrint: false });
+        return;
+    }
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
         // Phase 8J — popup blocked; fall back to in-page modal
@@ -26754,6 +26859,15 @@ window.addEventListener('load', function () {
 <` + `/script>` : ''}
 ${editableScript}
 </body></html>`;
+    // Phase 8O — Tauri autoPrint short-circuit. Send to CA (editableQrIrn=true)
+    // always has autoPrint=false, so it correctly falls through to the modal
+    // path below, letting the user edit QR/IRN before printing via the outer
+    // modal Print button (also fixed in 8O).
+    if (autoPrint && window.isTauriEnv && window.isTauriEnv()) {
+        const fname = 'Masterstone_Invoice_' + String(inv.invoiceNumber || 'preview').replace(/[^A-Za-z0-9_-]/g, '_') + '.html';
+        window.printToBrowser(fullHtml, fname, { autoPrint: false });
+        return;
+    }
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
         // Phase 8J — popup blocked; fall back to in-page modal

@@ -1054,6 +1054,48 @@ fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) ->
     }
 }
 
+// ============================================================================
+// Phase 8O — print-to-browser bridge.
+//
+// window.print() is a no-op inside Tauri 2's macOS WKWebView (diagnosed
+// 2026-05-04). Workaround: front-end serialises the print-ready HTML, calls
+// save_text_file to land it in the system temp dir, then calls the existing
+// open_local_file on the returned path. macOS opens it in the user's default
+// browser, where window.print() works normally — and the embedded auto-fire
+// script triggers the print dialog on its own.
+//
+// No new crates: pure std::fs + chrono (already a dep). System temp_dir is
+// auto-cleaned by macOS so we don't need to manage retention ourselves.
+// ============================================================================
+
+#[tauri::command]
+fn save_text_file<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    contents: String,
+    filename: Option<String>,
+) -> serde_json::Value {
+    use std::io::Write;
+    let dir = std::env::temp_dir();
+    let raw = filename
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "Masterstone_print_{}.html",
+                chrono::Utc::now().timestamp_millis()
+            )
+        });
+    // Sanitise: keep file-name component only — strip path separators and NULs.
+    let safe: String = raw
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c == '\0' { '_' } else { c })
+        .collect();
+    let path = dir.join(&safe);
+    match std::fs::File::create(&path).and_then(|mut f| f.write_all(contents.as_bytes())) {
+        Ok(_) => serde_json::json!({"ok": true, "path": path.to_string_lossy()}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{e}")}),
+    }
+}
+
 #[tauri::command]
 async fn pick_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, title: Option<String>) -> serde_json::Value {
     use tauri_plugin_dialog::DialogExt;
@@ -2377,6 +2419,9 @@ pub fn run() {
             // Phase 8C: local file attachments (companion to OneDrive URLs)
             pick_file,
             open_local_file,
+            // Phase 8O: print-to-browser bridge (window.print() is broken in
+            // macOS WKWebView; we save HTML to temp + open in default browser).
+            save_text_file,
             // Session 8 / B-fix-8: file-linking subsystem removed.
             // The user opted out of the matcher / migration / category
             // workflow in favour of manual linking via OneDrive URLs in
