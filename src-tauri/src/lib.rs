@@ -1785,56 +1785,6 @@ async fn pick_folder<R: tauri::Runtime>(app: tauri::AppHandle<R>, title: Option<
 }
 
 // ============================================================================
-// Phase 8O — write a text file to a chosen folder
-//
-// Companion to pick_folder + open_local_file. JS renders a self-contained
-// HTML document for a PO / Proposal / Invoice and asks Rust to drop it on
-// disk at the configured per-doc-type folder. We then store that path on
-// the record so future "Open" clicks resolve via open_local_file.
-//
-// Why text-only and not PDF: the browser produces a true vector PDF only
-// through its print pipeline. A future phase can swap this for a webview
-// print-to-PDF command without touching the JS save flow — only the
-// command name and the file extension change.
-//
-// Safety: parent folder is created if missing; file is overwritten if it
-// exists (intended — re-downloading the same PO replaces the stale copy).
-// ============================================================================
-
-#[tauri::command]
-fn save_text_file(path: String, contents: String) -> serde_json::Value {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return serde_json::json!({"ok": false, "error": "No file path provided"});
-    }
-    let p = std::path::PathBuf::from(trimmed);
-    if let Some(parent) = p.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return serde_json::json!({
-                    "ok": false,
-                    "error": format!("Failed to create folder {}: {}", parent.to_string_lossy(), e)
-                });
-            }
-        }
-    }
-    match std::fs::write(&p, contents.as_bytes()) {
-        Ok(_) => {
-            let bytes = contents.len();
-            serde_json::json!({
-                "ok": true,
-                "path": p.to_string_lossy(),
-                "bytes_written": bytes
-            })
-        }
-        Err(e) => serde_json::json!({
-            "ok": false,
-            "error": format!("Write failed for {}: {}", p.to_string_lossy(), e)
-        }),
-    }
-}
-
-// ============================================================================
 // Session 6 — auto-backup
 //
 // On app start, JS calls run_backup_check. If today's backup file doesn't
@@ -2427,8 +2377,6 @@ pub fn run() {
             // Phase 8C: local file attachments (companion to OneDrive URLs)
             pick_file,
             open_local_file,
-            // Phase 8O: per-doc-type folder save (Download → folder for PO/Proposal/Invoice)
-            save_text_file,
             // Session 8 / B-fix-8: file-linking subsystem removed.
             // The user opted out of the matcher / migration / category
             // workflow in favour of manual linking via OneDrive URLs in
