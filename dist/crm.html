@@ -1319,6 +1319,12 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 
 /* Print styles for Client Summary */
 @media print {
+    /* 8T — preserve background colours when printing/exporting PDF.
+       WKWebView (and every browser) strips background-color/image by default. */
+    *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
     nav, .dashboard-sticky-top, .cs-export-btn, .btn-ghost { display: none !important; }
     .main-content { margin-left: 0 !important; width: 100% !important; padding: 10px !important; }
     .cs-table-wrap, .cs-table-wrap-lg { max-height: none !important; overflow: visible !important; }
@@ -21847,6 +21853,12 @@ function previewProposalPDF(proposalId, opts) {
 <title>Proposal ${pEsc(p.proposalNumber)} — ${titleSuffix}</title>
 <style>
 @media print {
+    /* 8T — preserve background colours when printing/exporting PDF.
+       WKWebView (and every browser) strips background-color/image by default. */
+    *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     #toolbar { display: none !important; }
     #container { padding: 0 !important; max-width: none !important; margin: 0 !important; }
@@ -23904,6 +23916,12 @@ function previewPOPDF(poId, opts) {
 <title>PO ${pEsc(po.poNumber)} — ${titleSuffix}</title>
 <style>
 @media print {
+    /* 8T — preserve background colours when printing/exporting PDF.
+       WKWebView (and every browser) strips background-color/image by default. */
+    *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     #toolbar { display: none !important; }
     #container { padding: 0 !important; max-width: none !important; margin: 0 !important; }
@@ -26656,6 +26674,12 @@ function previewInvoicePDF(invId, opts) {
     padding: 1px 6px; font-family: monospace; font-size: 11px; box-shadow: 0 1px 0 #cbd5e1;
 }
 @media print {
+    /* 8T — preserve background colours when printing/exporting PDF.
+       WKWebView (and every browser) strips background-color/image by default. */
+    *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
     /* Strip all interactive affordances so the PDF is clean. */
     #caHint { display: none !important; }
     .ca-qr-zone {
@@ -26810,6 +26834,12 @@ function previewInvoicePDF(invId, opts) {
 <title>Invoice ${pEsc(inv.invoiceNumber)} — ${titleSuffix}</title>
 <style>
 @media print {
+    /* 8T — preserve background colours when printing/exporting PDF.
+       WKWebView (and every browser) strips background-color/image by default. */
+    *, *::before, *::after {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     #toolbar { display: none !important; }
     #container { padding: 0 !important; max-width: none !important; margin: 0 !important; }
