@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Masterstone CRM — Loading</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Build 8Z — Splash matches the user's chosen theme.
+       Default = light. body.dark-mode flips to dark.
+       Theme is detected via localStorage 'ms_theme' (set by main app). */
+    :root {
+      /* Light Theme (Default) */
+      --bg-primary: #fbfbf9;
+      --bg-card: #ffffff;
+      --border-soft: rgba(20, 20, 15, 0.10);
+      --accent-cyan: #0c5e5b;        /* deep teal — matches main app */
+      --accent-amber: #8a4d12;
+      --accent-green: #1e6135;
+      --accent-red: #8a2424;
+      --accent-indigo: #0c5e5b;      /* unified to teal for consistency */
+      --text-bright: #14140f;
+      --text-dim: #74716a;
+    }
+    body.dark-mode {
+      --bg-primary: #0e0e10;
+      --bg-card: #131318;
+      --border-soft: #26262d;
+      --accent-cyan: #4eadab;
+      --accent-amber: #d8924a;
+      --accent-green: #5dba7e;
+      --accent-red: #d96b6b;
+      --accent-indigo: #4eadab;
+      --text-bright: #f0efe9;
+      --text-dim: #8b877d;
+    }
+
+    html, body {
+      height: 100%;
+      width: 100%;
+      background: var(--bg-primary);
+      color: var(--text-bright);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 32px;
+    }
+
+    .logo {
+      font-size: 13px;
+      letter-spacing: 0.18em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 600;
+      margin-bottom: 28px;
+      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border-soft);
+      border-top-color: var(--accent-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 18px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status { font-size: 14px; color: var(--text-dim); margin-bottom: 8px; min-height: 22px; }
+
+    /* Wizard card (first-launch) */
+    .wizard {
+      display: none;
+      background: var(--bg-card);
+      border: 1px solid var(--border-soft);
+      border-left: 3px solid var(--accent-indigo);
+      border-radius: 8px;
+      padding: 24px 28px;
+      max-width: 600px;
+      width: 100%;
+      margin-top: 8px;
+      text-align: left;
+    }
+    .wizard.visible { display: block; }
+    .wizard h3 {
+      font-size: 17px;
+      color: var(--text-bright);
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    .wizard p {
+      color: var(--text-dim);
+      font-size: 13.5px;
+      margin-bottom: 16px;
+      line-height: 1.55;
+    }
+    .wizard .target-path {
+      display: block;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 12.5px;
+      color: var(--accent-cyan);
+      background: rgba(12, 94, 91, 0.08);
+      padding: 10px 12px;
+      border-radius: 4px;
+      word-break: break-all;
+      margin-bottom: 18px;
+    }
+    .wizard .actions { display: flex; gap: 10px; }
+    .wizard button {
+      padding: 9px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border-soft);
+      transition: all 0.15s ease;
+      font-family: inherit;
+    }
+    .wizard button.primary {
+      background: var(--accent-indigo);
+      color: white;
+      border-color: var(--accent-indigo);
+    }
+    .wizard button.primary:hover { background: var(--accent-indigo); filter: brightness(0.85); }
+    .wizard button.secondary {
+      background: transparent;
+      color: var(--text-dim);
+    }
+    .wizard button.secondary:hover { color: var(--text-bright); border-color: var(--text-dim); }
+
+    /* Error card (other failures) */
+    .error-card {
+      display: none;
+      background: var(--bg-card);
+      border: 1px solid var(--border-soft);
+      border-left: 3px solid var(--accent-red);
+      border-radius: 8px;
+      padding: 20px 24px;
+      max-width: 640px;
+      width: 100%;
+      margin-top: 20px;
+    }
+    .error-card.visible { display: block; }
+    .error-card h3 { font-size: 15px; color: var(--accent-red); margin-bottom: 10px; }
+    .error-card p { color: var(--text-bright); margin-bottom: 12px; font-size: 13px; }
+    .error-card details { margin-top: 14px; font-size: 12px; color: var(--text-dim); }
+    .error-card details summary { cursor: pointer; }
+    .error-card details pre {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11.5px;
+      white-space: pre-wrap;
+      margin-top: 8px;
+      padding: 10px;
+      background: rgba(20, 20, 15, 0.05);
+      border-radius: 4px;
+    }
+
+    .counts {
+      display: none;
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--text-dim);
+      text-align: center;
+    }
+    .counts.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">Masterstone LLP</div>
+    <h1>Masterstone CRM</h1>
+
+    <div id="spinner" class="spinner"></div>
+    <div id="status" class="status">Connecting to database…</div>
+    <div id="counts" class="counts"></div>
+
+    <!-- First-launch wizard: shown when DB is not at expected location -->
+    <div id="wizard" class="wizard">
+      <h3>Welcome — let's locate your database</h3>
+      <p>This is your first launch of the Mac app. Choose your <code>masterstone.db</code> file and we'll copy it into the app's data folder. After this, the app will use it directly — you won't need to do this again.</p>
+      <p>The file will be installed at:</p>
+      <code class="target-path" id="targetPath"></code>
+      <div class="actions">
+        <button class="primary" id="pickBtn" onclick="pickDb()">Browse for masterstone.db…</button>
+        <button class="secondary" onclick="window.close()">Quit</button>
+      </div>
+      <p style="margin-top: 18px; margin-bottom: 0; font-size: 12px;">
+        Don't have a <code>masterstone.db</code> file yet? Run the Session 2 migration script
+        (<code>migrate.py</code>) on your latest backup JSON to generate one.
+      </p>
+    </div>
+
+    <!-- Generic error card for non-recoverable failures -->
+    <div id="errorCard" class="error-card">
+      <h3 id="errorTitle">Setup needed</h3>
+      <p id="errorMessage">Database file not found.</p>
+      <details id="errorDetailsWrap" style="display:none;">
+        <summary>Technical details</summary>
+        <pre id="errorDetail"></pre>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // Boot shim — Session 4.
+    //
+    // Differences from Session 3:
+    //   - On DB_NOT_FOUND, show a first-launch wizard with a native file picker
+    //     instead of just an error message. Wizard installs the file and
+    //     retries the load.
+    //   - The CRM now runs in live mode (writes flow back to SQLite) — that's
+    //     handled inside crm.html's shim, not here.
+    // -------------------------------------------------------------------------
+
+    // Globals so wizard handlers can access.
+    var $status, $spinner, $counts, $wizard, $targetPath, $errCard,
+        $errTitle, $errMsg, $errDetW, $errDet, $pickBtn;
+
+    function fail(title, message, technical) {
+      $spinner.style.display = 'none';
+      $status.textContent = '';
+      $wizard.classList.remove('visible');
+      $errTitle.textContent = title;
+      $errMsg.textContent = message;
+      if (technical) {
+        $errDetW.style.display = 'block';
+        $errDet.textContent = technical;
+      }
+      $errCard.classList.add('visible');
+    }
+
+    function showWizard(targetPath) {
+      $spinner.style.display = 'none';
+      $status.textContent = '';
+      $errCard.classList.remove('visible');
+      $targetPath.textContent = targetPath || '(unknown)';
+      $wizard.classList.add('visible');
+    }
+
+    async function pickDb() {
+      var tauri = window.__TAURI__;
+      if (!tauri || !tauri.dialog || !tauri.core) {
+        fail('Dialog API unavailable',
+          'The native file picker isn\'t available. This shouldn\'t happen in production builds.',
+          'window.__TAURI__.dialog or .core is missing');
+        return;
+      }
+      $pickBtn.disabled = true;
+      $pickBtn.textContent = 'Choosing file…';
+
+      try {
+        var picked = await tauri.dialog.open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite', 'sqlite3'] }],
+          title: 'Select your masterstone.db file'
+        });
+        if (!picked) {
+          // User cancelled.
+          $pickBtn.disabled = false;
+          $pickBtn.textContent = 'Browse for masterstone.db…';
+          return;
+        }
+
+        $pickBtn.textContent = 'Installing…';
+        var result = await tauri.core.invoke('install_db_from_path', { sourcePath: picked });
+        if (!result || !result.ok) {
+          fail('Could not install database',
+            (result && result.error) || 'Unknown error',
+            picked + ' → ' + ((result && result.db_path) || '(no target)'));
+          $pickBtn.disabled = false;
+          $pickBtn.textContent = 'Try a different file…';
+          return;
+        }
+
+        // Success — hide wizard, retry boot.
+        $wizard.classList.remove('visible');
+        $spinner.style.display = '';
+        $status.textContent = 'Database installed. Loading…';
+        boot();
+      } catch (e) {
+        fail('File picker error',
+          'Something went wrong while choosing the file.',
+          String(e));
+        $pickBtn.disabled = false;
+        $pickBtn.textContent = 'Try again';
+      }
+    }
+
+    async function boot() {
+      var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+      if (!tauri || !tauri.invoke) {
+        fail('Not running in Tauri',
+          'This page expects to be loaded inside the Masterstone Mac app, not a regular browser.');
+        return;
+      }
+
+      $status.textContent = 'Loading data from database…';
+      var result;
+      try {
+        result = await tauri.invoke('storage_load_all');
+      } catch (e) {
+        fail('Could not communicate with Rust backend',
+          'The Tauri command storage_load_all threw an unexpected error.',
+          String(e));
+        return;
+      }
+
+      if (!result || !result.ok) {
+        var kind = result && result.error_kind ? result.error_kind : 'UNKNOWN';
+        var detail = result && result.error_detail ? result.error_detail : '';
+        var path = result && result.db_path ? result.db_path : null;
+
+        if (kind === 'DB_NOT_FOUND') {
+          // First-launch wizard.
+          showWizard(path);
+        } else {
+          fail('Database read error (' + kind + ')',
+            detail || 'Unknown SQLite error.',
+            detail);
+        }
+        return;
+      }
+
+      // Populate localStorage with loaded snapshot.
+      $status.textContent = 'Populating local cache…';
+      try {
+        for (var k in result.data) {
+          if (Object.prototype.hasOwnProperty.call(result.data, k)) {
+            window.localStorage.setItem(k, result.data[k]);
+          }
+        }
+      } catch (e) {
+        fail('localStorage error',
+          'Failed to write loaded data into localStorage.', String(e));
+        return;
+      }
+
+      window.localStorage.setItem('__ms_mac_app_mode__', '1');
+      window.localStorage.setItem('__ms_db_path__', result.db_path || '');
+
+      // Brief success preview.
+      var counts = result.record_counts || {};
+      var order = ['clients','resellers','contracts','invoices','prospects','oems','products',
+                   'commission_accruals','commission_payouts','proposals','purchase_orders',
+                   'attachments','company_profile'];
+      var summary = order
+        .filter(function (k) { return counts[k] !== undefined; })
+        .map(function (k) { return counts[k] + ' ' + k.replace(/_/g, ' '); })
+        .join(' · ');
+      $counts.textContent = summary;
+      $counts.classList.add('visible');
+      $status.textContent = 'Loaded successfully. Opening CRM…';
+
+      setTimeout(function () { window.location.href = 'crm.html'; }, 400);
+    }
+
+    // Theme init for splash — match user's chosen theme from localStorage.
+    // Default is light if no preference saved. Set BEFORE first paint to avoid flash.
+    (function () {
+      try {
+        if (localStorage.getItem('ms_theme') === 'dark') {
+          document.body.classList.add('dark-mode');
+        }
+      } catch (e) { /* localStorage unavailable */ }
+    })();
+
+    document.addEventListener('DOMContentLoaded', function () {
+      $status     = document.getElementById('status');
+      $spinner    = document.getElementById('spinner');
+      $counts     = document.getElementById('counts');
+      $wizard     = document.getElementById('wizard');
+      $targetPath = document.getElementById('targetPath');
+      $errCard    = document.getElementById('errorCard');
+      $errTitle   = document.getElementById('errorTitle');
+      $errMsg     = document.getElementById('errorMessage');
+      $errDetW    = document.getElementById('errorDetailsWrap');
+      $errDet     = document.getElementById('errorDetail');
+      $pickBtn    = document.getElementById('pickBtn');
+      boot();
+    });
+  </script>
+</body>
+</html>
