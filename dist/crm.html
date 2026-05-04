@@ -5075,6 +5075,48 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
 
+    // 8X — universal document anchor renderer. Local-path-primary,
+    // URL-fallback. Returns a full <a> tag wrapping innerHtml, or null
+    // if neither localPath nor url is set (caller decides text fallback).
+    //   localPath  — filesystem path (e.g. /Users/.../OneDrive/.../foo.pdf)
+    //                When set, click opens via Tauri's open_local_file.
+    //   url        — http(s) URL to open in default browser when no local
+    //                path is configured.
+    //   attrs      — extra HTML attributes (class, style, title) excluding
+    //                href / target / onclick. Pass as a raw attribute string.
+    //   innerHtml  — the link's visible content (icon + text).
+    // Used by every display surface that needs to open document references
+    // (Subscription Portfolio cycle/PO links, Receivables/Payables registers,
+    // PO/Proposal "Open Original", Client Summary cycle invoices, etc.).
+    window.__msDocAnchor = function (localPath, url, attrs, innerHtml) {
+        var lp = (localPath || '').trim();
+        var u = (url || '').trim();
+        if (!lp && !u) return null;
+        var a = attrs || '';
+        if (lp) {
+            // Local-primary: data-localpath travels safely as an attribute
+            // (HTML-escaped). onclick stops row-level click propagation
+            // first (PO register rows have row click handlers), then
+            // dispatches to __msOpenLocalFile which already toasts on
+            // missing file / Tauri unavailable.
+            var safePath = lp
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            return '<a href="javascript:void(0)" data-localpath="' + safePath
+                + '" onclick="if(event){event.stopPropagation();} window.__msOpenLocalFile(this.dataset.localpath); return false;" '
+                + a + '>' + innerHtml + '</a>';
+        }
+        // URL-only fallback: open in default browser, new tab. stopPropagation
+        // baked in so register-row click handlers don't also fire.
+        return '<a href="' + pEsc(u) + '" target="_blank" rel="noopener" '
+            + 'onclick="if(event){event.stopPropagation();}" '
+            + a + '>' + innerHtml + '</a>';
+    };
+
+
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
     // Lives below the live-mode banner. Stored flag persists across sessions.
@@ -15734,24 +15776,40 @@ function renderContracts() {
                 // Multi-Invoice Restructuring
                 let cInvText = ''; let cInvDate = ''; let cPaidDate = '';
                 if (y.arInvoices && y.arInvoices.length > 0) {
-                     cInvText = y.arInvoices.map(inv => inv.link ? `<a href="${inv.link}" target="_blank" style="color:var(--accent-cyan); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;"><i class="fas fa-file-invoice"></i> ${inv.invNo || 'View Invoice'}</a>` : `<span style="color:var(--text-main); font-weight:500; display:block; margin-bottom:4px; white-space:nowrap;">${inv.invNo || '-'}</span>`).join('');
+                     cInvText = y.arInvoices.map(inv => {
+                        const anchor = window.__msDocAnchor(inv.localPath, inv.link,
+                            'style="color:var(--accent-cyan); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;" title="Open client invoice"',
+                            `<i class="fas fa-file-invoice"></i> ${inv.invNo || 'View Invoice'}`);
+                        return anchor || `<span style="color:var(--text-main); font-weight:500; display:block; margin-bottom:4px; white-space:nowrap;">${inv.invNo || '-'}</span>`;
+                     }).join('');
                      cInvDate = y.arInvoices.map(inv => `<div style="margin-bottom:4px; white-space:nowrap; height:18px;">${formatDateReadable(inv.date) || '-'}</div>`).join('');
                      cPaidDate = y.arInvoices.map(inv => `<div style="margin-bottom:4px; height:18px;">${inv.paidDate ? '<span class="badge ok" style="padding:2px 4px; font-size:10px;">'+formatDateReadable(inv.paidDate)+'</span>' : '<span class="badge pending" style="padding:2px 4px; font-size:10px;">Pending</span>'}</div>`).join('');
                 } else {
                      let dispInv = y.clientInvoiceNo || 'View Invoice';
-                     cInvText = y.clientInvoiceLink ? `<a href="${y.clientInvoiceLink}" target="_blank" style="color:var(--accent-cyan); text-decoration:none;"><i class="fas fa-file-invoice"></i> ${dispInv}</a>` : (y.clientInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.clientInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
+                     cInvText = (window.__msDocAnchor(y.clientInvoiceLocalPath, y.clientInvoiceLink,
+                            'style="color:var(--accent-cyan); text-decoration:none;" title="Open client invoice"',
+                            `<i class="fas fa-file-invoice"></i> ${dispInv}`)
+                         ) || (y.clientInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.clientInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
                      cInvDate = formatDateReadable(y.actualInvoiceDate) || '-';
                      cPaidDate = y.paymentDate ? formatDateReadable(y.paymentDate) : (y.paid ? '<span class="badge ok">Fully Paid</span>' : '<span class="badge pending">Pending</span>');
                 }
 
                 let oInvText = ''; let oInvDate = ''; let oPayDate = '';
                 if (y.apInvoices && y.apInvoices.length > 0) {
-                     oInvText = y.apInvoices.map(inv => inv.link ? `<a href="${inv.link}" target="_blank" style="color:var(--warning); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;"><i class="fas fa-file-import"></i> ${inv.invNo || 'View Invoice'}</a>` : `<span style="color:var(--text-main); font-weight:500; display:block; margin-bottom:4px; white-space:nowrap;">${inv.invNo || '-'}</span>`).join('');
+                     oInvText = y.apInvoices.map(inv => {
+                        const anchor = window.__msDocAnchor(inv.localPath, inv.link,
+                            'style="color:var(--warning); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;" title="Open OEM invoice"',
+                            `<i class="fas fa-file-import"></i> ${inv.invNo || 'View Invoice'}`);
+                        return anchor || `<span style="color:var(--text-main); font-weight:500; display:block; margin-bottom:4px; white-space:nowrap;">${inv.invNo || '-'}</span>`;
+                     }).join('');
                      oInvDate = y.apInvoices.map(inv => `<div style="margin-bottom:4px; white-space:nowrap; height:18px;">${formatDateReadable(inv.date) || '-'}</div>`).join('');
                      oPayDate = y.apInvoices.map(inv => `<div style="margin-bottom:4px; height:18px;">${inv.payDate ? '<span class="badge ok" style="padding:2px 4px; font-size:10px;">'+formatDateReadable(inv.payDate)+'</span>' : '<span class="badge pending" style="padding:2px 4px; font-size:10px;">Pending</span>'}</div>`).join('');
                 } else {
                      let dispOem = y.oemInvoiceNo || 'View OEM Inv';
-                     oInvText = y.oemInvoiceLink ? `<a href="${y.oemInvoiceLink}" target="_blank" style="color:var(--warning); text-decoration:none;"><i class="fas fa-file-import"></i> ${dispOem}</a>` : (y.oemInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.oemInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
+                     oInvText = (window.__msDocAnchor(y.oemInvoiceLocalPath, y.oemInvoiceLink,
+                            'style="color:var(--warning); text-decoration:none;" title="Open OEM invoice"',
+                            `<i class="fas fa-file-import"></i> ${dispOem}`)
+                         ) || (y.oemInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.oemInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
                      oInvDate = formatDateReadable(y.oemInvoiceDate) || '-';
                      oPayDate = y.oemPaymentDate ? formatDateReadable(y.oemPaymentDate) : (y.vendorPaid ? '<span class="badge ok">Fully Settled</span>' : '<span class="badge pending">Pending</span>');
                 }
@@ -15831,10 +15889,16 @@ function renderContracts() {
                     let fullPo = p.poNo || 'Link';
                     let shortPo = fullPo.length > 10 ? '...' + fullPo.slice(-10) : fullPo;
 
-                    let disp = p.poLink ? `<a href="${p.poLink}" target="_blank" title="${fullPo}" style="color:var(--accent-cyan); text-decoration:none; display:block; margin-bottom:4px; font-size:12px;"><i class="fas fa-external-link-alt"></i> ${shortPo}</a>` : `<span title="${fullPo}" style="display:block; margin-bottom:4px; font-size:12px;">${shortPo}</span>`;
+                    let collapsedAnchor = window.__msDocAnchor(p.localPath, p.poLink,
+                        `title="${fullPo}" style="color:var(--accent-cyan); text-decoration:none; display:block; margin-bottom:4px; font-size:12px;"`,
+                        `<i class="fas fa-external-link-alt"></i> ${shortPo}`);
+                    let disp = collapsedAnchor || `<span title="${fullPo}" style="display:block; margin-bottom:4px; font-size:12px;">${shortPo}</span>`;
                     poDisplayList.push(disp);
                     
-                    let expDisp = p.poLink ? `<a href="${p.poLink}" target="_blank" style="color:var(--accent-cyan); text-decoration:none;">${fullPo}</a>` : fullPo;
+                    let expAnchor = window.__msDocAnchor(p.localPath, p.poLink,
+                        'style="color:var(--accent-cyan); text-decoration:none;"',
+                        fullPo);
+                    let expDisp = expAnchor || fullPo;
                     let dateStr = p.poDate ? ` <span style="font-size:11px; color:var(--text-dim);">(${formatDateReadable(p.poDate)})</span>` : '';
                     expClientPOList.push(`<div style="margin-bottom:6px;">${expDisp}${dateStr}</div>`);
                 }
@@ -15842,7 +15906,10 @@ function renderContracts() {
 
             const poDisplay = poDisplayList.length > 0 ? poDisplayList.join('') : '-';
             const expClientPO = expClientPOList.length > 0 ? expClientPOList.join('') : '-';
-            const expIntPO = c.internalPOLink ? `<a href="${c.internalPOLink}" target="_blank" style="color:var(--accent-cyan); text-decoration:none;">${c.internalPO || 'View Link'}</a>` : (c.internalPO || '-');
+            const _expIntPoAnchor = window.__msDocAnchor(c.internalPOLocalPath, c.internalPOLink,
+                'style="color:var(--accent-cyan); text-decoration:none;"',
+                pEsc(c.internalPO || 'View Link'));
+            const expIntPO = _expIntPoAnchor || (c.internalPO || '-');
 
             clientRowsHtml += `
             <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
@@ -20954,7 +21021,7 @@ function renderProposalDetail(p) {
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openProposalForm('${p.id}')"><i class="fas fa-edit"></i> Edit</button>
                 <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}')" title="Preview the proposal and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
-                ${p.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(p.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
+                ${(p.externalLink || p.externalLinkLocalPath) ? (window.__msDocAnchor(p.externalLinkLocalPath, p.externalLink, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
                 <button class="btn btn-ghost btn-sm" onclick="resyncProposalToPipeline('${p.id}')" title="Create or refresh the linked prospect in Prospect Pipeline"><i class="fas fa-link" style="color:var(--purple);"></i> Sync to Pipeline</button>
                 ${p.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markProposalSent('${p.id}')"><i class="fas fa-paper-plane"></i> Mark Sent</button>` : ''}
                 ${p.status === 'Sent' ? `<button class="btn btn-primary btn-sm" onclick="markProposalAccepted('${p.id}')" style="background:var(--success);"><i class="fas fa-check"></i> Mark Accepted</button><button class="btn btn-ghost btn-sm" onclick="markProposalRejected('${p.id}')" style="color:var(--danger);"><i class="fas fa-times"></i> Mark Rejected</button>` : ''}
@@ -23268,7 +23335,7 @@ function renderPODetail(po) {
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openPOForm('${po.id}')"><i class="fas fa-edit"></i> Edit</button>
                 <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview the PO and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
-                ${po.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(po.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
+                ${(po.externalLink || po.externalLinkLocalPath) ? (window.__msDocAnchor(po.externalLinkLocalPath, po.externalLink, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
                 ${po.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markPOIssued('${po.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
                 ${(po.status === 'Issued' || po.status === 'Acknowledged') ? `<button class="btn btn-primary btn-sm" onclick="markPOReceived('${po.id}')" style="background:var(--success);"><i class="fas fa-box-open"></i> Mark Received</button>` : ''}
@@ -32736,7 +32803,7 @@ function renderARApPage() {
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
                 ? `${getClientDisplayHtml(r.client)}<div style="font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; font-style:italic;">via ${pEsc(r.sourcedViaResellerKey)}</div>`
                 : getClientDisplayHtml(r.client);
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${pEsc(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${pEsc(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         arRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
@@ -32829,7 +32896,7 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${pEsc(r.product)}</div></td><td>${pEsc(r.oem || '—')}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${pEsc(r.product)}</div></td><td>${pEsc(r.oem || '—')}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
@@ -33070,7 +33137,7 @@ function renderClientSummary() {
     const csApStatusBody = document.getElementById('csApStatusBody');
     if (csApStatusBody) {
         const filteredAP = activeRange ? apRecords.filter(r => isInRange(r.bd, activeRange)) : apRecords;
-        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? (inv.link ? `<a href="${pEsc(inv.link)}" target="_blank" rel="noopener" style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"><i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}</a>` : `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;">$${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
+        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;">$${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
     }
 
     const csRenewalTimeline = document.getElementById('csRenewalTimeline');
