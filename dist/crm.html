@@ -5532,8 +5532,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <th style="width:80px;">Term</th>
             <th style="width:104px;">Start</th>
             <th style="width:104px;">Expiry</th>
-            <th style="text-align:right; width:140px;">Avg Annual Cost</th>
-            <th style="text-align:right; width:130px;">Avg Annual Rev</th>
+            <th style="text-align:right; width:140px;">Total Contract Cost</th>
+            <th style="text-align:right; width:130px;">Total Contract Rev</th>
           </tr>
         </thead>
         <tbody class="contractBody"></tbody>
@@ -6801,7 +6801,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <thead><tr>
               <th>Product</th>
               <th style="text-align:right;">Licenses</th>
-              <th style="text-align:right;">Annual Rev</th>
+              <th style="text-align:right;">Total Rev</th>
               <th style="text-align:right;">Margin %</th>
               <th>Status</th>
             </tr></thead>
@@ -15796,8 +15796,8 @@ function renderContracts() {
             const annualRev = durationYears > 0 ? tRev / durationYears : 0;
             const billingType = (c.billingYears.length === 1 && Math.abs(c.billingYears[0].duration - c.term) < 0.1) ? "Upfront / Consolidated" : "Recurring / Custom";
             
-            totalAvgCost += annualCost;
-            totalAvgRev += annualRev;
+            totalAvgCost += tCost;
+            totalAvgRev += tRev;
 
             let relatedLinks = ``;
             const siblings = contracts.filter((sib, idx) => sib.client === c.client && idx !== i);
@@ -15855,8 +15855,8 @@ function renderContracts() {
                 <td><span class="badge" style="background:var(--hover-bg); border:1px solid var(--glass-border); font-weight:400; color:var(--text-main); padding:2px 6px; font-size:10.5px;">${c.term.toFixed(1)}M</span></td>
                 <td>${formatDateReadable(startD)}</td>
                 <td>${formatDateReadable(endD)}</td>
-                <td class="num">${fmt(annualCost)}<span style="font-size:10.5px; color:var(--text-dim); display:block;">${costSym}${Math.round(annualCostUSD).toLocaleString()}</span></td>
-                <td class="num" style="font-weight:500;">${fmt(annualRev)}</td>
+                <td class="num">${fmt(tCost)}<span style="font-size:10.5px; color:var(--text-dim); display:block;">${costSym}${Math.round(tCostUSD).toLocaleString()}</span></td>
+                <td class="num" style="font-weight:500;">${fmt(tRev)}</td>
             </tr>
             <tr id="detail-row-${i}" class="detail-row sp-detail-row">
                 <td colspan="8" style="padding:0; border:none;">
@@ -33004,7 +33004,7 @@ function renderClientSummary() {
             if (!productMap[c.product]) {
                 const isActive = c.endDate ? new Date(c.endDate) >= now : true; let annualRev = 0, annualCost = 0;
                 if (c.billingYears) { c.billingYears.forEach((y, yIdx) => { const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0; const baseCost2 = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0; const effFX2 = getEffectiveFX(c, y, yIdx); annualRev += baseSell * y.ratio; annualCost += baseCost2 * y.ratio * effFX2; }); }
-                const term = c.term || 12; productMap[c.product] = { licenses: parseInt(c.licenses) || 0, annualRev: annualRev * (12 / term), annualCost: annualCost * (12 / term), status: isActive };
+                const term = c.term || 12; productMap[c.product] = { licenses: parseInt(c.licenses) || 0, annualRev: annualRev, annualCost: annualCost, status: isActive }; // 8W — drop × (12/term) extrapolation; values are now contract totals (margin % is invariant either way). Keys kept as-is to minimize diff.
             } else productMap[c.product].licenses += parseInt(c.licenses) || 0;
         });
         csProductBody.innerHTML = Object.entries(productMap).map(([prod, data]) => { const mPct = data.annualRev > 0 ? ((data.annualRev - data.annualCost) / data.annualRev) * 100 : 0; return `<tr><td><strong>${prod}</strong></td><td style="text-align:right;">${data.licenses.toLocaleString()}</td><td style="text-align:right;">${fmt(data.annualRev)}</td><td style="text-align:right;"><span class="badge ${mPct >= 15 ? 'ok' : (mPct < 10 ? 'warn' : 'pending')}">${mPct.toFixed(1)}%</span></td><td><span class="badge ${data.status ? 'ok' : 'warn'}">${data.status ? 'Active' : 'Expired'}</span></td></tr>`; }).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim);">No products found.</td></tr>';
