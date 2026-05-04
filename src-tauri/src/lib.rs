@@ -1058,14 +1058,10 @@ fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) ->
 // Phase 8P — native print dialog.
 //
 // JS window.print() and iframe.contentWindow.print() are both no-ops in
-// Tauri 2's macOS WKWebView (diagnosed 2026-05-04, confirmed by user testing
-// after the 8O misadventure). Tauri 2 exposes Webview::print() on the Rust
-// side specifically as the macOS workaround — it invokes NSPrintOperation
-// natively, so the system print dialog appears in-app.
-//
-// The webview is auto-injected by Tauri's command-arg machinery. The print
-// dialog prints the live contents of whichever webview made the invoke call,
-// honouring the document's @media print CSS rules.
+// Tauri 2's macOS WKWebView (diagnosed 2026-05-04). Tauri 2 exposes
+// Webview::print() on the Rust side specifically as the macOS workaround —
+// it invokes NSPrintOperation natively, so the system print dialog appears
+// in-app. Used for Client Summary printing (no iframe nesting involved).
 // ============================================================================
 
 #[tauri::command]
@@ -1077,20 +1073,26 @@ fn native_print<R: tauri::Runtime>(webview: tauri::Webview<R>) -> serde_json::Va
 }
 
 // ============================================================================
-// Phase 8Q — print_html: open arbitrary HTML in a fresh Tauri webview window
-// and trigger its native print dialog.
+// Phase 8Q/R/S — print_html: open arbitrary HTML in a fresh Tauri webview
+// window and trigger its native print dialog.
 //
 // Why a new window: when the in-page preview modal renders documents inside
 // an <iframe srcdoc>, macOS WKWebView's print engine crops the iframe to its
-// on-screen pixel width instead of reflowing for the print page. The result
-// is a horizontally-clipped PDF (diagnosed 2026-05-04 from the user's PO PDF
-// output: "MASTER" instead of "MASTERSTONE", numbers cut off, etc.).
+// on-screen pixel width instead of reflowing for the print page. Loading the
+// document as the *top-level* page of its own window bypasses the nesting
+// entirely.
 //
-// Loading the document as the *top-level* page of its own window bypasses
-// the nesting entirely — the print engine paginates a single document with
-// its own @media print and @page rules, exactly as if it were opened in a
-// regular browser. This is structurally the same approach Chrome uses
-// internally for its print preview pipeline.
+// 8R note: std::thread::sleep instead of tokio::time::sleep, because the
+// project's Cargo.toml configures tokio with features = ["rt", "rt-multi-
+// thread"] only — adding "time" would break the Cargo.toml byte-equal lock
+// we've held since 8N.
+//
+// 8S note: prepend UTF-8 BOM to the saved file. WKWebView's default encoding
+// for file:// HTML on macOS is Latin-1 (legacy behaviour); without an
+// explicit charset declaration, multi-byte UTF-8 sequences get re-decoded
+// as Latin-1, producing mojibake (≈ → â‰ˆ, ₹ → â‚¹) in both the rendered
+// preview and the saved PDF. The BOM is the most reliable encoding
+// declaration for file:// URLs and takes precedence over all other hints.
 // ============================================================================
 
 #[tauri::command]
@@ -1099,20 +1101,16 @@ async fn print_html<R: tauri::Runtime>(
     html: String,
     title: Option<String>,
 ) -> serde_json::Value {
-    use std::io::Write;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-    // 1. Save HTML to system temp.
+    // 1. Save HTML to system temp WITH UTF-8 BOM (see 8S note above).
     let stamp = chrono::Utc::now().timestamp_millis();
     let temp_path = std::env::temp_dir().join(format!("Masterstone_print_{stamp}.html"));
-    {
-        let mut f = match std::fs::File::create(&temp_path) {
-            Ok(f) => f,
-            Err(e) => return serde_json::json!({"ok": false, "error": format!("Could not create temp file: {e}")}),
-        };
-        if let Err(e) = f.write_all(html.as_bytes()) {
-            return serde_json::json!({"ok": false, "error": format!("Could not write temp file: {e}")});
-        }
+    let mut buf: Vec<u8> = Vec::with_capacity(3 + html.len());
+    buf.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // UTF-8 BOM
+    buf.extend_from_slice(html.as_bytes());
+    if let Err(e) = std::fs::write(&temp_path, &buf) {
+        return serde_json::json!({"ok": false, "error": format!("Could not write temp file: {e}")});
     }
 
     // 2. Build file:// URL.
@@ -1139,23 +1137,12 @@ async fn print_html<R: tauri::Runtime>(
     };
 
     // 4. Wait briefly for the document to load + lay out before printing.
-    //    800ms covers most local file loads + image rendering on the user's
-    //    machine; if too short, the user can use Cmd+P inside the new window
-    //    to reprint after manual review.
-    //
-    //    We use std::thread::sleep rather than tokio::time::sleep because the
-    //    project's Cargo.toml configures tokio with features = ["rt",
-    //    "rt-multi-thread"] only — tokio::time would require adding "time" to
-    //    that list, breaking the Cargo.toml byte-equal lock we've held since
-    //    8N. The command runs on a Tauri worker thread (not the UI thread),
-    //    so a brief synchronous sleep is harmless.
+    //    See 8R note above — std::thread::sleep keeps Cargo.toml byte-equal.
     std::thread::sleep(std::time::Duration::from_millis(800));
 
     // 5. Trigger the native macOS print dialog on the new window's webview.
-    //    This dialog is modal to the new window; on dismissal, the new window
-    //    remains open showing the rendered document — user closes it via the
-    //    standard window close button when done. We deliberately do NOT auto-
-    //    close, because Tauri 2's print() may return before the user dismisses
+    //    The new window stays open until the user closes it; we don't auto-
+    //    close because Tauri 2's print() may return before the user dismisses
     //    the dialog (closing too early would cancel the print).
     match win.print() {
         Ok(_) => serde_json::json!({"ok": true, "label": label}),
@@ -2487,10 +2474,11 @@ pub fn run() {
             pick_file,
             open_local_file,
             // Phase 8P: native print dialog (macOS workaround for broken
-            // window.print() in Tauri 2 WKWebView).
+            // window.print() in Tauri 2 WKWebView). Used for Client Summary.
             native_print,
-            // Phase 8Q: print arbitrary HTML in a fresh top-level webview
+            // Phase 8Q/R/S: print arbitrary HTML in a fresh top-level webview
             // window — bypasses the nested-iframe layout cropping bug.
+            // Used for PO/Proposal/Invoice/Send-to-CA modal previews.
             print_html,
             // Session 8 / B-fix-8: file-linking subsystem removed.
             // The user opted out of the matcher / migration / category

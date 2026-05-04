@@ -1326,12 +1326,10 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     .card { break-inside: avoid; }
 }
 
-/* Phase 8P — print-preview modal: when the in-page modal is open at print
-   time, the user is asking to print the document inside its iframe. Hide
-   everything else in body, strip the modal's overlay backdrop and top
-   toolbar, and make the iframe fill the page so its own @media print rules
-   take effect on the rendered document. The body class is added by
-   openPreviewInPageModal while the modal is mounted and removed on close. */
+/* Phase 8P/Q — print-preview modal scoping. Kept in place for any future
+   path that wants to print the in-page modal directly; in 8Q+, modal Print
+   actually routes to a separate Tauri window via the print_html command, so
+   these rules are dead code in the Tauri path but remain harmless. */
 @media print {
     body.ms-preview-modal-open > *:not(#msPreviewModal) { display: none !important; }
     body.ms-preview-modal-open #msPreviewModal {
@@ -1343,7 +1341,6 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
         z-index: auto !important;
         box-shadow: none !important;
     }
-    /* The first child div is the modal's top toolbar (Close / Print buttons). */
     body.ms-preview-modal-open #msPreviewModal > div:first-child { display: none !important; }
     body.ms-preview-modal-open #msPreviewIframe {
         border: none !important;
@@ -10189,19 +10186,21 @@ function jumpToContract(idx) {
 
 // --- PRINT / EXPORT CLIENT SUMMARY ---
 
-// Phase 8P/Q — native print dialog bridges.
+// Phase 8P/Q/R/S — native print dialog bridges.
 //
-// nativePrint() — calls Webview::print() on the *current* webview. Used for
-// Client Summary, where the printable content is the current page itself
-// (with @media print rules in the parent stylesheet hiding chrome).
+// nativePrint() — calls Webview::print() on the *current* webview via the
+// Rust `native_print` Tauri command. Used for Client Summary, where the
+// printable content is the current page itself.
 //
-// printHtml(html, title) — opens the supplied HTML as a fresh top-level page
-// in a new Tauri window and triggers print there. Used for the document
-// previews (PO / Proposal / Invoice / Send to CA), because their print HTML
-// renders inside an <iframe srcdoc> in the in-page modal — and WKWebView's
-// print engine crops nested iframes instead of reflowing them for the page.
-// A new window with the document as its top-level page bypasses that bug
-// entirely.
+// printHtml(html, title) — sends an HTML string to the Rust `print_html`
+// command, which saves it to a temp file (with UTF-8 BOM for correct
+// encoding detection by WKWebView) and opens it as a top-level page in a
+// fresh Tauri webview window, then triggers print there. Used for the
+// document previews (PO / Proposal / Invoice / Send to CA), because their
+// print HTML renders inside an <iframe srcdoc> in the in-page modal — and
+// WKWebView's print engine crops nested iframes instead of reflowing them
+// for the print page. A new window with the document as its top-level page
+// bypasses that bug entirely.
 //
 // Both fall through to window.print() / iframe.contentWindow.print() in
 // standalone-browser mode so the standalone HTML still works.
@@ -10222,9 +10221,8 @@ async function nativePrint() {
 async function printHtml(html, title) {
     var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     if (!t || !t.invoke) {
-        // Standalone-browser fallback — no Tauri runtime; just trigger
-        // a print on the current document and let the caller's iframe
-        // handler do its thing.
+        // Standalone-browser fallback — no Tauri runtime; let caller's
+        // iframe handler do its thing.
         try { window.print(); } catch (_) {}
         return;
     }
@@ -10258,7 +10256,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8R";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8S";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -20776,7 +20774,7 @@ function renderProposalDetail(p) {
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openProposalForm('${p.id}')"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}')" title="Preview, print or save the proposal as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
+                <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}')" title="Preview the proposal and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
                 ${p.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(p.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="resyncProposalToPipeline('${p.id}')" title="Create or refresh the linked prospect in Prospect Pipeline"><i class="fas fa-link" style="color:var(--purple);"></i> Sync to Pipeline</button>
                 ${p.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markProposalSent('${p.id}')"><i class="fas fa-paper-plane"></i> Mark Sent</button>` : ''}
@@ -21793,10 +21791,6 @@ function openPreviewInPageModal(fullHtml, opts) {
         <iframe id="msPreviewIframe" style="border:none; width:100%; flex:1 1 auto; background:#eee;"></iframe>
     `;
     document.body.appendChild(overlay);
-    // Phase 8P — flag body so the @media print rules know a preview modal
-    // is mounted; this scopes the "hide everything except the iframe" print
-    // CSS so it only triggers when the user is actually looking at a preview.
-    document.body.classList.add('ms-preview-modal-open');
 
     const iframe = document.getElementById('msPreviewIframe');
     const closeBtn = document.getElementById('msPreviewCloseBtn');
@@ -21804,29 +21798,27 @@ function openPreviewInPageModal(fullHtml, opts) {
 
     function closeModal() {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        document.body.classList.remove('ms-preview-modal-open');
         document.removeEventListener('keydown', escHandler);
+        document.body.classList.remove('ms-preview-modal-open');
     }
     function escHandler(e) { if (e.key === 'Escape') closeModal(); }
 
     closeBtn.onclick = closeModal;
     printBtn.onclick = function () {
-        // Phase 8Q — print the iframe's source HTML as a top-level page in a
-        // new Tauri window. WKWebView's print engine crops nested iframes to
-        // their on-screen pixel width (visible as horizontally cut-off PDFs);
-        // a fresh top-level page paginates correctly.
+        // Phase 8Q/S — route the iframe's source HTML to a fresh top-level
+        // Tauri webview window via the print_html command. Avoids both the
+        // WKWebView nested-iframe print-cropping bug AND the file:// Latin-1
+        // encoding issue (handled via UTF-8 BOM in the Rust command).
         var docTitle = (opts.headerLabel ? opts.headerLabel : 'Print Preview')
                      + (opts.subtitle ? ' · ' + opts.subtitle : '');
         printHtml(iframeHtml, docTitle);
     };
     document.addEventListener('keydown', escHandler);
+    document.body.classList.add('ms-preview-modal-open');
 
     iframe.srcdoc = iframeHtml;
 
     if (autoPrint) {
-        // Phase 8Q — autoPrint also routes through printHtml (new window).
-        // The slight delay lets the modal's iframe finish loading first so
-        // the user sees the in-app preview before the new window appears.
         iframe.addEventListener('load', function () {
             setTimeout(function () {
                 var docTitle = (opts.headerLabel ? opts.headerLabel : 'Print Preview')
@@ -23090,7 +23082,7 @@ function renderPODetail(po) {
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openPOForm('${po.id}')"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview, print or save the PO as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
+                <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview the PO and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
                 ${po.externalLink ? `<a class="btn btn-ghost btn-sm" href="${pEsc(po.externalLink)}" target="_blank" rel="noopener" title="Open original document (external)" style="text-decoration:none;"><i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original</a>` : ''}
                 ${po.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markPOIssued('${po.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
@@ -25466,7 +25458,7 @@ function renderInvoiceDetail(inv) {
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; align-items:center; margin-bottom:12px;">
             <button class="btn btn-ghost btn-sm" onclick="openInvoiceForm('${inv.id}')"><i class="fas fa-edit"></i> Edit</button>
-            <button class="btn btn-ghost btn-sm" onclick="previewInvoicePDF('${inv.id}')" title="Preview, print or save the invoice as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
+            <button class="btn btn-ghost btn-sm" onclick="previewInvoicePDF('${inv.id}')" title="Preview the invoice and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
             <button class="btn btn-ghost btn-sm" onclick="openInvoicePDFForCA('${inv.id}')" title="Open in editable mode so QR + IRN can be filled in (by you or by your CA via the downloaded HTML), then printed to PDF and DSC-signed"><i class="fas fa-paper-plane" style="color:var(--warning);"></i> Send to CA</button>
             <button class="btn btn-ghost btn-sm" onclick="exportInvoiceEInvoiceJSON('${inv.id}')" title="Export GSTN e-invoice JSON"><i class="fas fa-code" style="color:var(--purple);"></i> e-Invoice JSON</button>
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid' || inv.status === 'Paid') ? `<button class="btn btn-ghost btn-sm" onclick="openIRNModal('${inv.id}')" title="Record IRN from IRP portal"><i class="fas fa-qrcode" style="color:var(--success);"></i> ${inv.irn ? 'Update IRN' : 'Record IRN'}</button>` : ''}
