@@ -1142,7 +1142,14 @@ async fn print_html<R: tauri::Runtime>(
     //    800ms covers most local file loads + image rendering on the user's
     //    machine; if too short, the user can use Cmd+P inside the new window
     //    to reprint after manual review.
-    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+    //
+    //    We use std::thread::sleep rather than tokio::time::sleep because the
+    //    project's Cargo.toml configures tokio with features = ["rt",
+    //    "rt-multi-thread"] only — tokio::time would require adding "time" to
+    //    that list, breaking the Cargo.toml byte-equal lock we've held since
+    //    8N. The command runs on a Tauri worker thread (not the UI thread),
+    //    so a brief synchronous sleep is harmless.
+    std::thread::sleep(std::time::Duration::from_millis(800));
 
     // 5. Trigger the native macOS print dialog on the new window's webview.
     //    This dialog is modal to the new window; on dismissal, the new window
