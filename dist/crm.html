@@ -10189,15 +10189,22 @@ function jumpToContract(idx) {
 
 // --- PRINT / EXPORT CLIENT SUMMARY ---
 
-// Phase 8P — native print dialog bridge.
-// JS window.print() and iframe.contentWindow.print() are both no-ops in
-// Tauri 2's macOS WKWebView. The Rust-side `native_print` Tauri command
-// calls Webview::print() natively, which opens the macOS NSPrintOperation
-// dialog in-app. The dialog prints the live contents of the main webview,
-// honouring the document's @media print CSS rules.
+// Phase 8P/Q — native print dialog bridges.
 //
-// In standalone-browser mode (no Tauri runtime), falls through to the
-// regular window.print() so the standalone HTML still works.
+// nativePrint() — calls Webview::print() on the *current* webview. Used for
+// Client Summary, where the printable content is the current page itself
+// (with @media print rules in the parent stylesheet hiding chrome).
+//
+// printHtml(html, title) — opens the supplied HTML as a fresh top-level page
+// in a new Tauri window and triggers print there. Used for the document
+// previews (PO / Proposal / Invoice / Send to CA), because their print HTML
+// renders inside an <iframe srcdoc> in the in-page modal — and WKWebView's
+// print engine crops nested iframes instead of reflowing them for the page.
+// A new window with the document as its top-level page bypasses that bug
+// entirely.
+//
+// Both fall through to window.print() / iframe.contentWindow.print() in
+// standalone-browser mode so the standalone HTML still works.
 async function nativePrint() {
     var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     if (!t || !t.invoke) {
@@ -10206,11 +10213,26 @@ async function nativePrint() {
     }
     try {
         var r = await t.invoke('native_print');
-        if (!r || !r.ok) {
-            console.warn('[8P] native_print returned not-ok:', r && r.error);
-        }
+        if (!r || !r.ok) console.warn('[8P] native_print returned not-ok:', r && r.error);
     } catch (e) {
         console.warn('[8P] native_print invoke failed:', e);
+    }
+}
+
+async function printHtml(html, title) {
+    var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+    if (!t || !t.invoke) {
+        // Standalone-browser fallback — no Tauri runtime; just trigger
+        // a print on the current document and let the caller's iframe
+        // handler do its thing.
+        try { window.print(); } catch (_) {}
+        return;
+    }
+    try {
+        var r = await t.invoke('print_html', { html: html || '', title: title || null });
+        if (!r || !r.ok) console.warn('[8Q] print_html returned not-ok:', r && r.error);
+    } catch (e) {
+        console.warn('[8Q] print_html invoke failed:', e);
     }
 }
 
@@ -10236,7 +10258,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8P";
+const MASTERSTONE_APP_BUILD = "Phase-4D-2026-04-29x-fix-8Q";
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -21789,20 +21811,28 @@ function openPreviewInPageModal(fullHtml, opts) {
 
     closeBtn.onclick = closeModal;
     printBtn.onclick = function () {
-        // Phase 8P — iframe.contentWindow.print() is a no-op in WKWebView.
-        // Route to the native macOS print dialog via the Rust command.
-        nativePrint();
+        // Phase 8Q — print the iframe's source HTML as a top-level page in a
+        // new Tauri window. WKWebView's print engine crops nested iframes to
+        // their on-screen pixel width (visible as horizontally cut-off PDFs);
+        // a fresh top-level page paginates correctly.
+        var docTitle = (opts.headerLabel ? opts.headerLabel : 'Print Preview')
+                     + (opts.subtitle ? ' · ' + opts.subtitle : '');
+        printHtml(iframeHtml, docTitle);
     };
     document.addEventListener('keydown', escHandler);
 
     iframe.srcdoc = iframeHtml;
 
     if (autoPrint) {
-        // Phase 8P — autoPrint also uses the native print path. The slight
-        // delay lets the iframe finish loading + images settle before we
-        // ask the system to print.
+        // Phase 8Q — autoPrint also routes through printHtml (new window).
+        // The slight delay lets the modal's iframe finish loading first so
+        // the user sees the in-app preview before the new window appears.
         iframe.addEventListener('load', function () {
-            setTimeout(function () { nativePrint(); }, 350);
+            setTimeout(function () {
+                var docTitle = (opts.headerLabel ? opts.headerLabel : 'Print Preview')
+                             + (opts.subtitle ? ' · ' + opts.subtitle : '');
+                printHtml(iframeHtml, docTitle);
+            }, 350);
         });
     }
 }
