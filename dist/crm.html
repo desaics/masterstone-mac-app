@@ -16092,6 +16092,26 @@ function saveContract() {
     };
 
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
+    // 8U — PO → Contract conversion back-link: if the user kicked off this
+    // save from convertPOToContract, complete the linkage by stamping the
+    // PO's linkedContractIdx with the new contract's index. Only runs on
+    // new-contract saves (idx === -1) to avoid touching the PO when the
+    // user re-edits an existing contract that happens to share a session.
+    if (idx === -1 && window.__msPendingPoToContractLink) {
+        try {
+            const _poId = window.__msPendingPoToContractLink;
+            if (typeof purchaseOrders !== 'undefined') {
+                const _po = purchaseOrders.find(x => x.id === _poId);
+                if (_po) {
+                    _po.linkedContractIdx = String(contracts.length - 1);
+                    _po.conversionCompletedAt = new Date().toISOString();
+                    _po.updatedAt = new Date().toISOString();
+                    if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
+                }
+            }
+        } catch (e) { console.warn('PO→Contract back-link failed:', e); }
+        delete window.__msPendingPoToContractLink;
+    }
     persistData();
     upsertClientMasterFromContract(data);
     resetForm(); 
@@ -23100,6 +23120,7 @@ function renderPODetail(po) {
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
                 ${(po.status === 'Issued' || po.status === 'Acknowledged') ? `<button class="btn btn-primary btn-sm" onclick="markPOReceived('${po.id}')" style="background:var(--success);"><i class="fas fa-box-open"></i> Mark Received</button>` : ''}
                 ${po.status === 'Received' ? `<button class="btn btn-primary btn-sm" onclick="markPOClosed('${po.id}')" style="background:var(--success);"><i class="fas fa-check-double"></i> Mark Closed</button>` : ''}
+                ${(po.status === 'Issued' || po.status === 'Acknowledged' || po.status === 'Received' || po.status === 'Closed') ? `<button class="btn btn-primary btn-sm" onclick="convertPOToContract('${po.id}')" style="background:var(--purple);" title="Provision a contract using this PO's data"><i class="fas fa-file-contract"></i> Convert to Contract</button>` : ''}
             </div>
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:18px; font-size:12px; color:var(--text-dim); padding-top:12px; border-top:1px solid var(--glass-border);">
@@ -23402,6 +23423,133 @@ function generatePOFromContract(contractIdx) {
             updatePOTotalsDisplay();
         }, 100);
     }, 200);
+}
+
+// Phase 4D continued (8U) — convert OEM PO into a Contract via Provisioning.
+// Mirrors convertProposalToContract; pre-fills client/dates/cost/currency/FX
+// from the PO + Client Master, leaves Client PO container empty for manual
+// entry, and back-links po.linkedContractIdx after saveContract completes
+// (via the window.__msPendingPoToContractLink relay).
+function convertPOToContract(poId) {
+    const po = purchaseOrders.find(x => x.id === poId);
+    if (!po) { alert("PO not found."); return; }
+    if (po.status === 'Draft' || po.status === 'Cancelled') {
+        if (!confirm(`PO is in '${po.status}' status. Usually you'd convert only Issued/Acknowledged/Received/Closed POs. Continue anyway?`)) return;
+    }
+    if (po.linkedContractIdx !== '' && po.linkedContractIdx !== null && po.linkedContractIdx !== undefined) {
+        if (!confirm(`This PO is already linked to a contract. Create another one anyway?`)) return;
+    }
+    if (!po.lineItems || po.lineItems.length === 0) {
+        alert("PO has no line items — cannot convert.");
+        return;
+    }
+
+    // Aggregate line items — mirrors proposal-to-contract pattern
+    const allOems = [...new Set([po.oem].filter(Boolean))];
+    const allProducts = po.lineItems.map(li => `${po.oem} — ${li.product}`.replace(/^ — | — $/g, '').trim()).filter(Boolean).join('; ');
+    const totalLicenses = po.lineItems.reduce((s, li) => s + (parseFloat(li.qty) || 0), 0);
+    // Pre-tax subtotal: qty × unitCost × (1 − discount/100), summed
+    const costSubtotal = po.lineItems.reduce((s, li) => {
+        const q = parseFloat(li.qty) || 0;
+        const u = parseFloat(li.unitCost) || 0;
+        const d = parseFloat(li.discountPct) || 0;
+        return s + (q * u * (1 - d / 100));
+    }, 0);
+
+    // Sell-side: if PO has a linked proposal with line items, use its pre-tax subtotal
+    let sellINRValue = 0;
+    if (po.linkedProposalId && typeof proposals !== 'undefined') {
+        const linkedProp = proposals.find(x => x.id === po.linkedProposalId);
+        if (linkedProp && linkedProp.lineItems && linkedProp.lineItems.length > 0) {
+            try {
+                const gst = determineProposalGSTMode(linkedProp.clientName, linkedProp.billingAddressId);
+                const totals = computeProposalTotals(linkedProp.lineItems, gst.mode);
+                sellINRValue = totals.subtotal || 0;
+            } catch (e) { /* fall back to 0 */ }
+        }
+    }
+
+    // Switch to provisioning tab
+    if (typeof showTab === 'function') showTab('provisionTab');
+
+    setTimeout(() => {
+        if (typeof resetForm === 'function') { try { resetForm(); } catch (e) {} }
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === null || v === undefined) ? '' : v; };
+
+        setVal('client', po.endClient || '');
+        setVal('product', allProducts || (po.lineItems[0] && po.lineItems[0].product) || po.oem || '');
+        setVal('licenses', totalLicenses);
+
+        // Internal PO Ref + OEM PO link/date — these are about the PO we just issued
+        setVal('internalPO', po.poNumber || '');
+        setVal('internalPODate', po.issueDate || '');
+        setVal('internalPOLink', po.externalLink || '');
+        const ipoLocalEl = document.getElementById('internalPOLink__local');
+        if (ipoLocalEl) {
+            ipoLocalEl.value = po.externalLinkLocalPath || '';
+            try { window.__msUpdateLocalToggleState(ipoLocalEl); } catch (_) {}
+        }
+
+        // Dates — use contract dates captured on PO if present, else fallback
+        const startDate = po.contractStartDate || po.issueDate || new Date().toISOString().slice(0, 10);
+        setVal('start', startDate);
+        let endDate = po.contractEndDate;
+        if (!endDate) {
+            const endD = new Date(startDate);
+            endD.setFullYear(endD.getFullYear() + 1);
+            endDate = endD.toISOString().slice(0, 10);
+        }
+        setVal('endDate', endDate);
+
+        // Cost side — currency, amount, FX from PO
+        setVal('costCurrency', po.currency || 'USD');
+        setVal('costAmount', costSubtotal.toFixed(2));
+        if (po.currency && po.currency !== 'INR' && po.fxRate) {
+            setVal('globalFX', po.fxRate);
+        }
+
+        // Sell — from linked proposal or 0 (manual)
+        setVal('sellINR', sellINRValue);
+
+        // Phase 4C.2/4C.3 — inherit commercial routing from PO
+        setVal('contractCommercialModel', po.commercialModel || 'Direct');
+        if (typeof populateResellerDropdown === 'function') populateResellerDropdown('contractSourcedViaResellerKey', po.sourcedViaResellerKey || '');
+        setVal('contractSourcedViaResellerKey', po.sourcedViaResellerKey || '');
+        if (typeof onContractCommercialModelChange === 'function') setTimeout(onContractCommercialModelChange, 0);
+
+        // Pull GST/PAN/CIN/contacts/addresses from Client Master if available
+        if (typeof clientMaster === 'object' && po.endClient && clientMaster[po.endClient]) {
+            if (typeof fillProvisioningFromMaster === 'function') {
+                try { fillProvisioningFromMaster(po.endClient); } catch (e) {}
+            }
+        }
+
+        if (typeof updateCurrencyLabels === 'function') updateCurrencyLabels();
+        if (typeof updateLiveMargin === 'function') updateLiveMargin();
+
+        // Banner
+        if (!document.getElementById('convertedFromPOBanner')) {
+            const provHeader = document.querySelector('#provisionTab .page-header');
+            if (provHeader) {
+                const banner = document.createElement('div');
+                banner.id = 'convertedFromPOBanner';
+                banner.style.cssText = 'background:rgba(124,58,237,0.08); border:1px solid var(--purple); color:var(--purple); padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:12.5px;';
+                banner.innerHTML = `<i class="fas fa-file-contract"></i> Converting <strong>OEM PO ${pEsc(po.poNumber)}</strong> to a contract. Review pre-populated fields below and <strong>add the Client PO manually</strong> in the Client Procurement Details section.${(po.commercialModel && po.commercialModel !== 'Direct') ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-handshake"></i> Routing inherited from PO: <strong>${pEsc(po.commercialModel)}</strong>${po.sourcedViaResellerKey ? ' via <strong>' + pEsc(po.sourcedViaResellerKey) + '</strong>' : ''}.</span>` : ''}${sellINRValue === 0 ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-info-circle"></i> Annual Sell Price (INR) left at 0 — please fill before saving.</span>` : ''}<a href="#" onclick="showTab('purchaseOrdersTab'); setTimeout(()=>openPODetail('${po.id}'), 200); return false;" style="color:var(--purple); text-decoration:underline; margin-left:6px;">← back to PO</a>`;
+                provHeader.insertAdjacentElement('afterend', banner);
+            }
+        }
+
+        // Relay for saveContract to back-link po.linkedContractIdx after save
+        window.__msPendingPoToContractLink = po.id;
+
+        // Tag the PO
+        po.conversionStartedAt = new Date().toISOString();
+        savePurchaseOrders();
+    }, 150);
+
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-file-contract"></i> Converting PO <strong>${pEsc(po.poNumber)}</strong> to contract. Review Provisioning form.`, 4500);
+    }
 }
 
 /* ============= END PURCHASE ORDERS MODULE ============= */
