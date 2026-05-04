@@ -21941,9 +21941,34 @@ function openPreviewInPageModal(fullHtml, opts) {
     if (stale) stale.remove();
 
     // Hide the in-iframe #toolbar (we provide our own outer one).
-    const iframeHtml = (typeof fullHtml === 'string' && fullHtml.indexOf('</head>') !== -1)
-        ? fullHtml.replace('</head>', '<style>#toolbar { display: none !important; }</style></head>')
-        : fullHtml;
+    // Phase 8O.1 — also inject a postMessage listener inside the iframe so
+    // that print() can be invoked from the iframe's own context. Cross-frame
+    // iframe.contentWindow.print() is unreliable in macOS WKWebView (silently
+    // fails depending on focus state); same-frame window.print() is reliable
+    // (the auto-fire script already proves this). Build the listener with
+    // split string literals so the embedded close-tag does not terminate the
+    // surrounding script block this function lives in.
+    const printListenerScript =
+        '<scr' + 'ipt>' +
+        'window.addEventListener("message", function(e){' +
+        '  var d = e && e.data;' +
+        '  if (d === "ms-print" || (d && d.type === "ms-print")) {' +
+        '    try { window.print(); } catch (_) {}' +
+        '  }' +
+        '});' +
+        '</scr' + 'ipt>';
+    let iframeHtml;
+    if (typeof fullHtml === 'string' && fullHtml.indexOf('</head>') !== -1) {
+        iframeHtml = fullHtml.replace('</head>', '<style>#toolbar { display: none !important; }</style></head>');
+        // Insert the listener just before </body> if present, else append.
+        if (iframeHtml.indexOf('</body>') !== -1) {
+            iframeHtml = iframeHtml.replace('</body>', printListenerScript + '</body>');
+        } else {
+            iframeHtml = iframeHtml + printListenerScript;
+        }
+    } else {
+        iframeHtml = fullHtml;
+    }
 
     const overlay = document.createElement('div');
     overlay.id = 'msPreviewModal';
@@ -21973,7 +21998,20 @@ function openPreviewInPageModal(fullHtml, opts) {
     function escHandler(e) { if (e.key === 'Escape') closeModal(); }
 
     closeBtn.onclick = closeModal;
+    // Phase 8O.1 — postMessage into the iframe so window.print() runs in the
+    // iframe's own context (reliable in WKWebView). The earlier code path
+    // (iframe.contentWindow.print() from outside the frame) is kept only as
+    // a last-resort fallback if postMessage somehow throws.
     printBtn.onclick = function () {
+        try {
+            if (iframe.contentWindow) {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.postMessage('ms-print', '*');
+                return;
+            }
+        } catch (e) {
+            console.warn('[ms 8O.1] postMessage print failed, falling back:', e);
+        }
         try { iframe.contentWindow.print(); }
         catch (e) { try { window.print(); } catch (_) {} }
     };
@@ -21984,7 +22022,16 @@ function openPreviewInPageModal(fullHtml, opts) {
     if (autoPrint) {
         iframe.addEventListener('load', function () {
             setTimeout(function () {
-                try { iframe.contentWindow.print(); } catch (e) {}
+                // Phase 8O.1 — also use postMessage for the autoPrint nudge.
+                // (The inline script injected by previewXxxPDF still runs
+                // window.print() from inside the iframe at +250ms, which is
+                // the primary trigger; this outer +350ms call is a safety net
+                // for any path where that inline script doesn't fire.)
+                try {
+                    if (iframe.contentWindow) {
+                        iframe.contentWindow.postMessage('ms-print', '*');
+                    }
+                } catch (e) {}
             }, 350);
         });
     }
