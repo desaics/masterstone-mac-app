@@ -5749,24 +5749,25 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom:20px;">
              <div>
                 <label>Start Date</label>
-                <input type="date" id="start" onchange="fetchHistoricalFX(); checkDatesForVarPricing();">
+                <input type="date" id="start" onchange="fetchHistoricalFX(); checkDatesForVarPricing(); if(typeof updateAnnualisedSubtexts==='function') updateAnnualisedSubtexts();">
             </div>
             <div>
                 <label>End Date <span id="termDisplay" style="color:var(--accent-cyan); margin-left:8px; font-weight:600;"></span></label>
-                <input type="date" id="endDate" onchange="checkDatesForVarPricing()">
+                <input type="date" id="endDate" onchange="checkDatesForVarPricing(); if(typeof updateAnnualisedSubtexts==='function') updateAnnualisedSubtexts();">
             </div>
              <div></div>
         </div>
 
         <div id="standardPricingArea" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
             <div>
-                <label>Annual Vendor Cost</label>
+                <label>Total Vendor Cost (for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total cost for the contract's full term as it appears on the OEM PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label>
                 <div style="display:flex; gap:12px;">
                     <select id="costCurrency" style="width:100px;" onchange="updateCurrencyLabels(); updateLiveMargin();"><option value="USD">USD</option><option value="INR">INR</option></select>
                     <input type="number" id="costAmount" value="0" oninput="updateLiveMargin()">
                 </div>
+                <div id="costAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
             </div>
-            <div><label>Annual Base Sell Price (INR)</label><input type="number" id="sellINR" value="0" oninput="updateLiveMargin()"></div>
+            <div><label>Total Sell Price (INR for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total sell value for the contract's full term as it appears on the Client PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label><input type="number" id="sellINR" value="0" oninput="updateLiveMargin()"><div id="sellAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div></div>
             
             <div style="align-self:end;">
                  <label style="color:var(--text-main);">Contract Start FX Rate (Day 1)</label>
@@ -14592,16 +14593,16 @@ function updateLiveMargin() {
         let totalCostInr = 0, totalSellInr = 0;
 
         if (isVar) {
-            // Sum across all visible variable pricing rows
+            // 8V — VP row values are now per-cycle TOTALS (not annualised).
+            // Sum directly without applying ratio.
             document.querySelectorAll('.vp-row').forEach(row => {
                 const c = parseFloat((row.querySelector('.vp-cost') || {}).value) || 0;
                 const s = parseFloat((row.querySelector('.vp-sell') || {}).value) || 0;
-                const dur = parseFloat((row.querySelector('.vp-duration') || {}).value) || 0;
-                const ratio = dur / 12;
-                totalCostInr += c * ratio * fx;
-                totalSellInr += s * ratio;
+                totalCostInr += c * fx;
+                totalSellInr += s;
             });
         } else {
+            // 8V — standard mode values are now totals for term (not annualised).
             const cost = parseFloat((document.getElementById('costAmount') || {}).value) || 0;
             const sell = parseFloat((document.getElementById('sellINR') || {}).value) || 0;
             totalCostInr = cost * fx;
@@ -14611,17 +14612,112 @@ function updateLiveMargin() {
         if (totalSellInr <= 0) {
             display.innerText = 'Gross Margin: —';
             display.style.color = 'var(--text-dim)';
-            return;
+        } else {
+            const marginInr = totalSellInr - totalCostInr;
+            const marginPct = (marginInr / totalSellInr) * 100;
+            const color = marginPct >= 20 ? 'var(--success)' : (marginPct >= 10 ? 'var(--accent-cyan)' : (marginPct >= 0 ? 'var(--warning)' : 'var(--danger)'));
+            display.innerText = `Gross Margin: ${marginPct.toFixed(1)}% (${fmt(marginInr)})`;
+            display.style.color = color;
         }
-        const marginInr = totalSellInr - totalCostInr;
-        const marginPct = (marginInr / totalSellInr) * 100;
-        const color = marginPct >= 20 ? 'var(--success)' : (marginPct >= 10 ? 'var(--accent-cyan)' : (marginPct >= 0 ? 'var(--warning)' : 'var(--danger)'));
-        display.innerText = `Gross Margin: ${marginPct.toFixed(1)}% (${fmt(marginInr)})`;
-        display.style.color = color;
+        // 8V — refresh annualised subtext displays
+        if (typeof updateAnnualisedSubtexts === 'function') updateAnnualisedSubtexts();
     } catch (e) {
         // Silent: don't break event handlers if DOM not ready
         console.warn('updateLiveMargin warning:', e);
     }
+}
+
+// 8V — total-for-term entry: live "annualised: ₹X/year" subtext under
+// each pricing input. Reads start/endDate to compute term ratio for the
+// standard pricing area, and each row's duration for VP rows. Values
+// shown in the inputs are totals for the term/cycle; this function shows
+// the equivalent annualised rate (which is what gets stored).
+function updateAnnualisedSubtexts() {
+    try {
+        const fmtAnnual = (val, termMonths, label) => {
+            if (!isFinite(val) || val === 0) return '';
+            if (!isFinite(termMonths) || termMonths <= 0) return '';
+            const ratio = termMonths / 12;
+            const annualised = val / ratio;
+            const termTxt = (Math.abs(termMonths - 12) < 0.05) ? '12-month term' : `${(+termMonths.toFixed(1))}-month term`;
+            const annualTxt = annualised.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+            return `${label}: ${annualTxt}/yr (over ${termTxt})`;
+        };
+
+        const isVar = document.getElementById('isVariablePricing') && document.getElementById('isVariablePricing').checked;
+
+        // Standard pricing area
+        const costSubtext = document.getElementById('costAnnualisedSubtext');
+        const sellSubtext = document.getElementById('sellAnnualisedSubtext');
+        if (costSubtext && sellSubtext) {
+            if (isVar) {
+                // Hide the standard subtexts when in VP mode (the VP rows have their own)
+                costSubtext.innerText = '';
+                sellSubtext.innerText = '';
+            } else {
+                const startVal = (document.getElementById('start') || {}).value;
+                const endVal = (document.getElementById('endDate') || {}).value;
+                const cost = parseFloat((document.getElementById('costAmount') || {}).value) || 0;
+                const sell = parseFloat((document.getElementById('sellINR') || {}).value) || 0;
+                const curr = (document.getElementById('costCurrency') || {}).value || 'USD';
+                if (startVal && endVal && typeof calcExactTerm === 'function') {
+                    const tMonths = calcExactTerm(startVal, endVal);
+                    if (tMonths > 0) {
+                        const ratio = tMonths / 12;
+                        const aCost = cost / ratio;
+                        const aSell = sell / ratio;
+                        const termTxt = (Math.abs(tMonths - 12) < 0.05) ? '12-month term' : `${(+tMonths.toFixed(1))}-month term`;
+                        costSubtext.innerText = (cost > 0)
+                            ? `Annualised: ${aCost.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${curr}/yr (over ${termTxt})`
+                            : '';
+                        sellSubtext.innerText = (sell > 0)
+                            ? `Annualised: ₹${aSell.toLocaleString('en-IN', { maximumFractionDigits: 0 })}/yr (over ${termTxt})`
+                            : '';
+                    } else {
+                        costSubtext.innerText = '';
+                        sellSubtext.innerText = '';
+                    }
+                } else {
+                    costSubtext.innerText = '';
+                    sellSubtext.innerText = '';
+                }
+            }
+        }
+
+        // VP rows
+        if (isVar) {
+            const curr = (document.getElementById('costCurrency') || {}).value || 'USD';
+            document.querySelectorAll('.vp-row').forEach(row => {
+                const cInp = row.querySelector('.vp-cost');
+                const sInp = row.querySelector('.vp-sell');
+                const dInp = row.querySelector('.vp-duration');
+                const cSub = row.querySelector('.vp-cost-annualised');
+                const sSub = row.querySelector('.vp-sell-annualised');
+                if (!cInp || !sInp || !dInp) return;
+                const c = parseFloat(cInp.value) || 0;
+                const s = parseFloat(sInp.value) || 0;
+                const dur = parseFloat(dInp.value) || 0;
+                if (cSub) {
+                    if (dur > 0 && c > 0) {
+                        const ratio = dur / 12;
+                        const aCost = c / ratio;
+                        cSub.innerText = `Annualised: ${aCost.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${curr}/yr`;
+                    } else {
+                        cSub.innerText = '';
+                    }
+                }
+                if (sSub) {
+                    if (dur > 0 && s > 0) {
+                        const ratio = dur / 12;
+                        const aSell = s / ratio;
+                        sSub.innerText = `Annualised: ₹${aSell.toLocaleString('en-IN', { maximumFractionDigits: 0 })}/yr`;
+                    } else {
+                        sSub.innerText = '';
+                    }
+                }
+            });
+        }
+    } catch (e) { /* non-fatal */ }
 }
 
 function loadSettings() { }
@@ -14966,8 +15062,14 @@ function addCustomCycle() {
             Cycle <span class="cycle-index" style="margin-left:4px;">${customCycleCount}</span> 
             <input type="number" class="vp-duration" value="3.0" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
         </div>
-        <input type="number" class="vp-cost" value="${defaultCost}" placeholder="Annual Cost USD" oninput="updateLiveMargin()">
-        <input type="number" class="vp-sell" value="${defaultSell}" placeholder="Annual Sell INR" oninput="updateLiveMargin()">
+        <div>
+            <input type="number" class="vp-cost" value="${defaultCost}" placeholder="Total Cost (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
+            <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+        </div>
+        <div>
+            <input type="number" class="vp-sell" value="${defaultSell}" placeholder="Total Sell INR (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
+            <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+        </div>
     `;
     container.appendChild(div);
     updateLiveMargin();
@@ -15001,8 +15103,8 @@ function generateYearlyInputs() {
 
     let html = `<div style="display:grid; grid-template-columns: 140px 1fr 1fr; gap:12px; margin-bottom:12px; border-bottom:1px solid var(--glass-border); padding-bottom:8px;">
         <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Cycle Duration</div>
-        <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Annual Base Cost</div>
-        <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Annual Sell (INR)</div>
+        <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Total Cost (for cycle)</div>
+        <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Total Sell INR (for cycle)</div>
     </div>`;
 
     let remainingMonths = termMonths;
@@ -15014,6 +15116,13 @@ function generateYearlyInputs() {
              let valCost = yData.baseCost !== undefined ? yData.baseCost : defaultCost;
              let valSell = yData.baseSell !== undefined ? yData.baseSell : defaultSell;
              let dur = yData.duration !== undefined ? yData.duration : 12;
+             // 8V — convert annualised storage → per-cycle total for display.
+             // Only when this row's value comes from cycle storage (not the
+             // form default), since defaults already reflect totals after
+             // editContract's load-time conversion.
+             const _ratio = (dur > 0) ? (dur / 12) : 1;
+             if (yData.baseCost !== undefined) valCost = (parseFloat(valCost) || 0) * _ratio;
+             if (yData.baseSell !== undefined) valSell = (parseFloat(valSell) || 0) * _ratio;
 
              html += `
              <div class="vp-row" style="display:grid; grid-template-columns: 140px 1fr 1fr; gap:12px; margin-bottom:10px; align-items:center;">
@@ -15021,8 +15130,14 @@ function generateYearlyInputs() {
                      Cycle <span class="cycle-index" style="margin-left:4px;">${cycleIndex}</span> 
                      <input type="number" class="vp-duration" value="${dur.toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
                  </div>
-                 <input type="number" class="vp-cost" value="${valCost}" placeholder="Annual Cost" oninput="updateLiveMargin()">
-                 <input type="number" class="vp-sell" value="${valSell}" placeholder="Annual Sell INR" oninput="updateLiveMargin()">
+                 <div>
+                     <input type="number" class="vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                     <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+                 </div>
+                 <div>
+                     <input type="number" class="vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                     <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+                 </div>
              </div>`;
              cycleIndex++;
          });
@@ -15045,8 +15160,14 @@ function generateYearlyInputs() {
                     Cycle <span class="cycle-index" style="margin-left:4px;">${cycleIndex}</span> 
                     <input type="number" class="vp-duration" value="${duration.toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
                 </div>
-                <input type="number" class="vp-cost" value="${valCost}" placeholder="Annual Cost" oninput="updateLiveMargin()">
-                <input type="number" class="vp-sell" value="${valSell}" placeholder="Annual Sell INR" oninput="updateLiveMargin()">
+                <div>
+                    <input type="number" class="vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                    <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+                </div>
+                <div>
+                    <input type="number" class="vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                    <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
+                </div>
             </div>`;
             
             remainingMonths -= duration;
@@ -15899,13 +16020,27 @@ function saveContract() {
     let stdUsdVal = rawCostVal; 
     let stdSellINR = +document.getElementById('sellINR').value || 0;
 
+    // 8V — total-for-term entry: convert user-entered TOTAL → annualised
+    // for storage (matches the baseSell × ratio consumer model that every
+    // dashboard, portfolio, and report depends on). Storage shape unchanged.
+    const _termRatioSave = (termMonths > 0) ? (termMonths / 12) : 1;
+    if (_termRatioSave > 0 && _termRatioSave !== 1) {
+        stdUsdVal = stdUsdVal / _termRatioSave;
+        stdSellINR = stdSellINR / _termRatioSave;
+    }
+
     let variablePrices = [];
     if(isVarPricing) {
         document.querySelectorAll('.vp-row').forEach(row => {
+             const userCost = parseFloat(row.querySelector('.vp-cost').value) || 0;
+             const userSell = parseFloat(row.querySelector('.vp-sell').value) || 0;
+             const dur = parseFloat(row.querySelector('.vp-duration').value) || 0;
+             // 8V — VP rows are entered as per-cycle totals; annualise for storage.
+             const _r = (dur > 0) ? (dur / 12) : 0;
              variablePrices.push({
-                 cost: parseFloat(row.querySelector('.vp-cost').value) || 0,
-                 sell: parseFloat(row.querySelector('.vp-sell').value) || 0,
-                 duration: parseFloat(row.querySelector('.vp-duration').value) || 0
+                 cost: (_r > 0) ? (userCost / _r) : 0,
+                 sell: (_r > 0) ? (userSell / _r) : 0,
+                 duration: dur
              });
         });
     }
@@ -16167,7 +16302,25 @@ function editContract(i) {
     document.getElementById('costAmount').value = c.costUSD; 
     document.getElementById('sellINR').value = c.sellINR; 
     document.getElementById('start').value = c.start; 
-    
+    // 8V — total-for-term display: convert stored annualised values into
+    // user-facing totals. We derive the term ratio from c.start/c.endDate
+    // and use it directly. Storage stays annualised; this is purely a
+    // display conversion at the form boundary.
+    try {
+        let _termMonthsLoad = 0;
+        if (c.endDate && c.start && typeof calcExactTerm === 'function') {
+            _termMonthsLoad = calcExactTerm(c.start, c.endDate);
+        }
+        if (!_termMonthsLoad || _termMonthsLoad <= 0) _termMonthsLoad = parseFloat(c.term) || 12;
+        const _termRatioLoad = (_termMonthsLoad > 0) ? (_termMonthsLoad / 12) : 1;
+        if (Math.abs(_termRatioLoad - 1) > 0.001) {
+            const _costTotal = (parseFloat(c.costUSD) || 0) * _termRatioLoad;
+            const _sellTotal = (parseFloat(c.sellINR) || 0) * _termRatioLoad;
+            document.getElementById('costAmount').value = _costTotal.toFixed(2);
+            document.getElementById('sellINR').value = Math.round(_sellTotal);
+        }
+    } catch (_e) { /* fall through with raw values */ }
+
     document.getElementById('vendorCode').value = c.vendorCode || '';
     document.getElementById('clientGST').value = c.clientGST || '';
     document.getElementById('clientPAN').value = c.clientPAN || '';
@@ -25274,9 +25427,17 @@ function autoPopulateInvoiceFromContract(c, cycleIdx) {
         subjectField.value = `${c.product || ''}${cycleTxt}`.trim();
     }
     // Compute amount for cycle (if selected) else annual sell
+    // 8V — bug fix: previously read c.billingYears[cycleIdx].yearSellINR,
+    // a field that was never written anywhere in the codebase. Falls
+    // through to c.sellINR (annualised) which over-stated the invoice
+    // amount for sub-12-month cycles. Now correctly compute the
+    // cycle-actual amount as baseSell × ratio, matching what every
+    // dashboard / portfolio / receivables view shows.
     let amount = 0;
     if (cycleIdx !== null && cycleIdx !== undefined && !Number.isNaN(cycleIdx) && c.billingYears && c.billingYears[cycleIdx]) {
-        amount = parseFloat(c.billingYears[cycleIdx].yearSellINR) || 0;
+        const _y = c.billingYears[cycleIdx];
+        const _baseSell = (_y.baseSell !== undefined ? _y.baseSell : c.sellINR) || 0;
+        amount = parseFloat(_baseSell) * (parseFloat(_y.ratio) || 1);
     }
     if (!amount) amount = parseFloat(c.sellINR) || 0;
     // Build single line item
@@ -25337,9 +25498,13 @@ function prefillLineItemFromContract() {
     const cycleIdx = cycleYearIdx !== '' ? parseInt(cycleYearIdx) : null;
     const subject = `${c.product || ''}${cycleIdx !== null ? ` — Cycle ${cycleIdx + 1}` : ''}`;
     // Use cycle's sellInr if cycle selected; else use contract annual sell
+    // 8V — same bug fix as in autoPopulateInvoiceFromContract: compute
+    // cycle-actual amount via baseSell × ratio, not the dead yearSellINR.
     let amount = 0;
     if (cycleIdx !== null && c.billingYears && c.billingYears[cycleIdx]) {
-        amount = parseFloat(c.billingYears[cycleIdx].yearSellINR) || 0;
+        const _y = c.billingYears[cycleIdx];
+        const _baseSell = (_y.baseSell !== undefined ? _y.baseSell : c.sellINR) || 0;
+        amount = parseFloat(_baseSell) * (parseFloat(_y.ratio) || 1);
     }
     if (!amount) amount = parseFloat(c.sellINR) || 0;
     const li = invoiceLineItemBlank();
