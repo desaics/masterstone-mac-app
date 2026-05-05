@@ -1150,6 +1150,45 @@ async fn print_html<R: tauri::Runtime>(
     }
 }
 
+// ============================================================================
+// 8AC — open_html_in_browser: write HTML to temp file and open it in the
+// system default browser (Chrome / Safari / Firefox / etc.) via the opener
+// plugin. Used for PDF previews so the user gets their real browser's
+// print dialog, which has more options and better fidelity than the in-app
+// Tauri WKWebView print pipeline.
+//
+// This is the "real browser" alternative to print_html (above). Same temp-
+// file write step (with UTF-8 BOM per the 8S note), but opens via OS
+// instead of building a Tauri webview window. macOS routes .html files
+// to the user's default browser.
+//
+// No new permissions needed: opener:default in capabilities/default.json
+// already permits app.opener().open_path() for any path.
+// ============================================================================
+
+#[tauri::command]
+async fn open_html_in_browser<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    html: String,
+) -> serde_json::Value {
+    // 1. Save HTML to system temp WITH UTF-8 BOM (same approach as print_html).
+    let stamp = chrono::Utc::now().timestamp_millis();
+    let temp_path = std::env::temp_dir().join(format!("Masterstone_preview_{stamp}.html"));
+    let mut buf: Vec<u8> = Vec::with_capacity(3 + html.len());
+    buf.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // UTF-8 BOM
+    buf.extend_from_slice(html.as_bytes());
+    if let Err(e) = std::fs::write(&temp_path, &buf) {
+        return serde_json::json!({"ok": false, "error": format!("Could not write temp file: {e}")});
+    }
+
+    // 2. Hand off to the OS via opener plugin. macOS routes .html → user's default browser.
+    let path_str = temp_path.to_string_lossy().to_string();
+    match app.opener().open_path(path_str.clone(), None::<&str>) {
+        Ok(_) => serde_json::json!({"ok": true, "path": path_str}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("Open failed: {e}")}),
+    }
+}
+
 #[tauri::command]
 async fn pick_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, title: Option<String>) -> serde_json::Value {
     use tauri_plugin_dialog::DialogExt;
@@ -2480,6 +2519,11 @@ pub fn run() {
             // window — bypasses the nested-iframe layout cropping bug.
             // Used for PO/Proposal/Invoice/Send-to-CA modal previews.
             print_html,
+            // 8AC: open arbitrary HTML in user's default browser (Chrome /
+            // Safari / etc.) — gives them their real browser's print dialog
+            // for higher-fidelity PDF export. Replaces print_html as the
+            // primary path for document previews.
+            open_html_in_browser,
             // Session 8 / B-fix-8: file-linking subsystem removed.
             // The user opted out of the matcher / migration / category
             // workflow in favour of manual linking via OneDrive URLs in

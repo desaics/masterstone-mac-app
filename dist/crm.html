@@ -2069,6 +2069,60 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .cm-info-row:last-child { border-bottom: none; }
 .cm-info-lbl { color: var(--text-subtle); font-size: var(--text-xs); flex-shrink: 0; min-width: 130px; font-weight: 500; }
 .cm-info-val { color: var(--text-main); font-weight: 500; text-align: right; word-break: break-word; }
+
+/* ============================================================
+   8AB H-B — Horizontal info strip layout.
+   When a meta card has class `.meta-horizontal`, its cm-info-row
+   children laid out as a 4-column grid (label-above-value cells).
+   Used for Invoice / PO detail "Info" cards to reduce vertical scroll.
+   ============================================================ */
+.meta-horizontal .meta-horizontal-grid .cm-info-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 6px 0;
+    border-bottom: none;
+    gap: 2px;
+    min-width: 0;
+}
+.meta-horizontal .meta-horizontal-grid .cm-info-lbl {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--text-subtle);
+    min-width: 0;
+    text-align: left;
+}
+.meta-horizontal .meta-horizontal-grid .cm-info-val {
+    font-size: 12.5px;
+    color: var(--text-main);
+    text-align: left;
+    font-weight: 500;
+    word-break: break-word;
+    line-height: 1.4;
+}
+.meta-horizontal-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px 24px;
+    margin-top: 8px;
+}
+.meta-horizontal h3 {
+    margin-bottom: 0;
+    border-bottom: 1px solid var(--glass-border);
+    padding-bottom: 8px;
+}
+.meta-horizontal .meta-horizontal-grid .cm-info-row.span-2 { grid-column: span 2; }
+.meta-horizontal .meta-horizontal-grid .cm-info-row.span-3 { grid-column: span 3; }
+.meta-horizontal .meta-horizontal-grid .cm-info-row.span-4 { grid-column: span 4; }
+
+@media (max-width: 1100px) {
+    .meta-horizontal-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 700px) {
+    .meta-horizontal-grid { grid-template-columns: 1fr; }
+}
 .cm-contracts-mini {
     display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
 }
@@ -8153,8 +8207,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
         <input type="text" id="poSearch" placeholder="Search PO #, OEM, subject..." style="flex:1; min-width:220px; max-width:340px;" oninput="renderPOsPage()">
         <select id="poStatusFilter" onchange="renderPOsPage()" style="width:160px;">
-          <option value="ALL">All Statuses</option>
-          <option value="OPEN" selected>Open Only</option>
+          <option value="ALL" selected>All Statuses</option>
+          <option value="OPEN">Open Only</option>
           <option value="Draft">Draft</option>
           <option value="Issued">Issued</option>
           <option value="Acknowledged">Acknowledged</option>
@@ -8202,23 +8256,26 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <button class="btn btn-ghost btn-sm" onclick="closePODetail()"><i class="fas fa-arrow-left"></i> Back to POs</button>
     </div>
     <div class="proposal-header-card" id="poDetailHeader"></div>
+    <!-- 8AB H-B: PO Info card moved to horizontal strip above line items. -->
+    <div class="card meta-horizontal" style="margin-top:14px; border-top:3px solid var(--accent-cyan);" id="poDetailMeta">
+      <!-- populated dynamically by renderPODetail() -->
+    </div>
     <div class="proposal-detail-wrap">
-      <div class="card" id="poDetailLineItems">
-        <h3><i class="fas fa-list" style="color:var(--purple);"></i> Line Items</h3>
-        <div id="poDetailLineItemsBody"></div>
+      <div>
+        <div class="card" id="poDetailLineItems">
+          <h3><i class="fas fa-list" style="color:var(--purple);"></i> Line Items</h3>
+          <div id="poDetailLineItemsBody"></div>
+        </div>
+        <!-- 8AB H-B: Attachments moved into left column. -->
+        <div id="poDetailAttachments" style="margin-top:16px;"></div>
       </div>
       <div>
         <div class="card" style="border-top:3px solid var(--purple);">
           <h3><i class="fas fa-calculator" style="color:var(--purple);"></i> Totals</h3>
           <div id="poDetailTotals"></div>
         </div>
-        <div class="card" style="margin-top:16px; border-top:3px solid var(--accent-cyan);" id="poDetailMeta">
-          <!-- Populated dynamically -->
-        </div>
       </div>
     </div>
-    <!-- Attachments (Phase 3 ATT-2) -->
-    <div id="poDetailAttachments" style="margin-top:16px;"></div>
   </div><!-- end #poDetailPage -->
 </div><!-- end #purchaseOrdersTab -->
 
@@ -8654,6 +8711,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <button class="btn btn-ghost btn-sm" onclick="closeInvoiceDetail()"><i class="fas fa-arrow-left"></i> Back to Invoices</button>
     </div>
     <div class="proposal-header-card" id="invDetailHeader"></div>
+    <!-- 8AB H-B: Invoice Info card moved to horizontal strip above line items. -->
+    <div class="card meta-horizontal" style="margin-top:14px; border-top:3px solid var(--purple);" id="invDetailMeta">
+      <!-- populated dynamically by renderInvoiceDetail() -->
+    </div>
     <div class="proposal-detail-wrap">
       <div>
         <div class="card" id="invDetailLineItems">
@@ -8664,19 +8725,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <h3><i class="fas fa-money-check-alt" style="color:var(--warning);"></i> Payment Records <span id="invDetailPaymentSummary" style="margin-left:auto; font-size:11.5px; color:var(--text-dim); font-weight:500;"></span></h3>
           <div id="invDetailPaymentsBody"></div>
         </div>
+        <!-- 8AB H-B: Attachments moved into left column. -->
+        <div id="invDetailAttachments" style="margin-top:16px;"></div>
       </div>
       <div>
         <div class="card" style="border-top:3px solid var(--accent-cyan);">
           <h3><i class="fas fa-calculator" style="color:var(--accent-cyan);"></i> Totals</h3>
           <div id="invDetailTotals"></div>
         </div>
-        <div class="card" style="margin-top:16px; border-top:3px solid var(--purple);" id="invDetailMeta">
-          <!-- populated dynamically -->
-        </div>
       </div>
     </div>
-    <!-- Attachments (Phase 3 ATT-2) -->
-    <div id="invDetailAttachments" style="margin-top:16px;"></div>
   </div><!-- end #invDetailPage -->
   </div><!-- end #invManagerView -->
 
@@ -8821,13 +8879,20 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="card" style="margin-bottom:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
         <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-list-alt"></i> Full AP Invoice Register</h3>
-        <select id="apStatusFilter" onchange="renderARApPage()" style="width:180px;">
-          <option value="ALL">All Statuses</option>
-          <option value="PENDING">OEM Invoice Awaited</option>
-          <option value="INVOICED">Received & Unpaid</option>
-          <option value="OVERDUE">Overdue</option>
-          <option value="SETTLED">Settled</option>
-        </select>
+        <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+          <!-- 8AA item #3: Selected Total — totals for current filter (hidden when ALL). -->
+          <div id="apFilterTotal" style="display:none; padding:6px 12px; border:1px solid var(--glass-border-strong); border-radius:4px; background:var(--detail-bg); font-size:11.5px; line-height:1.3;">
+            <div style="font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:0.10em; color:var(--text-subtle);">Selected Total</div>
+            <div id="apFilterTotalVal" style="margin-top:2px; color:var(--text-main); font-weight:600;">—</div>
+          </div>
+          <select id="apStatusFilter" onchange="renderARApPage()" style="width:180px;">
+            <option value="ALL">All Statuses</option>
+            <option value="PENDING">OEM Invoice Awaited</option>
+            <option value="INVOICED">Received & Unpaid</option>
+            <option value="OVERDUE">Overdue</option>
+            <option value="SETTLED">Settled</option>
+          </select>
+        </div>
       </div>
       <div class="table-scroll-wrap">
         <table id="apRegisterTable">
@@ -10603,6 +10668,12 @@ async function nativePrint() {
 }
 
 async function printHtml(html, title) {
+    // 8AC: route document previews to the user's default browser (Chrome /
+    // Safari / etc.) instead of opening a Tauri-controlled webview window.
+    // This gives full browser print dialog with all options and avoids
+    // CSS variable resolution issues that plagued the WKWebView print path.
+    // The `title` parameter is now unused (browser uses its own window title)
+    // but kept in the signature for backward compat with existing callers.
     var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     if (!t || !t.invoke) {
         // Standalone-browser fallback — no Tauri runtime; let caller's
@@ -10611,10 +10682,18 @@ async function printHtml(html, title) {
         return;
     }
     try {
-        var r = await t.invoke('print_html', { html: html || '', title: title || null });
-        if (!r || !r.ok) console.warn('[8Q] print_html returned not-ok:', r && r.error);
+        var r = await t.invoke('open_html_in_browser', { html: html || '' });
+        if (!r || !r.ok) console.warn('[8AC] open_html_in_browser returned not-ok:', r && r.error);
     } catch (e) {
-        console.warn('[8Q] print_html invoke failed:', e);
+        console.warn('[8AC] open_html_in_browser invoke failed:', e);
+        // Soft fallback: try the old print_html path if the new one isn't
+        // available (e.g. user's Tauri build doesn't yet have 8AC Rust).
+        try {
+            var r2 = await t.invoke('print_html', { html: html || '', title: title || null });
+            if (!r2 || !r2.ok) console.warn('[8AC fallback] print_html also failed:', r2 && r2.error);
+        } catch (e2) {
+            console.warn('[8AC fallback] print_html invoke failed:', e2);
+        }
     }
 }
 
@@ -22889,7 +22968,7 @@ function populatePOsFilters() {
 
 function getFilteredPOs() {
     const s = ((document.getElementById('poSearch') || {}).value || '').toLowerCase().trim();
-    const statusF = (document.getElementById('poStatusFilter') || {}).value || 'OPEN';
+    const statusF = (document.getElementById('poStatusFilter') || {}).value || 'ALL';
     const oemF = (document.getElementById('poOemFilter') || {}).value || 'ALL';
     return purchaseOrders.filter(po => {
         if (statusF === 'OPEN' && !isPOOpen(po.status)) return false;
@@ -23794,6 +23873,7 @@ function renderPODetail(po) {
     const linkedContract = (po.linkedContractIdx !== '' && po.linkedContractIdx !== null && po.linkedContractIdx !== undefined && typeof contracts !== 'undefined') ? contracts[parseInt(po.linkedContractIdx)] : null;
     metaEl.innerHTML = `
         <h3><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> PO Info</h3>
+        <div class="meta-horizontal-grid">
         <div class="cm-info-row"><span class="cm-info-lbl">PO #</span><span class="cm-info-val" style="font-family:monospace;">${pEsc(po.poNumber)}</span></div>
         <div class="cm-info-row"><span class="cm-info-lbl">Created</span><span class="cm-info-val">${po.createdAt ? formatDateReadable(po.createdAt.slice(0,10)) : '—'}</span></div>
         <div class="cm-info-row"><span class="cm-info-lbl">Last Updated</span><span class="cm-info-val">${po.updatedAt ? formatDateReadable(po.updatedAt.slice(0,10)) : '—'}</span></div>
@@ -23801,6 +23881,7 @@ function renderPODetail(po) {
         ${linkedContract ? `<div class="cm-info-row"><span class="cm-info-lbl">Linked Contract</span><span class="cm-info-val">${pEsc(linkedContract.client)} — ${pEsc(linkedContract.product)}</span></div>` : ''}
         ${po.paymentTerms ? `<div class="cm-info-row"><span class="cm-info-lbl">Payment Terms</span><span class="cm-info-val">${pEsc(po.paymentTerms)}</span></div>` : ''}
         ${po.deliveryTerms ? `<div class="cm-info-row"><span class="cm-info-lbl">Delivery Terms</span><span class="cm-info-val">${pEsc(po.deliveryTerms)}</span></div>` : ''}
+        </div><!-- /meta-horizontal-grid -->
         ${po.terms ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Additional Terms</div>
             <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${pEsc(po.terms)}</div>
@@ -26346,6 +26427,7 @@ function renderInvoiceDetail(inv) {
     const linkedProposal = inv.linkedProposalId && typeof proposals !== 'undefined' ? proposals.find(x => x.id === inv.linkedProposalId) : null;
     metaEl.innerHTML = `
         <h3><i class="fas fa-info-circle" style="color:var(--purple);"></i> Invoice Info</h3>
+        <div class="meta-horizontal-grid">
         <div class="cm-info-row"><span class="cm-info-lbl">Invoice #</span><span class="cm-info-val" style="font-family:monospace;">${pEsc(inv.invoiceNumber)}</span></div>
         <div class="cm-info-row"><span class="cm-info-lbl">Created</span><span class="cm-info-val">${inv.createdAt ? formatDateReadable(inv.createdAt.slice(0,10)) : '—'}</span></div>
         <div class="cm-info-row"><span class="cm-info-lbl">Last Updated</span><span class="cm-info-val">${inv.updatedAt ? formatDateReadable(inv.updatedAt.slice(0,10)) : '—'}</span></div>
@@ -26357,6 +26439,7 @@ function renderInvoiceDetail(inv) {
         ${inv.paymentTerms ? `<div class="cm-info-row"><span class="cm-info-lbl">Payment Terms</span><span class="cm-info-val">${pEsc(inv.paymentTerms)}</span></div>` : ''}
         <div class="cm-info-row"><span class="cm-info-lbl">Bank Details on PDF</span><span class="cm-info-val">${inv.bankDetailsShown ? 'Yes' : 'No'}</span></div>
 
+        </div><!-- /meta-horizontal-grid -->
         ${inv.irn ? `<div style="margin-top:12px; padding:10px 12px; background:rgba(52,211,153,0.08); border:1px solid rgba(52,211,153,0.3); border-radius:6px;">
             <div style="font-size:10.5px; color:var(--success); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; display:flex; align-items:center; gap:5px;"><i class="fas fa-qrcode"></i> E-Invoice Registered (IRN)</div>
             <div style="font-family:monospace; font-size:10.5px; color:var(--text-main); word-break:break-all; line-height:1.4;">${pEsc(inv.irn)}</div>
@@ -29099,9 +29182,6 @@ function renderAttachmentsPanel(containerId, entityType, entityId, options) {
                     <input type="text" id="${uploadDescId}" placeholder="e.g. Signed NDA, v2 of proposal">
                 </div>` : ''}
                 <button class="btn btn-primary btn-sm" onclick="attHandleUpload('${pEsc(containerId)}', '${pEsc(entityType)}', '${pEsc(entityId)}', '${uploadInputId}', '${uploadDescId}')" style="height:34px;"><i class="fas fa-upload"></i> Add</button>
-                <div class="att-upload-hint">
-                    <strong>Per-file limit:</strong> 500 KB · <strong>Per-entity limit:</strong> 2 MB · Supported: images (JPG/PNG), PDF, Word, Excel, text. All data stays in your browser.
-                </div>
             </div>
             ${itemsHtml}
         </div>
@@ -32633,22 +32713,37 @@ function downloadPre4AClientCSV() {
 function renderRmMigrationBanner() {
     const banner = document.getElementById('rmMigrationBanner');
     if (!banner) return;
+    // 8AA item #7: persistent dismissal — if user clicked X in any prior session, stay hidden.
+    try {
+        if (localStorage.getItem('ms_rmMigrationBannerDismissed') === '1') {
+            banner.style.display = 'none';
+            return;
+        }
+    } catch (e) { /* localStorage unavailable, fall through */ }
     const st = getMigration4AState();
     const daysSince = (iso) => {
         if (!iso) return 999;
         const ms = Date.now() - new Date(iso).getTime();
         return ms / (1000 * 60 * 60 * 24);
     };
-    if (st.state === 'complete' && daysSince(st.migratedAt) <= 30) {
+    // 8AA item #7: shorter auto-hide window — 7 days (was 30).
+    if (st.state === 'complete' && daysSince(st.migratedAt) <= 7) {
         banner.style.display = 'block';
         banner.innerHTML = `<i class="fas fa-check-circle" style="color:var(--success); margin-right:6px;"></i>
             <strong>Phase 4A migration complete.</strong>
             ${st.fullCount || 0} record${st.fullCount === 1 ? '' : 's'} migrated, ${st.stubCount || 0} stub${st.stubCount === 1 ? '' : 's'} seeded on ${st.migratedAt ? st.migratedAt.slice(0,10) : '—'}.
             ${st.stubCount > 0 ? '<strong>Stubs need completion</strong> — look for the "Needs Completion" filter.' : ''}
-            <span style="float:right; cursor:pointer; color:var(--text-dim);" onclick="document.getElementById('rmMigrationBanner').style.display='none';"><i class="fas fa-times"></i></span>`;
+            <span style="float:right; cursor:pointer; color:var(--text-dim);" onclick="dismissRmMigrationBanner();" title="Hide this banner permanently"><i class="fas fa-times"></i></span>`;
     } else {
         banner.style.display = 'none';
     }
+}
+
+// 8AA item #7: persistent dismissal helper.
+function dismissRmMigrationBanner() {
+    try { localStorage.setItem('ms_rmMigrationBannerDismissed', '1'); } catch (e) {}
+    const banner = document.getElementById('rmMigrationBanner');
+    if (banner) banner.style.display = 'none';
 }
 
 // NOTE: The Client Master list is filtered directly inside renderClientMasterList
@@ -33226,7 +33321,12 @@ function renderARApPage() {
         } else if (r.status === 'PENDING') { apToReceive += r.cycleCostINR; apToReceiveCount++; }
         else {
             if (r.daysOverdue > 0) { apOverdue += r.cycleCostINR; apOverdueCount++; }
-            if (r.status === 'INVOICED') { apInvoiced += r.cycleCostINR; apInvoicedCount++; }
+            // 8AA item #2: "Received & Unpaid" now reflects total of received-and-unpaid
+            // AND overdue (overdue = received-and-unpaid past due). Matches register filter.
+            if (r.status === 'INVOICED' || r.status === 'OVERDUE') {
+                apInvoiced += r.cycleCostINR;
+                apInvoicedCount++;
+            }
             const bucket = getAgingBucket(r.daysOverdue); apAgingBuckets[bucket] += r.cycleCostINR; apAgingCounts[bucket]++; cb[bucket] += r.cycleCostINR;
         }
     });
@@ -33276,6 +33376,36 @@ function renderARApPage() {
             const tb = (db && !isNaN(db.getTime())) ? db.getTime() : Infinity;
             return ta - tb; // ascending — oldest/most-overdue at the top
         });
+
+        // 8AA item #3: Compute Selected Total card. Hidden when filter=ALL or no rows.
+        // Shows INR total + USD total for any foreign-currency invoices + invoice count.
+        try {
+            const totalEl = document.getElementById('apFilterTotal');
+            const totalValEl = document.getElementById('apFilterTotalVal');
+            if (totalEl && totalValEl) {
+                if (apStatusVal === 'ALL' || filteredAP.length === 0) {
+                    totalEl.style.display = 'none';
+                } else {
+                    let totalINR = 0;
+                    let totalForeign = 0;
+                    let foreignCount = 0;
+                    filteredAP.forEach(r => {
+                        totalINR += (r.cycleCostINR || 0);
+                        if (r.costCurrency && r.costCurrency !== 'INR') {
+                            totalForeign += (r.cycleCostUSD || 0);
+                            foreignCount++;
+                        }
+                    });
+                    const inrPart = '₹' + Number(totalINR).toLocaleString('en-IN', {maximumFractionDigits: 0});
+                    const fxPart = foreignCount > 0
+                        ? ` · $${Number(totalForeign).toLocaleString('en-IN', {maximumFractionDigits: 0})} (${foreignCount} foreign)`
+                        : '';
+                    totalValEl.innerText = `${inrPart}${fxPart} · ${filteredAP.length} invoice${filteredAP.length === 1 ? '' : 's'}`;
+                    totalEl.style.display = 'inline-block';
+                }
+            }
+        } catch (e) { console.warn('AP filter total render:', e); }
+
         const rows = filteredAP.map(r => {
             const inv = r.invoices[0] || {};
             const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : r.status === 'OVERDUE' ? '<span class="badge warn">OVERDUE</span>' : '<span class="badge pending">AWAITED</span>';
