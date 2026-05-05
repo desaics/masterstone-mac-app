@@ -2174,7 +2174,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 }
 .me-primary-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
 .me-primary-btn.active {
-    background: rgba(59,130,246,0.12);
+    background: var(--accent-tint-mid);
     border-color: var(--accent-cyan); color: var(--accent-cyan);
 }
 .me-primary-btn.active i { color: var(--warning); }
@@ -2217,7 +2217,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .me-add-btn:hover {
     border-color: var(--accent-cyan); color: var(--accent-cyan);
     border-style: solid;
-    background: rgba(59,130,246,0.04);
+    background: var(--accent-tint-low);
 }
 
 .me-copy-bill-btn {
@@ -2227,7 +2227,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     display: inline-flex; align-items: center; gap: 5px;
     transition: all 0.15s ease;
 }
-.me-copy-bill-btn:hover { background: rgba(59,130,246,0.08); border-color: var(--accent-cyan); }
+.me-copy-bill-btn:hover { background: var(--accent-tint-low); border-color: var(--accent-cyan); }
 
 .me-link-select {
     font-size: 12px; padding: 6px 8px;
@@ -2259,8 +2259,8 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .cm-me-primary-badge {
     font-size: 10px; font-weight: 700;
     padding: 2px 7px; border-radius: 10px;
-    background: rgba(59,130,246,0.15); color: var(--accent-cyan);
-    border: 1px solid rgba(59,130,246,0.3);
+    background: var(--accent-tint-mid); color: var(--accent-cyan);
+    border: 1px solid var(--accent-tint-strong);
     text-transform: uppercase; letter-spacing: 0.4px;
 }
 .cm-me-body {
@@ -2605,7 +2605,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 
 /* Stage colors */
 .stage-identified   { background: rgba(148,163,184,0.1); color: var(--text-dim); border-color: rgba(148,163,184,0.25); }
-.stage-qualified    { background: rgba(59,130,246,0.1);  color: var(--accent-cyan); border-color: rgba(59,130,246,0.25); }
+.stage-qualified    { background: var(--accent-tint-low);  color: var(--accent-cyan); border-color: var(--accent-tint-strong); }
 .stage-demo         { background: var(--accent-tint-low);  color: var(--purple); border-color: var(--accent-tint-strong); }
 .stage-proposal     { background: rgba(245,158,11,0.1);  color: var(--warning); border-color: rgba(245,158,11,0.25); }
 .stage-negotiation  { background: rgba(249,115,22,0.1);  color: var(--warning); border-color: rgba(249,115,22,0.25); }
@@ -3213,12 +3213,32 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     border-bottom: 1px solid var(--glass-border);
     vertical-align: middle;
 }
+/* 8AD: Line-item table inputs harmonized with 8Z-forms underline aesthetic.
+   Uses bottom-border-only style but with a subtle tint background so input
+   cells still feel distinct in dense tables. Focus thickens the bottom
+   border to 2px deep teal (matching the form-wide focus treatment). */
 .prop-line-item-table td input, .prop-line-item-table td select {
-    padding: 6px 8px; font-size: 12px;
-    background: var(--input-bg);
-    border: 1px solid var(--glass-border);
-    border-radius: 4px;
+    padding: 6px 4px;
+    font-size: 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--glass-border);
+    border-radius: 0;
     width: 100%; min-width: 0;
+    transition: border-bottom-color 0.15s ease, background-color 0.15s ease;
+}
+.prop-line-item-table td input:hover:not(:focus):not(:disabled),
+.prop-line-item-table td select:hover:not(:focus):not(:disabled) {
+    border-bottom-color: var(--text-dim);
+    background: var(--accent-tint-low);
+}
+.prop-line-item-table td input:focus,
+.prop-line-item-table td select:focus {
+    outline: none;
+    border-bottom: 2px solid var(--accent-cyan);
+    padding-bottom: 5px;
+    background: var(--accent-tint-low);
+    box-shadow: none;
 }
 .prop-line-item-table td input[type="number"] { text-align: right; }
 .prop-line-delete-btn {
@@ -3812,7 +3832,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 }
 .att-icon.pdf      { background: rgba(248,113,113,0.12); color: var(--danger); }
 .att-icon.image    { background: var(--accent-tint-mid);  color: var(--accent-cyan); }
-.att-icon.doc      { background: rgba(59,130,246,0.12);  color: #3b82f6; }
+.att-icon.doc      { background: var(--accent-tint-mid);  color: var(--accent-cyan); }
 .att-icon.sheet    { background: rgba(52,211,153,0.12);  color: var(--success); }
 .att-icon.text     { background: rgba(148,163,184,0.1);  color: var(--text-dim); }
 .att-icon.archive  { background: rgba(251,191,36,0.12);  color: var(--warning); }
@@ -7031,16 +7051,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="font-size:12.5px; color:var(--text-dim); margin-bottom:14px; line-height:1.6;">
             Tools for advanced maintenance. Most users never need these — they exist for cases where the one-time migrations were skipped or need to be re-run.
         </div>
-        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--accent-cyan); border-radius:6px; padding:14px 16px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-                <div style="flex:1; min-width:240px;">
-                    <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:4px;">Phase 4A — Reseller Migration</div>
-                    <div style="font-size:11.5px; color:var(--text-dim);" id="phase4aMigStatusText">Status: —</div>
-                </div>
-                <button class="btn btn-ghost btn-sm" onclick="triggerPhase4AMigrationReview(true)" style="background:var(--input-bg);"><i class="fas fa-redo"></i> Re-run Migration Review</button>
-            </div>
-        </div>
-        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--warning); border-radius:6px; padding:14px 16px; margin-top:10px;">
+        <!-- 8AD/8AE: Phase 4A — Reseller Migration card removed. Migration is
+             complete (one-time process, ran 2026-04-24); the re-run button was
+             dead weight in the UI. The migration code itself is preserved in JS
+             (triggerPhase4AMigrationReview) for safety — only the UI card is gone. -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--warning); border-radius:6px; padding:14px 16px;">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
                 <div style="flex:1; min-width:240px;">
                     <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:4px;">Consistency Scan (Prospects · Proposals · POs · Invoices)</div>
@@ -22780,7 +22795,7 @@ let poView = 'kanban';
 let currentPODetailId = null;
 let poFormLineItems = [];
 
-const PO_STATUSES = ['Draft', 'Issued', 'Acknowledged', 'Received', 'Closed', 'Cancelled'];
+const PO_STATUSES = ['Closed', 'Draft', 'Issued', 'Acknowledged', 'Received', 'Cancelled']; // 8AD: Closed first per user request
 
 function isPOOpen(status) { return status === 'Draft' || status === 'Issued' || status === 'Acknowledged' || status === 'Received'; }
 function isPOClosed(status) { return status === 'Closed' || status === 'Cancelled'; }
