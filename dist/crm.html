@@ -22648,9 +22648,24 @@ window.addEventListener('load', function () {
 });
 <` + `/script>` : ''}
 </body></html>`;
+    // 8AC-fix2: skip the window.open() / in-page-modal flow entirely.
+    // window.open() returns null in Tauri's WKWebView (popups are blocked
+    // there), so the previous code always fell through to the in-page modal,
+    // which then required a second click on its "Print / Save as PDF" button
+    // to invoke printHtml() → 8AC's open_html_in_browser → Chrome.
+    // Short-circuit: route directly to printHtml() so Chrome opens on the
+    // first click. The in-page modal path is preserved as a fallback below
+    // in case open_html_in_browser fails (e.g. user runs the standalone
+    // crm.html outside Tauri — no Rust runtime available).
+    var docTitle = (autoPrint ? 'Save as PDF' : 'Proposal Preview') + ' · ' + pEsc(p.proposalNumber);
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    if (hasTauri) {
+        printHtml(fullHtml, docTitle);
+        return;
+    }
+    // Fallback: standalone-browser mode — try window.open(), fall back to modal.
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
-        // Phase 8J — popup blocked (typical in Tauri webview); fall back to in-page modal
         openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(p.proposalNumber) + ' · ' + pEsc(p.clientName), autoPrint: autoPrint });
         return;
     }
@@ -24851,9 +24866,16 @@ window.addEventListener('load', function () {
 });
 <` + `/script>` : ''}
 </body></html>`;
+    // 8AC-fix2: short-circuit to printHtml() so Chrome opens on the first click.
+    // See proposal version for full explanation. Standalone-browser fallback below.
+    var docTitle = (autoPrint ? 'Save as PDF' : 'PO Preview') + ' · ' + pEsc(po.poNumber);
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    if (hasTauri) {
+        printHtml(fullHtml, docTitle);
+        return;
+    }
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
-        // Phase 8J — popup blocked; fall back to in-page modal
         openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(po.poNumber) + ' · ' + pEsc(po.oem), autoPrint: autoPrint });
         return;
     }
@@ -27808,9 +27830,16 @@ window.addEventListener('load', function () {
 <` + `/script>` : ''}
 ${editableScript}
 </body></html>`;
+    // 8AC-fix2: short-circuit to printHtml() so Chrome opens on the first click.
+    // See proposal version for full explanation. Standalone-browser fallback below.
+    var docTitle = (editableQrIrn ? 'Editable for CA' : (autoPrint ? 'Save as PDF' : 'Invoice Preview')) + ' · ' + pEsc(inv.invoiceNumber);
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    if (hasTauri) {
+        printHtml(fullHtml, docTitle);
+        return;
+    }
     const w = window.open('', '_blank', 'width=900,height=1000');
     if (!w) {
-        // Phase 8J — popup blocked; fall back to in-page modal
         openPreviewInPageModal(fullHtml, { headerLabel: headerLabel, subtitle: pEsc(inv.invoiceNumber) + ' · ' + pEsc(inv.clientName), autoPrint: autoPrint });
         return;
     }
