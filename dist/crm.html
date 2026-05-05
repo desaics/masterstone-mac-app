@@ -22574,6 +22574,30 @@ function previewProposalPDF(proposalId, opts) {
 <html><head>
 <title>Proposal ${pEsc(p.proposalNumber)} — ${titleSuffix}</title>
 <style>
+/* 8AC-fix1: define CSS variables used by the embedded PDF template HTML.
+   Required because var(--xxx) refs in buildXxxPDFHTML output otherwise resolve
+   to empty (black-on-black banners) when this HTML opens standalone in any
+   browser — Chrome, Safari, or Tauri popup. Light-themed permanently; PDFs
+   are always light-themed regardless of app theme. */
+:root {
+    --glass-panel: #ffffff;
+    --glass-border: rgba(20, 20, 15, 0.06);
+    --glass-border-strong: rgba(20, 20, 15, 0.12);
+    --detail-bg: #f4f3ef;
+    --text-main: #14140f;
+    --text-dim: #74716a;
+    --text-subtle: #a39f97;
+    --accent-cyan: #0c5e5b;
+    --accent-blue: #084744;
+    --accent-tint-low: rgba(12, 94, 91, 0.08);
+    --accent-tint-mid: rgba(12, 94, 91, 0.15);
+    --accent-tint-strong: rgba(12, 94, 91, 0.25);
+    --purple: #614b8a;
+    --success: #1e6135;
+    --warning: #8a4d12;
+    --danger: #8a2424;
+    --font-tech: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+}
 @media print {
     /* 8T — preserve background colours when printing/exporting PDF.
        WKWebView (and every browser) strips background-color/image by default. */
@@ -24767,6 +24791,30 @@ function previewPOPDF(poId, opts) {
 <html><head>
 <title>PO ${pEsc(po.poNumber)} — ${titleSuffix}</title>
 <style>
+/* 8AC-fix1: define CSS variables used by the embedded PDF template HTML.
+   Required because var(--xxx) refs in buildXxxPDFHTML output otherwise resolve
+   to empty (black-on-black banners) when this HTML opens standalone in any
+   browser — Chrome, Safari, or Tauri popup. Light-themed permanently; PDFs
+   are always light-themed regardless of app theme. */
+:root {
+    --glass-panel: #ffffff;
+    --glass-border: rgba(20, 20, 15, 0.06);
+    --glass-border-strong: rgba(20, 20, 15, 0.12);
+    --detail-bg: #f4f3ef;
+    --text-main: #14140f;
+    --text-dim: #74716a;
+    --text-subtle: #a39f97;
+    --accent-cyan: #0c5e5b;
+    --accent-blue: #084744;
+    --accent-tint-low: rgba(12, 94, 91, 0.08);
+    --accent-tint-mid: rgba(12, 94, 91, 0.15);
+    --accent-tint-strong: rgba(12, 94, 91, 0.25);
+    --purple: #614b8a;
+    --success: #1e6135;
+    --warning: #8a4d12;
+    --danger: #8a2424;
+    --font-tech: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+}
 @media print {
     /* 8T — preserve background colours when printing/exporting PDF.
        WKWebView (and every browser) strips background-color/image by default. */
@@ -27699,6 +27747,30 @@ function previewInvoicePDF(invId, opts) {
 <html><head>
 <title>Invoice ${pEsc(inv.invoiceNumber)} — ${titleSuffix}</title>
 <style>
+/* 8AC-fix1: define CSS variables used by the embedded PDF template HTML.
+   Required because var(--xxx) refs in buildXxxPDFHTML output otherwise resolve
+   to empty (black-on-black banners) when this HTML opens standalone in any
+   browser — Chrome, Safari, or Tauri popup. Light-themed permanently; PDFs
+   are always light-themed regardless of app theme. */
+:root {
+    --glass-panel: #ffffff;
+    --glass-border: rgba(20, 20, 15, 0.06);
+    --glass-border-strong: rgba(20, 20, 15, 0.12);
+    --detail-bg: #f4f3ef;
+    --text-main: #14140f;
+    --text-dim: #74716a;
+    --text-subtle: #a39f97;
+    --accent-cyan: #0c5e5b;
+    --accent-blue: #084744;
+    --accent-tint-low: rgba(12, 94, 91, 0.08);
+    --accent-tint-mid: rgba(12, 94, 91, 0.15);
+    --accent-tint-strong: rgba(12, 94, 91, 0.25);
+    --purple: #614b8a;
+    --success: #1e6135;
+    --warning: #8a4d12;
+    --danger: #8a2424;
+    --font-tech: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+}
 @media print {
     /* 8T — preserve background colours when printing/exporting PDF.
        WKWebView (and every browser) strips background-color/image by default. */
