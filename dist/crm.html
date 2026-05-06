@@ -464,6 +464,121 @@ h2 {
     text-transform: uppercase; letter-spacing: 0.6px;
 }
 
+/* ===== Business Snapshot tiles ===== */
+.bs-kpi-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-3); margin-bottom: var(--space-3);
+}
+.bs-kpi-tile {
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: transform 0.2s ease, border-color 0.2s, box-shadow 0.2s;
+    contain: layout style;
+}
+.bs-kpi-tile:hover {
+    transform: translateY(-1px);
+    border-color: var(--glass-border-strong);
+    box-shadow: var(--shadow-md);
+}
+.bs-kpi-tile.bs-kpi-static { cursor: default; }
+.bs-kpi-tile.bs-kpi-static:hover { transform: none; box-shadow: var(--shadow-sm); border-color: var(--glass-border); }
+.bs-kpi-lbl {
+    font-size: 10px; color: var(--text-subtle); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px;
+}
+.bs-kpi-val {
+    font-size: 22px; font-weight: 650; line-height: 1.1;
+    color: var(--text-main); font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
+}
+.bs-kpi-val.bs-positive { color: var(--success); }
+.bs-kpi-val.bs-negative { color: var(--danger); }
+
+.bs-money-row {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: var(--space-3); margin-bottom: var(--space-3);
+}
+.bs-money-tile {
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-sm);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    contain: layout style;
+}
+.bs-money-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+}
+.bs-money-cf {
+    font-size: 11px; color: var(--text-subtle); cursor: pointer;
+    transition: color 0.15s;
+}
+.bs-money-cf:hover { color: var(--accent-cyan); }
+.bs-money-val {
+    font-size: 28px; font-weight: 650; line-height: 1.1;
+    color: var(--text-main); font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em; margin-bottom: 10px;
+    cursor: pointer; display: inline-block;
+}
+.bs-money-val:hover { color: var(--accent-cyan); }
+.bs-bucket-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    border-top: 1px solid var(--glass-border); padding-top: 8px;
+}
+.bs-bucket {
+    cursor: pointer; padding: 4px 6px; border-radius: 4px;
+    transition: background-color 0.15s;
+}
+.bs-bucket:hover { background: var(--accent-tint-low); }
+.bs-bucket-lbl { font-size: 11px; color: var(--text-subtle); margin-bottom: 2px; }
+.bs-bucket-val { font-size: 12.5px; font-weight: 600; color: var(--text-main); font-variant-numeric: tabular-nums; }
+
+.bs-activity-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-3); margin-bottom: var(--space-3);
+}
+.bs-activity-tile {
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-sm);
+    contain: layout style;
+}
+.bs-tile-lbl {
+    font-size: 10.5px; color: var(--text-subtle); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+}
+.bs-tile-val {
+    font-size: 22px; font-weight: 650; line-height: 1.15;
+    color: var(--text-main); font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em; margin-bottom: 6px;
+    cursor: pointer; display: inline-block;
+}
+.bs-tile-val:hover { color: var(--accent-cyan); }
+.bs-tile-sub {
+    font-size: 11px; color: var(--text-subtle); margin-bottom: 6px;
+}
+.bs-tile-rows {
+    border-top: 1px solid var(--glass-border); padding-top: 6px;
+    font-size: 11px; line-height: 1.6;
+}
+.bs-tile-row {
+    display: flex; justify-content: space-between;
+    cursor: pointer; padding: 1px 4px; border-radius: 3px;
+    transition: background-color 0.15s;
+}
+.bs-tile-row:hover { background: var(--accent-tint-low); }
+.bs-tile-row .bs-tile-row-lbl { color: var(--text-subtle); }
+.bs-tile-row .bs-tile-row-val { color: var(--text-main); font-variant-numeric: tabular-nums; }
+/* ===== End Business Snapshot tiles ===== */
+
 /* Dashboard Grids */
 .dashboard-grid-split {
     display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-bottom: 20px;
@@ -1323,7 +1438,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     white-space: nowrap;
 }
 .age-current { background: rgba(16,185,129,0.1); color: var(--success); }
-.age-30 { background: rgba(59,130,246,0.1); color: var(--accent-cyan); }
+.age-30 { background: var(--accent-tint-low); color: var(--accent-cyan); }
 .age-60 { background: rgba(245,158,11,0.15); color: var(--warning); }
 .age-90 { background: rgba(239,68,68,0.1); color: var(--danger); }
 .age-90plus { background: rgba(220,38,38,0.2); color: #f87171; font-weight: 700; }
@@ -1424,7 +1539,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 
 .cs-product-pill {
     display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2);
+    background: var(--accent-tint-low); border: 1px solid var(--accent-tint-strong);
     border-radius: 20px; padding: 4px 12px; font-size: 12px;
     color: var(--accent-cyan); margin: 3px; white-space: nowrap;
 }
@@ -1484,7 +1599,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 /* Status row colour coding for AR/AP tables */
 .tr-paid   td { background: rgba(16,185,129,0.04) !important; }
 .tr-overdue td { background: rgba(239,68,68,0.04) !important; }
-.tr-invoiced td { background: rgba(59,130,246,0.04) !important; }
+.tr-invoiced td { background: var(--accent-tint-low) !important; }
 
 /* Client meta pills */
 .cs-client-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
@@ -2047,7 +2162,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
 }
 .cm-tier-key { background: var(--accent-tint-mid); color: var(--purple); border: 1px solid var(--accent-tint-strong); }
-.cm-tier-standard { background: rgba(59,130,246,0.1); color: var(--accent-cyan); border: 1px solid rgba(59,130,246,0.2); }
+.cm-tier-standard { background: var(--accent-tint-low); color: var(--accent-cyan); border: 1px solid var(--accent-tint-strong); }
 .cm-tier-partner { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
 .cm-stat-row {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px;
@@ -5557,7 +5672,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <div class="nav-section-header">Overview</div>
-  <div class="nav-item active" title="Financial Intelligence" onclick="showTab('dashboard')"><i class="fas fa-chart-pie"></i> Financial Intelligence</div>
+  <div class="nav-item active" title="Business Snapshot" onclick="showTab('businessSnapshotTab')"><i class="fas fa-gauge-high"></i> Business Snapshot</div>
+  <div class="nav-item" title="Financial Intelligence" onclick="showTab('dashboard')"><i class="fas fa-chart-pie"></i> Financial Intelligence</div>
 
   <div class="nav-section-header">Sales &amp; CRM</div>
   <div class="nav-item" title="Client Master" onclick="showTab('clientMasterTab')"><i class="fas fa-address-card"></i> Client Master</div>
@@ -5591,7 +5707,96 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
 <div class="main-content">
   
-  <div id="dashboard">
+  <div id="businessSnapshotTab">
+    <div class="page-header" style="margin-bottom: 14px;">
+      <h2>Business Snapshot</h2>
+      <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+    </div>
+
+    <!-- Row 1: 4-tile KPI strip -->
+    <div class="bs-kpi-strip">
+      <div class="bs-kpi-tile" id="bsKpi_invoiced" title="Click to open Invoices for current FY">
+        <div class="bs-kpi-lbl">FY Invoiced</div>
+        <div class="bs-kpi-val" id="bsKpi_invoicedVal">—</div>
+      </div>
+      <div class="bs-kpi-tile" id="bsKpi_active" title="Click to open Subscription Portfolio (Active)">
+        <div class="bs-kpi-lbl">Active Contracts</div>
+        <div class="bs-kpi-val" id="bsKpi_activeVal">—</div>
+      </div>
+      <div class="bs-kpi-tile bs-kpi-static" id="bsKpi_cash" title="Receivables minus Payables">
+        <div class="bs-kpi-lbl">Net Cash Position</div>
+        <div class="bs-kpi-val" id="bsKpi_cashVal">—</div>
+      </div>
+      <div class="bs-kpi-tile" id="bsKpi_pipeline" title="Click to open Prospect Pipeline">
+        <div class="bs-kpi-lbl">Pipeline Value</div>
+        <div class="bs-kpi-val" id="bsKpi_pipelineVal">—</div>
+      </div>
+    </div>
+
+    <!-- Row 2: Receivables + Payables -->
+    <div class="bs-money-row">
+      <div class="bs-money-tile">
+        <div class="bs-money-head">
+          <div class="bs-tile-lbl">Receivables Outstanding</div>
+          <div class="bs-money-cf" id="bsRecCfWrap" title="Click to view carry-forward open AR (pre-current FY)">
+            Carry-forward <span id="bsRecCfVal">—</span>
+          </div>
+        </div>
+        <div class="bs-money-val" id="bsRecVal" title="Click to open Receivables">—</div>
+        <div class="bs-bucket-grid">
+          <div class="bs-bucket" id="bsRecB1" title="Click to filter Receivables to 0–30 days"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsRecB1Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB2" title="Click to filter Receivables to 31–60 days"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsRecB2Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB3" title="Click to filter Receivables to 61–90 days"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsRecB3Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB4" title="Click to filter Receivables to 90+ days"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsRecB4Val">—</div></div>
+        </div>
+      </div>
+      <div class="bs-money-tile">
+        <div class="bs-money-head">
+          <div class="bs-tile-lbl">Payables Outstanding</div>
+          <div class="bs-money-cf" id="bsPayCfWrap" title="Click to view carry-forward open AP (pre-current FY)">
+            Carry-forward <span id="bsPayCfVal">—</span>
+          </div>
+        </div>
+        <div class="bs-money-val" id="bsPayVal" title="Click to open Payables">—</div>
+        <div class="bs-bucket-grid">
+          <div class="bs-bucket" id="bsPayB1" title="Click to filter Payables to 0–30 days"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsPayB1Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB2" title="Click to filter Payables to 31–60 days"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsPayB2Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB3" title="Click to filter Payables to 61–90 days"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsPayB3Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB4" title="Click to filter Payables to 90+ days"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsPayB4Val">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: 4 activity tiles -->
+    <div class="bs-activity-row">
+      <div class="bs-activity-tile">
+        <div class="bs-tile-lbl">Prospects</div>
+        <div class="bs-tile-val" id="bsPrCount" title="Click to open Prospect Pipeline">—</div>
+        <div class="bs-tile-sub" id="bsPrSub">—</div>
+        <div class="bs-tile-rows" id="bsPrRows"></div>
+      </div>
+      <div class="bs-activity-tile">
+        <div class="bs-tile-lbl">Purchase Orders</div>
+        <div class="bs-tile-val" id="bsPoCount" title="Click to open Purchase Orders">—</div>
+        <div class="bs-tile-sub" id="bsPoSub">—</div>
+        <div class="bs-tile-rows" id="bsPoRows"></div>
+      </div>
+      <div class="bs-activity-tile">
+        <div class="bs-tile-lbl">Renewals</div>
+        <div class="bs-tile-val" id="bsRnCount" title="Click to open Renewal Engine">—</div>
+        <div class="bs-tile-sub" id="bsRnSub">—</div>
+        <div class="bs-tile-rows" id="bsRnRows"></div>
+      </div>
+      <div class="bs-activity-tile">
+        <div class="bs-tile-lbl">Contracts</div>
+        <div class="bs-tile-val" id="bsCtCount" title="Click to open Subscription Portfolio">—</div>
+        <div class="bs-tile-sub" id="bsCtSub">—</div>
+        <div class="bs-tile-rows" id="bsCtRows"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dashboard" class="hidden">
     <div class="dashboard-sticky-top">
         <!-- Row 1: Title + primary action -->
         <div class="page-header" style="margin-bottom: 14px;">
@@ -15250,7 +15455,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -15269,6 +15474,10 @@ function showTab(tab) {
     if(tab === 'dashboard') {
         setTimeout(debouncedCalcDashboard, 50);
         if (typeof renderFyBasisToggle === 'function') renderFyBasisToggle('fyBasisToggleDashboard');
+    }
+
+    if(tab === 'businessSnapshotTab') {
+        if (typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot();
     }
 
     // Bug fix #27 — Cleanup: removed transitional `if(tab === 'arApTab')` handler. AR/AP rendering is now triggered by the invoicesTab and purchaseInvoicesTab handlers below.
@@ -15736,7 +15945,7 @@ function updateClientAnalysisCharts(labels, revs, costs, margins, fxs, marginPct
                 data: {
                     labels: labels,
                     datasets: [
-                        { label: 'Revenue', data: revs, backgroundColor: 'rgba(59, 130, 246, 0.8)' },
+                        { label: 'Revenue', data: revs, backgroundColor: 'rgba(12, 94, 91, 0.8)' },
                         { label: 'Realized Cost', data: costs, backgroundColor: 'rgba(148, 163, 184, 0.2)' },
                         { label: 'Margin', data: margins, type: 'line', borderColor: '#10b981', borderWidth: 2, tension: 0.3 }
                     ]
@@ -18602,7 +18811,7 @@ function renderKanban(filtered) {
     const hiddenCount = activeTotal - filtered.length;
     let hiddenBanner = '';
     if (hiddenCount > 0 && activeTotal > 0) {
-        hiddenBanner = `<div style="grid-column:1/-1; padding:8px 12px; background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.2); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
+        hiddenBanner = `<div style="grid-column:1/-1; padding:8px 12px; background:var(--accent-tint-low); border:1px solid var(--accent-tint-strong); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
             <span><i class="fas fa-info-circle"></i> Showing <strong>${filtered.length}</strong> of <strong>${activeTotal}</strong> prospects. <strong>${hiddenCount}</strong> hidden by current filters.</span>
             <button class="btn btn-ghost btn-sm" onclick="clearPipelineFilters()" style="padding:3px 10px; font-size:11px;"><i class="fas fa-filter"></i> Clear Filters</button>
         </div>`;
@@ -20109,7 +20318,7 @@ function renderProposalsKanban(filtered) {
     const hiddenCount = totalAll - filtered.length;
     let banner = '';
     if (hiddenCount > 0 && totalAll > 0) {
-        banner = `<div style="grid-column:1/-1; padding:8px 12px; background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.2); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
+        banner = `<div style="grid-column:1/-1; padding:8px 12px; background:var(--accent-tint-low); border:1px solid var(--accent-tint-strong); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
             <span><i class="fas fa-info-circle"></i> Showing <strong>${filtered.length}</strong> of <strong>${totalAll}</strong>. <strong>${hiddenCount}</strong> hidden by filters.</span>
             <button class="btn btn-ghost btn-sm" onclick="clearProposalsFilters()" style="padding:3px 10px; font-size:11px;"><i class="fas fa-filter"></i> Clear Filters</button>
         </div>`;
@@ -29606,9 +29815,9 @@ function calcForwardPipeline() {
 
     // Dim colors if includePipeline is off
     const committedColor = 'rgba(16, 185, 129, 0.75)';       // green/success
-    const pipelineColor  = 'rgba(59, 130, 246, 0.55)';       // cyan/accent
+    const pipelineColor  = 'rgba(12, 94, 91, 0.55)';       // cyan/accent
     const committedBorder = 'rgba(16, 185, 129, 1)';
-    const pipelineBorder  = 'rgba(59, 130, 246, 1)';
+    const pipelineBorder  = 'rgba(12, 94, 91, 1)';
 
     if (typeof Chart === 'undefined') { console.warn("Chart.js not loaded"); return; }
 
@@ -32872,6 +33081,418 @@ function dismissRmMigrationBanner() {
    ====================================================================== */
 
 
+
+/* ======================================================================
+   Business Snapshot module — Phase 8B
+   Single landing page summarising current FY across 6 dimensions, plus
+   a 4-number headline KPI strip. All cells clickable; jumps to the
+   relevant existing tab with the relevant filter pre-applied. Reads
+   from in-memory globals only (no schema/Rust changes).
+   ====================================================================== */
+
+// Get current Indian FY range as { start, end, label } where label is e.g. "2026-2027".
+// Indian FY = Apr 1 → Mar 31. If today is Jan-Mar, FY started last calendar year.
+function bsGetCurrentFYRange() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth(); // 0=Jan..3=Apr..11=Dec
+    const fyStartYear = m >= 3 ? y : y - 1;
+    const start = new Date(fyStartYear, 3, 1);  // Apr 1
+    const end   = new Date(fyStartYear + 1, 2, 31, 23, 59, 59); // Mar 31
+    const label = `${fyStartYear}-${fyStartYear + 1}`;
+    // Match getFYRange() value format (which uses "YYYY-YYYY" key)
+    const filterValue = `${fyStartYear}-${fyStartYear + 1}`;
+    return { start, end, label, filterValue, fyStartYear };
+}
+
+// Format INR amount as Lakh / Crore for headline tiles. Uses Indian numbering.
+function bsFmtINRShort(n) {
+    const v = Number(n) || 0;
+    const sign = v < 0 ? '-' : '';
+    const a = Math.abs(v);
+    if (a >= 1e7) return sign + '₹' + (a / 1e7).toFixed(a >= 1e8 ? 1 : 2) + ' Cr';
+    if (a >= 1e5) return sign + '₹' + (a / 1e5).toFixed(a >= 1e6 ? 0 : 1) + ' L';
+    if (a >= 1e3) return sign + '₹' + (a / 1e3).toFixed(0) + 'K';
+    return sign + '₹' + a.toFixed(0);
+}
+
+// Same but with explicit +/- sign (used for net cash position only).
+function bsFmtINRSigned(n) {
+    const v = Number(n) || 0;
+    if (v >= 0) return '+' + bsFmtINRShort(v);
+    return bsFmtINRShort(v); // bsFmtINRShort already prefixes minus
+}
+
+// Compute total value of a PO record in INR (using existing helpers).
+function bsPOTotalINR(po) {
+    if (!po || !po.lineItems) return 0;
+    try {
+        const gst = (typeof determinePOGSTMode === 'function') ? determinePOGSTMode(po.oem) : { mode: 'inter' };
+        const t = computePOTotals(po.lineItems, gst.mode);
+        return poToInr(t.grandTotal, po.currency, po.fxRate) || 0;
+    } catch (e) { return 0; }
+}
+
+// Build AR/AP open-invoice records for the snapshot. Returns:
+//   { recOpen: [...], payOpen: [...] } where each entry is { amount, ageDays, fyDate }.
+// Mirrors the loop in renderARApPage() but is intentionally simpler — we only
+// need (amount, age, FY-bucket-date) per OPEN invoice for headline + aging + carry-forward.
+function bsBuildOpenArAp() {
+    const recOpen = []; const payOpen = [];
+    const today = new Date(); today.setHours(0,0,0,0);
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return { recOpen, payOpen };
+
+    contracts.forEach((c) => {
+        if (!c || !c.billingYears) return;
+        c.billingYears.forEach((y, yIdx) => {
+            const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
+            const baseCost = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
+            const cycleRev = baseSell * y.ratio;
+            const cycleCostUSD = baseCost * y.ratio;
+            const effFX = (typeof getEffectiveFX === 'function') ? getEffectiveFX(c, y, yIdx) : 83;
+            const cycleCostINR = cycleCostUSD * effFX;
+
+            // ----- AR side -----
+            if (cycleRev > 0) {
+                const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
+                    ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '' }] : []);
+                const cycleVendorPaid = !!y.paid;
+                if (arInvs.length >= 2) {
+                    arInvs.forEach((inv) => {
+                        const isPaid = !!inv.paidDate || cycleVendorPaid;
+                        if (isPaid) return;
+                        const amt = Number(inv.amount) || 0;
+                        if (amt <= 0) return;
+                        const invDateStr = inv.date || '';
+                        if (!invDateStr) { recOpen.push({ amount: amt, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null }); return; }
+                        const invDate = new Date(invDateStr);
+                        const ageDays = Math.floor((today - invDate) / 86400000);
+                        recOpen.push({ amount: amt, ageDays, fyDate: invDate });
+                    });
+                } else {
+                    const isPaid = !!y.paymentDate || cycleVendorPaid || (arInvs.length === 1 && !!arInvs[0].paidDate);
+                    if (!isPaid) {
+                        const invDateStr = (arInvs.length === 1 && arInvs[0].date) ? arInvs[0].date : (y.actualInvoiceDate || '');
+                        if (!invDateStr) {
+                            recOpen.push({ amount: cycleRev, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null });
+                        } else {
+                            const invDate = new Date(invDateStr);
+                            const ageDays = Math.floor((today - invDate) / 86400000);
+                            recOpen.push({ amount: cycleRev, ageDays, fyDate: invDate });
+                        }
+                    }
+                }
+            }
+
+            // ----- AP side -----
+            if (cycleCostINR > 0) {
+                const apInvs = (y.apInvoices && y.apInvoices.length > 0) ? y.apInvoices :
+                    ((y.oemInvoiceNo || y.oemInvoiceDate) ? [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate || '', amount: cycleCostINR, payDate: y.oemPaymentDate || '' }] : []);
+                const cycleOemPaid = !!y.oemPaid;
+                if (apInvs.length >= 2) {
+                    apInvs.forEach((inv) => {
+                        const isPaid = !!inv.payDate || cycleOemPaid;
+                        if (isPaid) return;
+                        const amt = Number(inv.amount) || 0;
+                        if (amt <= 0) return;
+                        const invDateStr = inv.date || '';
+                        if (!invDateStr) { payOpen.push({ amount: amt, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null }); return; }
+                        const invDate = new Date(invDateStr);
+                        const ageDays = Math.floor((today - invDate) / 86400000);
+                        payOpen.push({ amount: amt, ageDays, fyDate: invDate });
+                    });
+                } else {
+                    const isPaid = !!y.oemPaymentDate || cycleOemPaid || (apInvs.length === 1 && !!apInvs[0].payDate);
+                    if (!isPaid) {
+                        const invDateStr = (apInvs.length === 1 && apInvs[0].date) ? apInvs[0].date : (y.oemInvoiceDate || '');
+                        if (!invDateStr) {
+                            payOpen.push({ amount: cycleCostINR, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null });
+                        } else {
+                            const invDate = new Date(invDateStr);
+                            const ageDays = Math.floor((today - invDate) / 86400000);
+                            payOpen.push({ amount: cycleCostINR, ageDays, fyDate: invDate });
+                        }
+                    }
+                }
+            }
+        });
+    });
+    return { recOpen, payOpen };
+}
+
+// Bucket a list of {amount, ageDays} into [b1=0-30, b2=31-60, b3=61-90, b4=90+].
+function bsAgeBuckets(list) {
+    let b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+    list.forEach(r => {
+        const a = r.ageDays;
+        const v = Number(r.amount) || 0;
+        if (a === null || a === undefined) { b1 += v; return; } // No invoice date → treat as current
+        if (a <= 30) b1 += v;
+        else if (a <= 60) b2 += v;
+        else if (a <= 90) b3 += v;
+        else b4 += v;
+    });
+    return { b1, b2, b3, b4, total: b1 + b2 + b3 + b4 };
+}
+
+// Click handlers: each navigates and (optionally) sets a filter dropdown.
+function bsGotoTab(tab, filterId, filterVal) {
+    showTab(tab);
+    if (filterId && filterVal !== undefined) {
+        setTimeout(() => {
+            const el = document.getElementById(filterId);
+            if (el) {
+                el.value = filterVal;
+                try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+            }
+        }, 60);
+    }
+}
+
+// Main render — pulls live data and writes into the snapshot tab DOM.
+function renderBusinessSnapshot() {
+    if (!document.getElementById('businessSnapshotTab')) return;
+    const fy = bsGetCurrentFYRange();
+    const today = new Date(); today.setHours(0,0,0,0);
+
+    // Header label
+    const fyLbl = document.getElementById('bsFyLabel');
+    if (fyLbl) fyLbl.textContent = `Current FY · ${fy.label}`;
+
+    // ---------- Money side (AR/AP) ----------
+    const { recOpen, payOpen } = bsBuildOpenArAp();
+    const recTotal = recOpen.reduce((s, r) => s + (r.amount || 0), 0);
+    const payTotal = payOpen.reduce((s, r) => s + (r.amount || 0), 0);
+    const recBuckets = bsAgeBuckets(recOpen);
+    const payBuckets = bsAgeBuckets(payOpen);
+    // Carry-forward = open invoices whose FY-bucket date is BEFORE current FY start
+    const recCF = recOpen.filter(r => r.fyDate && r.fyDate < fy.start).reduce((s, r) => s + (r.amount || 0), 0);
+    const payCF = payOpen.filter(r => r.fyDate && r.fyDate < fy.start).reduce((s, r) => s + (r.amount || 0), 0);
+
+    const setT = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+    setT('bsRecVal', bsFmtINRShort(recTotal));
+    setT('bsRecCfVal', bsFmtINRShort(recCF));
+    setT('bsRecB1Val', bsFmtINRShort(recBuckets.b1));
+    setT('bsRecB2Val', bsFmtINRShort(recBuckets.b2));
+    setT('bsRecB3Val', bsFmtINRShort(recBuckets.b3));
+    setT('bsRecB4Val', bsFmtINRShort(recBuckets.b4));
+    setT('bsPayVal', bsFmtINRShort(payTotal));
+    setT('bsPayCfVal', bsFmtINRShort(payCF));
+    setT('bsPayB1Val', bsFmtINRShort(payBuckets.b1));
+    setT('bsPayB2Val', bsFmtINRShort(payBuckets.b2));
+    setT('bsPayB3Val', bsFmtINRShort(payBuckets.b3));
+    setT('bsPayB4Val', bsFmtINRShort(payBuckets.b4));
+
+    // ---------- Headline KPI strip ----------
+    // 1) FY Invoiced — sum of pre-tax AR invoice amounts dated this FY
+    let fyInvoiced = 0;
+    if (Array.isArray(contracts)) {
+        contracts.forEach(c => {
+            if (!c || !c.billingYears) return;
+            c.billingYears.forEach((y, yIdx) => {
+                const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
+                const cycleRev = baseSell * y.ratio;
+                if (cycleRev <= 0) return;
+                const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
+                    ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ date: y.actualInvoiceDate || '', amount: cycleRev }] : []);
+                if (arInvs.length === 0) return;
+                if (arInvs.length >= 2) {
+                    arInvs.forEach(inv => {
+                        if (!inv.date) return;
+                        const d = new Date(inv.date);
+                        if (d >= fy.start && d <= fy.end) fyInvoiced += (Number(inv.amount) || 0);
+                    });
+                } else {
+                    const inv = arInvs[0];
+                    if (!inv.date) return;
+                    const d = new Date(inv.date);
+                    if (d >= fy.start && d <= fy.end) fyInvoiced += (Number(inv.amount) || cycleRev);
+                }
+            });
+        });
+    }
+
+    // 2) Active contracts — today between c.start and c.endDate
+    const activeContracts = (Array.isArray(contracts) ? contracts : []).filter(c => {
+        if (!c || !c.start || !c.endDate) return false;
+        const s = new Date(c.start); const e = new Date(c.endDate);
+        return today >= s && today <= e;
+    });
+
+    // 3) Net cash position
+    const netCash = recTotal - payTotal;
+
+    // 4) Pipeline value — sum of dealValue for prospects in OPEN stages
+    let pipelineRaw = 0, pipelineWeighted = 0;
+    if (Array.isArray(prospects) && typeof isStageOpen === 'function') {
+        prospects.forEach(p => {
+            if (p.archived) return;
+            if (!isStageOpen(p.stage)) return;
+            const v = (typeof getProspectACVInINR === 'function') ? getProspectACVInINR(p) : (Number(p.dealValue) || 0);
+            const prob = (typeof getProspectProbability === 'function') ? getProspectProbability(p) : 0;
+            pipelineRaw += v;
+            pipelineWeighted += v * (prob / 100);
+        });
+    }
+
+    setT('bsKpi_invoicedVal', bsFmtINRShort(fyInvoiced));
+    setT('bsKpi_activeVal', String(activeContracts.length));
+    const cashEl = document.getElementById('bsKpi_cashVal');
+    if (cashEl) {
+        cashEl.textContent = bsFmtINRSigned(netCash);
+        cashEl.classList.remove('bs-positive', 'bs-negative');
+        if (netCash > 0) cashEl.classList.add('bs-positive');
+        else if (netCash < 0) cashEl.classList.add('bs-negative');
+    }
+    const pipeEl = document.getElementById('bsKpi_pipelineVal');
+    if (pipeEl) {
+        pipeEl.textContent = bsFmtINRShort(pipelineRaw);
+        pipeEl.parentElement.title = `Raw pipeline ${bsFmtINRShort(pipelineRaw)} · Weighted ${bsFmtINRShort(pipelineWeighted)}`;
+    }
+
+    // ---------- Activity tiles ----------
+
+    // Prospects — count of OPEN-stage, non-archived; sub = pipeline value;
+    // 3 breakdown rows per spec: Qualified / Proposal Sent / Negotiation
+    const openProspects = (Array.isArray(prospects) ? prospects : []).filter(p => !p.archived && (typeof isStageOpen === 'function' ? isStageOpen(p.stage) : false));
+    setT('bsPrCount', String(openProspects.length));
+    setT('bsPrSub', `Pipeline · ${bsFmtINRShort(pipelineRaw)}`);
+    const prRowsEl = document.getElementById('bsPrRows');
+    if (prRowsEl) {
+        const stagesShown = ['Qualified', 'Proposal Sent', 'Negotiation'];
+        const byStage = {};
+        stagesShown.forEach(s => byStage[s] = 0);
+        openProspects.forEach(p => { if (byStage[p.stage] !== undefined) byStage[p.stage]++; });
+        const shownTotal = stagesShown.reduce((s, k) => s + byStage[k], 0);
+        const moreCount = openProspects.length - shownTotal;
+        let html = stagesShown.map(s =>
+            `<div class="bs-tile-row" onclick="bsGotoTab('prospectPipelineTab','pipelineStageFilter','${s}')"><span class="bs-tile-row-lbl">${s}</span><span class="bs-tile-row-val">${byStage[s]}</span></div>`
+        ).join('');
+        if (moreCount > 0) {
+            html += `<div class="bs-tile-row" onclick="bsGotoTab('prospectPipelineTab','pipelineStageFilter','OPEN')"><span class="bs-tile-row-lbl">+${moreCount} more</span><span class="bs-tile-row-val">→</span></div>`;
+        }
+        prRowsEl.innerHTML = html;
+    }
+
+    // Purchase Orders — POs created in current FY by po.createdAt
+    const fyPOs = (Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(po => {
+        if (!po.createdAt) return false;
+        const d = new Date(po.createdAt);
+        return !isNaN(d.getTime()) && d >= fy.start && d <= fy.end;
+    });
+    const fyPOTotal = fyPOs.reduce((s, po) => s + bsPOTotalINR(po), 0);
+    const poByStatus = { Open: 0, AwaitingVendor: 0, Closed: 0 };
+    // Map full statuses → 3-bucket sketch model:
+    //   Open = Draft + Issued     (issued or being prepared)
+    //   AwaitingVendor = Acknowledged + Received   (with vendor / waiting receipt)
+    //   Closed = Closed + Cancelled
+    fyPOs.forEach(po => {
+        if (po.status === 'Draft' || po.status === 'Issued') poByStatus.Open++;
+        else if (po.status === 'Acknowledged' || po.status === 'Received') poByStatus.AwaitingVendor++;
+        else poByStatus.Closed++;
+    });
+    setT('bsPoCount', String(fyPOs.length));
+    setT('bsPoSub', `FY total · ${bsFmtINRShort(fyPOTotal)}`);
+    const poRowsEl = document.getElementById('bsPoRows');
+    if (poRowsEl) {
+        poRowsEl.innerHTML = `
+            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Issued')"><span class="bs-tile-row-lbl">Open</span><span class="bs-tile-row-val">${poByStatus.Open}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Acknowledged')"><span class="bs-tile-row-lbl">Awaiting vendor</span><span class="bs-tile-row-val">${poByStatus.AwaitingVendor}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Closed')"><span class="bs-tile-row-lbl">Closed</span><span class="bs-tile-row-val">${poByStatus.Closed}</span></div>
+        `;
+    }
+
+    // Renewals — contracts expiring in current FY
+    const fyExpiring = (Array.isArray(contracts) ? contracts : []).filter(c => {
+        if (!c || !c.endDate) return false;
+        const e = new Date(c.endDate);
+        return e >= fy.start && e <= fy.end;
+    });
+    const renewedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Confirmed');
+    const churnedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Lost');
+    const renewedValueINR = renewedThisFY.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
+    // Bucket the still-active expiring contracts by days until end-date
+    const buckets30 = []; const buckets60 = []; const buckets90 = [];
+    fyExpiring.forEach(c => {
+        const e = new Date(c.endDate);
+        const daysOut = Math.floor((e - today) / 86400000);
+        if (daysOut < 0) return; // already expired
+        if ((c.renewalStatus || 'Not Started') === 'Confirmed' || (c.renewalStatus || 'Not Started') === 'Lost') return;
+        if (daysOut <= 30) buckets30.push(c);
+        else if (daysOut <= 60) buckets60.push(c);
+        else if (daysOut <= 90) buckets90.push(c);
+    });
+    setT('bsRnCount', String(fyExpiring.length));
+    setT('bsRnSub', `Secured · ${bsFmtINRShort(renewedValueINR)} · Churn ${churnedThisFY.length}`);
+    const rnRowsEl = document.getElementById('bsRnRows');
+    if (rnRowsEl) {
+        rnRowsEl.innerHTML = `
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">≤ 30 days</span><span class="bs-tile-row-val">${buckets30.length}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">31-60 days</span><span class="bs-tile-row-val">${buckets60.length}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">61-90 days</span><span class="bs-tile-row-val">${buckets90.length}</span></div>
+        `;
+    }
+
+    // Contracts — active count + ACV; sub = ACV + new in FY; rows = top 2 OEMs + Others
+    const acvTotal = activeContracts.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
+    const newInFY = activeContracts.filter(c => {
+        if (!c.start) return false;
+        const s = new Date(c.start);
+        return s >= fy.start && s <= fy.end;
+    });
+    const oemCounts = {};
+    activeContracts.forEach(c => {
+        const k = c.oem || '(none)';
+        oemCounts[k] = (oemCounts[k] || 0) + 1;
+    });
+    const sortedOems = Object.entries(oemCounts).sort((a, b) => b[1] - a[1]);
+    const top2 = sortedOems.slice(0, 2);
+    const othersCount = sortedOems.slice(2).reduce((s, e) => s + e[1], 0);
+    setT('bsCtCount', String(activeContracts.length));
+    setT('bsCtSub', `ACV ${bsFmtINRShort(acvTotal)} · ${newInFY.length} new`);
+    const ctRowsEl = document.getElementById('bsCtRows');
+    if (ctRowsEl) {
+        let html = top2.map(([oem, n]) =>
+            `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${(oem || '').replace(/[<>&"']/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c]))}</span><span class="bs-tile-row-val">${n}</span></div>`
+        ).join('');
+        if (othersCount > 0) {
+            html += `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">Others</span><span class="bs-tile-row-val">${othersCount}</span></div>`;
+        }
+        ctRowsEl.innerHTML = html;
+    }
+
+    // ---------- Headline strip click handlers ----------
+    const wireClick = (id, fn) => {
+        const el = document.getElementById(id);
+        if (el) el.onclick = fn;
+    };
+    wireClick('bsKpi_invoiced', () => bsGotoTab('invoicesTab'));
+    wireClick('bsKpi_active', () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
+    wireClick('bsKpi_pipeline', () => bsGotoTab('prospectPipelineTab', 'pipelineStageFilter', 'OPEN'));
+
+    // ---------- Money tile click handlers ----------
+    wireClick('bsRecVal', () => bsGotoTab('invoicesTab'));
+    wireClick('bsPayVal', () => bsGotoTab('purchaseInvoicesTab'));
+    wireClick('bsRecCfWrap', () => bsGotoTab('invoicesTab'));
+    wireClick('bsPayCfWrap', () => bsGotoTab('purchaseInvoicesTab'));
+    // Bucket clicks — all open the relevant tab; AR/AP tabs don't currently
+    // expose an aging-bucket dropdown, so we just navigate. (Future: wire to a
+    // real aging filter on the AR/AP page.)
+    ['bsRecB1','bsRecB2','bsRecB3','bsRecB4'].forEach(id => wireClick(id, () => bsGotoTab('invoicesTab')));
+    ['bsPayB1','bsPayB2','bsPayB3','bsPayB4'].forEach(id => wireClick(id, () => bsGotoTab('purchaseInvoicesTab')));
+
+    // ---------- Activity-tile big-number click handlers ----------
+    wireClick('bsPrCount', () => bsGotoTab('prospectPipelineTab', 'pipelineStageFilter', 'OPEN'));
+    wireClick('bsPoCount', () => bsGotoTab('purchaseOrdersTab'));
+    wireClick('bsRnCount', () => bsGotoTab('renewalsTab'));
+    wireClick('bsCtCount', () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
+}
+
+/* ======================================================================
+   End of Business Snapshot module
+   ====================================================================== */
+
+
 document.addEventListener('DOMContentLoaded', () => {
     // Load saved FY Basis preference BEFORE any rendering so the first paint
     // uses the user's preferred bucketing mode.
@@ -32958,6 +33579,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) { console.warn("Phase 4A migration check:", e); }
 });
 loadSettings(); populateFY(); updateClientDropdown(); populatePortfolioFilter(); debouncedCalcDashboard();
+// Phase 8B — Business Snapshot is now the default landing tab. Dashboard data
+// is still pre-warmed via debouncedCalcDashboard() above so navigating to
+// Financial Intelligence afterwards is instant.
+try { showTab('businessSnapshotTab'); } catch (e) { console.warn('Business Snapshot landing failed:', e); }
 
 function populateARApFilters() {
     // Bug fix #18 — AR and AP each have their own FY + Client filters now.
@@ -33709,7 +34334,7 @@ function renderClientSummary() {
         csYearBody.innerHTML = sortedYears.map((fy, i) => {
             const d = yearlyData[fy]; const mPct = d.rev > 0 ? (d.margin / d.rev) * 100 : 0; let prevRev = i > 0 ? yearlyData[sortedYears[i - 1]].rev : 0; let yoy = prevRev > 0 ? ((d.rev - prevRev) / prevRev) * 100 : null;
             const isHighlighted = (selectedFY !== 'ALL' && fy === parseInt(selectedFY.split('-')[0]).toString()) || (selectedFY2 && fy === parseInt(selectedFY2.split('-')[0]).toString());
-            return `<tr style="${isHighlighted ? 'background: rgba(59,130,246,0.07);' : ''}"><td><strong>FY ${fy}-${(parseInt(fy)+1).toString().slice(-2)}</strong></td><td style="text-align:right;">${fmt(d.rev)}</td><td style="text-align:right; color:var(--text-dim);">${fmt(d.cost)}</td><td style="text-align:right; color:var(--success);">${fmt(d.margin)}</td><td style="text-align:right;"><span class="badge ${mPct >= 15 ? 'ok' : (mPct < 10 ? 'warn' : 'pending')}">${mPct.toFixed(1)}%</span></td><td style="text-align:right;">${yoy === null ? '—' : `<span style="color:${yoy >= 0 ? 'var(--success)' : 'var(--danger)'}">${yoy >= 0 ? '▲' : '▼'} ${Math.abs(yoy).toFixed(1)}%</span>`}</td></tr>`;
+            return `<tr style="${isHighlighted ? 'background: var(--accent-tint-low);' : ''}"><td><strong>FY ${fy}-${(parseInt(fy)+1).toString().slice(-2)}</strong></td><td style="text-align:right;">${fmt(d.rev)}</td><td style="text-align:right; color:var(--text-dim);">${fmt(d.cost)}</td><td style="text-align:right; color:var(--success);">${fmt(d.margin)}</td><td style="text-align:right;"><span class="badge ${mPct >= 15 ? 'ok' : (mPct < 10 ? 'warn' : 'pending')}">${mPct.toFixed(1)}%</span></td><td style="text-align:right;">${yoy === null ? '—' : `<span style="color:${yoy >= 0 ? 'var(--success)' : 'var(--danger)'}">${yoy >= 0 ? '▲' : '▼'} ${Math.abs(yoy).toFixed(1)}%</span>`}</td></tr>`;
         }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);">No data available.</td></tr>';
     }
 
