@@ -465,15 +465,21 @@ h2 {
 }
 
 /* ===== Business Snapshot tiles ===== */
+.bs-section-lbl {
+    font-size: 11px; color: var(--text-subtle); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 4px 0 8px 4px;
+}
+
 .bs-kpi-strip {
     display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-3); margin-bottom: var(--space-3);
+    gap: var(--space-3); margin-bottom: var(--space-4);
 }
 .bs-kpi-tile {
     background: var(--glass-panel);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    padding: 12px 14px;
+    padding: 16px 18px;
     box-shadow: var(--shadow-sm);
     cursor: pointer;
     transition: transform 0.2s ease, border-color 0.2s, box-shadow 0.2s;
@@ -486,88 +492,120 @@ h2 {
 }
 .bs-kpi-tile.bs-kpi-static { cursor: default; }
 .bs-kpi-tile.bs-kpi-static:hover { transform: none; box-shadow: var(--shadow-sm); border-color: var(--glass-border); }
+.bs-kpi-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.bs-kpi-icon {
+    font-size: 13px; color: var(--accent-cyan);
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent-tint-low); border-radius: 4px;
+}
 .bs-kpi-lbl {
-    font-size: 10px; color: var(--text-subtle); font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px;
+    font-size: 11px; color: var(--text-subtle); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px;
 }
 .bs-kpi-val {
-    font-size: 22px; font-weight: 650; line-height: 1.1;
+    font-size: 30px; font-weight: 650; line-height: 1.05;
     color: var(--text-main); font-variant-numeric: tabular-nums;
-    letter-spacing: -0.015em;
+    letter-spacing: -0.015em; margin-bottom: 6px;
 }
 .bs-kpi-val.bs-positive { color: var(--success); }
 .bs-kpi-val.bs-negative { color: var(--danger); }
+.bs-kpi-desc { font-size: 11.5px; color: var(--text-subtle); line-height: 1.4; }
 
 .bs-money-row {
     display: grid; grid-template-columns: 1fr 1fr;
-    gap: var(--space-3); margin-bottom: var(--space-3);
+    gap: var(--space-3); margin-bottom: var(--space-4);
 }
 .bs-money-tile {
     background: var(--glass-panel);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    padding: 14px 16px;
+    padding: 16px 18px;
     box-shadow: var(--shadow-sm);
     transition: border-color 0.2s, box-shadow 0.2s;
     contain: layout style;
 }
 .bs-money-head {
     display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 .bs-money-cf {
     font-size: 11px; color: var(--text-subtle); cursor: pointer;
     transition: color 0.15s;
 }
 .bs-money-cf:hover { color: var(--accent-cyan); }
+.bs-tile-desc { font-size: 11.5px; color: var(--text-subtle); line-height: 1.4; margin-bottom: 8px; }
 .bs-money-val {
-    font-size: 28px; font-weight: 650; line-height: 1.1;
+    font-size: 32px; font-weight: 650; line-height: 1.05;
     color: var(--text-main); font-variant-numeric: tabular-nums;
-    letter-spacing: -0.015em; margin-bottom: 10px;
+    letter-spacing: -0.015em; margin-bottom: 12px;
     cursor: pointer; display: inline-block;
 }
 .bs-money-val:hover { color: var(--accent-cyan); }
 .bs-bucket-grid {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-    border-top: 1px solid var(--glass-border); padding-top: 8px;
+    border-top: 1px solid var(--glass-border); padding-top: 10px;
 }
 .bs-bucket {
     cursor: pointer; padding: 4px 6px; border-radius: 4px;
     transition: background-color 0.15s;
 }
 .bs-bucket:hover { background: var(--accent-tint-low); }
-.bs-bucket-lbl { font-size: 11px; color: var(--text-subtle); margin-bottom: 2px; }
-.bs-bucket-val { font-size: 12.5px; font-weight: 600; color: var(--text-main); font-variant-numeric: tabular-nums; }
+.bs-bucket-lbl { font-size: 11px; color: var(--text-subtle); margin-bottom: 3px; }
+.bs-bucket-val { font-size: 13.5px; font-weight: 600; color: var(--text-main); font-variant-numeric: tabular-nums; }
+
+.bs-urgency-rows {
+    border-top: 1px solid var(--glass-border); padding-top: 10px;
+    font-size: 12.5px; line-height: 1.7;
+}
+.bs-urgency-row {
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; padding: 2px 4px; border-radius: 3px;
+    transition: background-color 0.15s;
+}
+.bs-urgency-row:hover { background: var(--accent-tint-low); }
+.bs-urgency-row .bs-urg-lbl { font-weight: 500; }
+.bs-urgency-row .bs-urg-val { color: var(--text-main); font-variant-numeric: tabular-nums; font-weight: 600; }
+.bs-urg-danger  { color: var(--danger); }
+.bs-urg-warning { color: var(--warning); }
+.bs-urg-muted   { color: var(--text-subtle); }
 
 .bs-activity-row {
     display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-3); margin-bottom: var(--space-3);
+    gap: var(--space-3); margin-bottom: var(--space-4);
 }
 .bs-activity-tile {
     background: var(--glass-panel);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    padding: 12px 14px;
+    padding: 14px 16px;
     box-shadow: var(--shadow-sm);
     contain: layout style;
 }
+.bs-tile-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.bs-tile-icon {
+    font-size: 12px; color: var(--accent-cyan);
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent-tint-low); border-radius: 4px;
+}
 .bs-tile-lbl {
-    font-size: 10.5px; color: var(--text-subtle); font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+    font-size: 11px; color: var(--text-subtle); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px;
 }
 .bs-tile-val {
-    font-size: 22px; font-weight: 650; line-height: 1.15;
+    font-size: 26px; font-weight: 650; line-height: 1.1;
     color: var(--text-main); font-variant-numeric: tabular-nums;
-    letter-spacing: -0.015em; margin-bottom: 6px;
+    letter-spacing: -0.015em; margin-bottom: 4px;
     cursor: pointer; display: inline-block;
 }
 .bs-tile-val:hover { color: var(--accent-cyan); }
 .bs-tile-sub {
-    font-size: 11px; color: var(--text-subtle); margin-bottom: 6px;
+    font-size: 11.5px; color: var(--text-subtle); margin-bottom: 8px;
 }
 .bs-tile-rows {
-    border-top: 1px solid var(--glass-border); padding-top: 6px;
-    font-size: 11px; line-height: 1.6;
+    border-top: 1px solid var(--glass-border); padding-top: 8px;
+    font-size: 12px; line-height: 1.7;
 }
 .bs-tile-row {
     display: flex; justify-content: space-between;
@@ -576,7 +614,60 @@ h2 {
 }
 .bs-tile-row:hover { background: var(--accent-tint-low); }
 .bs-tile-row .bs-tile-row-lbl { color: var(--text-subtle); }
-.bs-tile-row .bs-tile-row-val { color: var(--text-main); font-variant-numeric: tabular-nums; }
+.bs-tile-row .bs-tile-row-val { color: var(--text-main); font-variant-numeric: tabular-nums; font-weight: 500; }
+
+.bs-action-center {
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    box-shadow: var(--shadow-sm);
+    contain: layout style;
+}
+.bs-action-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 12px;
+}
+.bs-action-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+}
+.bs-action-col-lbl {
+    font-size: 11.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+}
+.bs-action-col-lbl i { font-size: 12px; }
+.bs-action-warning { color: var(--warning); }
+.bs-action-danger  { color: var(--danger); }
+.bs-action-info    { color: var(--accent-cyan); }
+.bs-action-list { font-size: 12.5px; line-height: 1.7; }
+.bs-action-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 4px; border-bottom: 1px solid var(--glass-border);
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+.bs-action-item:hover { background: var(--accent-tint-low); }
+.bs-action-item:last-child { border-bottom: none; }
+.bs-action-item-lbl {
+    color: var(--text-main);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+}
+.bs-action-item-val {
+    color: var(--text-subtle); margin-left: 8px;
+    font-variant-numeric: tabular-nums; font-weight: 500;
+    white-space: nowrap;
+}
+.bs-action-empty {
+    color: var(--text-subtle); padding: 6px 4px; font-style: italic;
+}
+.bs-action-meta {
+    font-size: 11px; color: var(--text-subtle);
+    margin-top: 8px; padding-top: 6px;
+    border-top: 1px solid var(--glass-border);
+}
 /* ===== End Business Snapshot tiles ===== */
 
 /* Dashboard Grids */
@@ -5708,90 +5799,155 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 <div class="main-content">
   
   <div id="businessSnapshotTab">
-    <div class="page-header" style="margin-bottom: 14px;">
-      <h2>Business Snapshot</h2>
-      <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+    <div class="page-header" style="margin-bottom: 14px; align-items: center;">
+      <h2 style="margin: 0;">Business Snapshot</h2>
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on all money figures"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
+        <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) on Receivables side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
+        <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+      </div>
     </div>
 
     <!-- Row 1: 4-tile KPI strip -->
     <div class="bs-kpi-strip">
       <div class="bs-kpi-tile" id="bsKpi_invoiced" title="Click to open Invoices for current FY">
-        <div class="bs-kpi-lbl">FY Invoiced</div>
+        <div class="bs-kpi-head"><i class="fas fa-file-invoice-dollar bs-kpi-icon"></i><div class="bs-kpi-lbl">FY Invoiced</div></div>
         <div class="bs-kpi-val" id="bsKpi_invoicedVal">—</div>
+        <div class="bs-kpi-desc">Revenue billed this fiscal year</div>
       </div>
       <div class="bs-kpi-tile" id="bsKpi_active" title="Click to open Subscription Portfolio (Active)">
-        <div class="bs-kpi-lbl">Active Contracts</div>
+        <div class="bs-kpi-head"><i class="fas fa-clipboard-list bs-kpi-icon"></i><div class="bs-kpi-lbl">Active Contracts</div></div>
         <div class="bs-kpi-val" id="bsKpi_activeVal">—</div>
+        <div class="bs-kpi-desc">Live contracts running today</div>
       </div>
-      <div class="bs-kpi-tile bs-kpi-static" id="bsKpi_cash" title="Receivables minus Payables">
-        <div class="bs-kpi-lbl">Net Cash Position</div>
+      <div class="bs-kpi-tile bs-kpi-static" id="bsKpi_cash" title="Real cash position: Invoiced AR minus Received AP">
+        <div class="bs-kpi-head"><i class="fas fa-balance-scale bs-kpi-icon"></i><div class="bs-kpi-lbl">Net Cash Position</div></div>
         <div class="bs-kpi-val" id="bsKpi_cashVal">—</div>
+        <div class="bs-kpi-desc">Real outstanding cash position</div>
       </div>
       <div class="bs-kpi-tile" id="bsKpi_pipeline" title="Click to open Prospect Pipeline">
-        <div class="bs-kpi-lbl">Pipeline Value</div>
+        <div class="bs-kpi-head"><i class="fas fa-bullseye bs-kpi-icon"></i><div class="bs-kpi-lbl">Pipeline Value</div></div>
         <div class="bs-kpi-val" id="bsKpi_pipelineVal">—</div>
+        <div class="bs-kpi-desc">Open prospect deals (raw value)</div>
       </div>
     </div>
 
-    <!-- Row 2: Receivables + Payables -->
+    <!-- Row 2: Receivables -->
+    <div class="bs-section-lbl">Receivables</div>
     <div class="bs-money-row">
+      <!-- Box 1: Invoiced & Pending Payment -->
       <div class="bs-money-tile">
         <div class="bs-money-head">
-          <div class="bs-tile-lbl">Receivables Outstanding</div>
+          <div class="bs-tile-lbl">Invoiced &amp; Pending Payment</div>
           <div class="bs-money-cf" id="bsRecCfWrap" title="Click to view carry-forward open AR (pre-current FY)">
-            Carry-forward <span id="bsRecCfVal">—</span>
+            CF <span id="bsRecCfVal">—</span>
           </div>
         </div>
+        <div class="bs-tile-desc">Money owed to you on invoices already raised</div>
         <div class="bs-money-val" id="bsRecVal" title="Click to open Receivables">—</div>
         <div class="bs-bucket-grid">
-          <div class="bs-bucket" id="bsRecB1" title="Click to filter Receivables to 0–30 days"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsRecB1Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB2" title="Click to filter Receivables to 31–60 days"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsRecB2Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB3" title="Click to filter Receivables to 61–90 days"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsRecB3Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB4" title="Click to filter Receivables to 90+ days"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsRecB4Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB1" title="Click to view receivables 0–30 days old"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsRecB1Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB2" title="Click to view receivables 31–60 days old"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsRecB2Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB3" title="Click to view receivables 61–90 days old"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsRecB3Val">—</div></div>
+          <div class="bs-bucket" id="bsRecB4" title="Click to view receivables 90+ days old"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsRecB4Val">—</div></div>
         </div>
       </div>
+      <!-- Box 2: To Be Issued This FY -->
       <div class="bs-money-tile">
         <div class="bs-money-head">
-          <div class="bs-tile-lbl">Payables Outstanding</div>
-          <div class="bs-money-cf" id="bsPayCfWrap" title="Click to view carry-forward open AP (pre-current FY)">
-            Carry-forward <span id="bsPayCfVal">—</span>
-          </div>
+          <div class="bs-tile-lbl">To Be Issued This FY</div>
+          <div class="bs-money-cf"><span id="bsRecToIssueCount">—</span> cycles</div>
         </div>
-        <div class="bs-money-val" id="bsPayVal" title="Click to open Payables">—</div>
-        <div class="bs-bucket-grid">
-          <div class="bs-bucket" id="bsPayB1" title="Click to filter Payables to 0–30 days"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsPayB1Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB2" title="Click to filter Payables to 31–60 days"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsPayB2Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB3" title="Click to filter Payables to 61–90 days"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsPayB3Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB4" title="Click to filter Payables to 90+ days"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsPayB4Val">—</div></div>
-        </div>
+        <div class="bs-tile-desc">Cycles due to be invoiced before 31 Mar end of FY</div>
+        <div class="bs-money-val" id="bsRecToIssueVal" title="Click to open Receivables (Pending)">—</div>
+        <div class="bs-urgency-rows" id="bsRecToIssueRows"></div>
       </div>
     </div>
 
-    <!-- Row 3: 4 activity tiles -->
+    <!-- Row 3: Payables -->
+    <div class="bs-section-lbl">Payables</div>
+    <div class="bs-money-row">
+      <!-- Box 3: Bills Received & Pending Payment -->
+      <div class="bs-money-tile">
+        <div class="bs-money-head">
+          <div class="bs-tile-lbl">Bills Received &amp; Pending Payment</div>
+          <div class="bs-money-cf" id="bsPayCfWrap" title="Click to view carry-forward open AP (pre-current FY)">
+            CF <span id="bsPayCfVal">—</span>
+          </div>
+        </div>
+        <div class="bs-tile-desc">OEM bills you've received but not paid yet</div>
+        <div class="bs-money-val" id="bsPayVal" title="Click to open Payables">—</div>
+        <div class="bs-bucket-grid">
+          <div class="bs-bucket" id="bsPayB1" title="Click to view payables 0–30 days old"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsPayB1Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB2" title="Click to view payables 31–60 days old"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsPayB2Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB3" title="Click to view payables 61–90 days old"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsPayB3Val">—</div></div>
+          <div class="bs-bucket" id="bsPayB4" title="Click to view payables 90+ days old"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsPayB4Val">—</div></div>
+        </div>
+      </div>
+      <!-- Box 4: To Be Received This FY -->
+      <div class="bs-money-tile">
+        <div class="bs-money-head">
+          <div class="bs-tile-lbl">To Be Received This FY</div>
+          <div class="bs-money-cf"><span id="bsPayToReceiveCount">—</span> cycles</div>
+        </div>
+        <div class="bs-tile-desc">OEM bills expected before 31 Mar end of FY</div>
+        <div class="bs-money-val" id="bsPayToReceiveVal" title="Click to open Payables">—</div>
+        <div class="bs-urgency-rows" id="bsPayToReceiveRows"></div>
+      </div>
+    </div>
+
+    <!-- Row 4: Activity tiles -->
+    <div class="bs-section-lbl">Activity</div>
     <div class="bs-activity-row">
       <div class="bs-activity-tile">
-        <div class="bs-tile-lbl">Prospects</div>
+        <div class="bs-tile-head"><i class="fas fa-seedling bs-tile-icon"></i><div class="bs-tile-lbl">Prospects</div></div>
+        <div class="bs-tile-desc">Open deals you're working on</div>
         <div class="bs-tile-val" id="bsPrCount" title="Click to open Prospect Pipeline">—</div>
         <div class="bs-tile-sub" id="bsPrSub">—</div>
         <div class="bs-tile-rows" id="bsPrRows"></div>
       </div>
       <div class="bs-activity-tile">
-        <div class="bs-tile-lbl">Purchase Orders</div>
+        <div class="bs-tile-head"><i class="fas fa-shopping-cart bs-tile-icon"></i><div class="bs-tile-lbl">Purchase Orders</div></div>
+        <div class="bs-tile-desc">POs raised this fiscal year</div>
         <div class="bs-tile-val" id="bsPoCount" title="Click to open Purchase Orders">—</div>
         <div class="bs-tile-sub" id="bsPoSub">—</div>
         <div class="bs-tile-rows" id="bsPoRows"></div>
       </div>
       <div class="bs-activity-tile">
-        <div class="bs-tile-lbl">Renewals</div>
+        <div class="bs-tile-head"><i class="fas fa-sync-alt bs-tile-icon"></i><div class="bs-tile-lbl">Renewals</div></div>
+        <div class="bs-tile-desc">Contracts expiring this fiscal year</div>
         <div class="bs-tile-val" id="bsRnCount" title="Click to open Renewal Engine">—</div>
         <div class="bs-tile-sub" id="bsRnSub">—</div>
         <div class="bs-tile-rows" id="bsRnRows"></div>
       </div>
       <div class="bs-activity-tile">
-        <div class="bs-tile-lbl">Contracts</div>
+        <div class="bs-tile-head"><i class="fas fa-book bs-tile-icon"></i><div class="bs-tile-lbl">Contracts</div></div>
+        <div class="bs-tile-desc">Your active subscription portfolio</div>
         <div class="bs-tile-val" id="bsCtCount" title="Click to open Subscription Portfolio">—</div>
         <div class="bs-tile-sub" id="bsCtSub">—</div>
         <div class="bs-tile-rows" id="bsCtRows"></div>
+      </div>
+    </div>
+
+    <!-- Row 5: Action Center -->
+    <div class="bs-action-center">
+      <div class="bs-action-head">
+        <div class="bs-section-lbl" style="margin: 0;">Action Center · what needs attention</div>
+        <div style="font-size: 11px; color: var(--text-subtle);">Click any item to drill in</div>
+      </div>
+      <div class="bs-action-grid">
+        <div class="bs-action-col">
+          <div class="bs-action-col-lbl bs-action-warning"><i class="fas fa-exclamation-triangle"></i> Renewals due this month</div>
+          <div class="bs-action-list" id="bsActRenewals"></div>
+        </div>
+        <div class="bs-action-col">
+          <div class="bs-action-col-lbl bs-action-danger"><i class="fas fa-circle-exclamation"></i> Overdue receivables</div>
+          <div class="bs-action-list" id="bsActOverdue"></div>
+        </div>
+        <div class="bs-action-col">
+          <div class="bs-action-col-lbl bs-action-info"><i class="fas fa-truck"></i> Open POs awaiting vendor</div>
+          <div class="bs-action-list" id="bsActPOs"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -15421,12 +15577,26 @@ function toggleTax(type) {
         showGST = !showGST;
         document.getElementById('gstIcon').className = showGST ? 'fas fa-check-square' : 'far fa-square';
         document.getElementById('gstToggle').classList.toggle('active', showGST);
+        // Phase 8D — Business Snapshot mirror buttons share state with FI buttons.
+        var bsGstIcon = document.getElementById('bsGstIcon');
+        var bsGstBtn  = document.getElementById('bsGstToggle');
+        if (bsGstIcon) bsGstIcon.className = showGST ? 'fas fa-check-square' : 'far fa-square';
+        if (bsGstBtn)  bsGstBtn.classList.toggle('active', showGST);
     } else {
         showTDS = !showTDS;
         document.getElementById('tdsIcon').className = showTDS ? 'fas fa-check-square' : 'far fa-square';
         document.getElementById('tdsToggle').classList.toggle('active', showTDS);
+        var bsTdsIcon = document.getElementById('bsTdsIcon');
+        var bsTdsBtn  = document.getElementById('bsTdsToggle');
+        if (bsTdsIcon) bsTdsIcon.className = showTDS ? 'fas fa-check-square' : 'far fa-square';
+        if (bsTdsBtn)  bsTdsBtn.classList.toggle('active', showTDS);
     }
     renderContracts(); debouncedCalcDashboard();
+    // Phase 8D — re-render Business Snapshot if it's currently active.
+    if (typeof renderBusinessSnapshot === 'function') {
+        var bsTab = document.getElementById('businessSnapshotTab');
+        if (bsTab && !bsTab.classList.contains('hidden')) renderBusinessSnapshot();
+    }
 }
 
 function getCalculatedValues(rev, cost) {
@@ -33083,11 +33253,12 @@ function dismissRmMigrationBanner() {
 
 
 /* ======================================================================
-   Business Snapshot module — Phase 8B
-   Single landing page summarising current FY across 6 dimensions, plus
-   a 4-number headline KPI strip. All cells clickable; jumps to the
-   relevant existing tab with the relevant filter pre-applied. Reads
-   from in-memory globals only (no schema/Rust changes).
+   Business Snapshot module — Phase 8D
+   Landing page with 4 KPI tiles, 4 money tiles split into AR/AP × (raised/
+   to-be-raised), 4 activity tiles, and an Action Center bottom row.
+   Tax-aware: GST/TDS toggles in the page header share state with the
+   Financial Intelligence toggles via the global showGST/showTDS variables.
+   Reads from in-memory globals only (no schema/Rust changes).
    ====================================================================== */
 
 // Get current Indian FY range as { start, end, label } where label is e.g. "2026-2027".
@@ -33100,7 +33271,6 @@ function bsGetCurrentFYRange() {
     const start = new Date(fyStartYear, 3, 1);  // Apr 1
     const end   = new Date(fyStartYear + 1, 2, 31, 23, 59, 59); // Mar 31
     const label = `${fyStartYear}-${fyStartYear + 1}`;
-    // Match getFYRange() value format (which uses "YYYY-YYYY" key)
     const filterValue = `${fyStartYear}-${fyStartYear + 1}`;
     return { start, end, label, filterValue, fyStartYear };
 }
@@ -33120,7 +33290,21 @@ function bsFmtINRShort(n) {
 function bsFmtINRSigned(n) {
     const v = Number(n) || 0;
     if (v >= 0) return '+' + bsFmtINRShort(v);
-    return bsFmtINRShort(v); // bsFmtINRShort already prefixes minus
+    return bsFmtINRShort(v);
+}
+
+// Apply GST/TDS multipliers to an INR amount. Mirrors the Financial
+// Intelligence convention from getCalculatedValues(): GST × 1.18 on both
+// sides, TDS reduces AR by 10%. AP-side is GST blanket (matches FI; see
+// 8D ship notes for rationale on reverse-charge GST handling for foreign
+// OEMs).
+//   side: 'AR' or 'AP'
+function bsApplyTax(amount, side) {
+    let v = Number(amount) || 0;
+    const base = v;
+    if (typeof showGST !== 'undefined' && showGST) v *= 1.18;
+    if (side === 'AR' && typeof showTDS !== 'undefined' && showTDS) v -= base * 0.10;
+    return v;
 }
 
 // Compute total value of a PO record in INR (using existing helpers).
@@ -33133,106 +33317,164 @@ function bsPOTotalINR(po) {
     } catch (e) { return 0; }
 }
 
-// Build AR/AP open-invoice records for the snapshot. Returns:
-//   { recOpen: [...], payOpen: [...] } where each entry is { amount, ageDays, fyDate }.
-// Mirrors the loop in renderARApPage() but is intentionally simpler — we only
-// need (amount, age, FY-bucket-date) per OPEN invoice for headline + aging + carry-forward.
-function bsBuildOpenArAp() {
-    const recOpen = []; const payOpen = [];
+// Build the 4 money records: invoiced+pending and to-be-issued for AR;
+// received+pending and to-be-received for AP. All amounts are PRE-TAX
+// at this stage; tax multipliers are applied at display time.
+//
+// Each record: { amount, ageDays, fyDate, billDate, client, oem, contractIdx, yearIdx, type }
+//   type: 'INVOICED' (raised, unpaid) | 'TOISSUE' (no invoice yet, current FY)
+//   ageDays: only meaningful for INVOICED records (days since invoice date)
+//   billDate: only meaningful for TOISSUE records (cycle bill date)
+function bsBuildMoneyRecords() {
+    const arInvoiced = []; const arToIssue = [];
+    const apReceived = []; const apToReceive = [];
+    const fy = bsGetCurrentFYRange();
     const today = new Date(); today.setHours(0,0,0,0);
-    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return { recOpen, payOpen };
 
-    contracts.forEach((c) => {
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) {
+        return { arInvoiced, arToIssue, apReceived, apToReceive };
+    }
+
+    contracts.forEach((c, cIdx) => {
         if (!c || !c.billingYears) return;
         c.billingYears.forEach((y, yIdx) => {
             const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
             const baseCost = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
-            const cycleRev = baseSell * y.ratio;
-            const cycleCostUSD = baseCost * y.ratio;
+            const cycleRev = baseSell * (y.ratio || 0);
+            const cycleCostUSD = baseCost * (y.ratio || 0);
             const effFX = (typeof getEffectiveFX === 'function') ? getEffectiveFX(c, y, yIdx) : 83;
             const cycleCostINR = cycleCostUSD * effFX;
+            const billDate = y.billDate ? new Date(y.billDate) : null;
 
             // ----- AR side -----
             if (cycleRev > 0) {
-                const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
-                    ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '' }] : []);
+                // Resolve list of AR invoices for this cycle (real or legacy single-record fallback)
+                let arInvs = [];
+                if (y.arInvoices && y.arInvoices.length > 0) arInvs = y.arInvoices;
+                else if (y.clientInvoiceNo || y.actualInvoiceDate) {
+                    arInvs = [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '' }];
+                }
+                // Filter to invoices that ACTUALLY have a date (i.e., are raised)
+                const raisedArInvs = arInvs.filter(i => !!i.date);
                 const cycleVendorPaid = !!y.paid;
-                if (arInvs.length >= 2) {
-                    arInvs.forEach((inv) => {
+
+                if (raisedArInvs.length > 0) {
+                    // Cycle has at least one invoice raised — emit one record per UNPAID invoice
+                    raisedArInvs.forEach(inv => {
                         const isPaid = !!inv.paidDate || cycleVendorPaid;
                         if (isPaid) return;
-                        const amt = Number(inv.amount) || 0;
+                        const amt = (inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
+                            ? (Number(inv.amount) || 0)
+                            : cycleRev;
                         if (amt <= 0) return;
-                        const invDateStr = inv.date || '';
-                        if (!invDateStr) { recOpen.push({ amount: amt, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null }); return; }
-                        const invDate = new Date(invDateStr);
+                        const invDate = new Date(inv.date);
                         const ageDays = Math.floor((today - invDate) / 86400000);
-                        recOpen.push({ amount: amt, ageDays, fyDate: invDate });
+                        arInvoiced.push({
+                            amount: amt, ageDays, fyDate: invDate,
+                            client: c.client || '(no client)',
+                            type: 'INVOICED', cIdx, yIdx
+                        });
                     });
                 } else {
-                    const isPaid = !!y.paymentDate || cycleVendorPaid || (arInvs.length === 1 && !!arInvs[0].paidDate);
-                    if (!isPaid) {
-                        const invDateStr = (arInvs.length === 1 && arInvs[0].date) ? arInvs[0].date : (y.actualInvoiceDate || '');
-                        if (!invDateStr) {
-                            recOpen.push({ amount: cycleRev, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null });
-                        } else {
-                            const invDate = new Date(invDateStr);
-                            const ageDays = Math.floor((today - invDate) / 86400000);
-                            recOpen.push({ amount: cycleRev, ageDays, fyDate: invDate });
-                        }
+                    // Cycle has NO invoice raised yet
+                    const isPaid = !!y.paymentDate || cycleVendorPaid;
+                    if (isPaid) return; // already settled, no further bookkeeping
+                    if (!billDate) return; // no bill date → can't determine if it's a current-FY commitment
+                    if (billDate >= fy.start && billDate <= fy.end) {
+                        arToIssue.push({
+                            amount: cycleRev, billDate,
+                            client: c.client || '(no client)',
+                            type: 'TOISSUE', cIdx, yIdx
+                        });
                     }
+                    // billDate outside current FY → ignored (future or pre-FY-but-unbilled is out of scope)
                 }
             }
 
             // ----- AP side -----
             if (cycleCostINR > 0) {
-                const apInvs = (y.apInvoices && y.apInvoices.length > 0) ? y.apInvoices :
-                    ((y.oemInvoiceNo || y.oemInvoiceDate) ? [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate || '', amount: cycleCostINR, payDate: y.oemPaymentDate || '' }] : []);
-                const cycleOemPaid = !!y.oemPaid;
-                if (apInvs.length >= 2) {
-                    apInvs.forEach((inv) => {
+                let apInvs = [];
+                if (y.apInvoices && y.apInvoices.length > 0) apInvs = y.apInvoices;
+                else if (y.oemInvoiceDate) {
+                    apInvs = [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate, amount: cycleCostUSD, fx: effFX, payDate: y.oemPaymentDate || '' }];
+                }
+                const receivedApInvs = apInvs.filter(i => !!i.date);
+                const cycleOemPaid = !!y.oemPaid || !!y.vendorPaid;
+
+                if (receivedApInvs.length > 0) {
+                    receivedApInvs.forEach(inv => {
                         const isPaid = !!inv.payDate || cycleOemPaid;
                         if (isPaid) return;
-                        const amt = Number(inv.amount) || 0;
-                        if (amt <= 0) return;
-                        const invDateStr = inv.date || '';
-                        if (!invDateStr) { payOpen.push({ amount: amt, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null }); return; }
-                        const invDate = new Date(invDateStr);
+                        // Convert to INR using the recorded fx if present
+                        let amtINR = 0;
+                        if (inv.amount !== undefined && inv.amount !== null && inv.amount !== '') {
+                            const rawAmt = Number(inv.amount) || 0;
+                            if (c.costCurrency === 'INR') amtINR = rawAmt;
+                            else amtINR = rawAmt * (Number(inv.fx) || effFX);
+                        } else {
+                            amtINR = cycleCostINR;
+                        }
+                        if (amtINR <= 0) return;
+                        const invDate = new Date(inv.date);
                         const ageDays = Math.floor((today - invDate) / 86400000);
-                        payOpen.push({ amount: amt, ageDays, fyDate: invDate });
+                        apReceived.push({
+                            amount: amtINR, ageDays, fyDate: invDate,
+                            oem: c.oem || '(no OEM)',
+                            client: c.client || '',
+                            type: 'INVOICED', cIdx, yIdx
+                        });
                     });
                 } else {
-                    const isPaid = !!y.oemPaymentDate || cycleOemPaid || (apInvs.length === 1 && !!apInvs[0].payDate);
-                    if (!isPaid) {
-                        const invDateStr = (apInvs.length === 1 && apInvs[0].date) ? apInvs[0].date : (y.oemInvoiceDate || '');
-                        if (!invDateStr) {
-                            payOpen.push({ amount: cycleCostINR, ageDays: null, fyDate: y.billDate ? new Date(y.billDate) : null });
-                        } else {
-                            const invDate = new Date(invDateStr);
-                            const ageDays = Math.floor((today - invDate) / 86400000);
-                            payOpen.push({ amount: cycleCostINR, ageDays, fyDate: invDate });
-                        }
+                    const isPaid = !!y.oemPaymentDate || cycleOemPaid;
+                    if (isPaid) return;
+                    if (!billDate) return;
+                    if (billDate >= fy.start && billDate <= fy.end) {
+                        apToReceive.push({
+                            amount: cycleCostINR, billDate,
+                            oem: c.oem || '(no OEM)',
+                            client: c.client || '',
+                            type: 'TOISSUE', cIdx, yIdx
+                        });
                     }
                 }
             }
         });
     });
-    return { recOpen, payOpen };
+
+    return { arInvoiced, arToIssue, apReceived, apToReceive };
 }
 
 // Bucket a list of {amount, ageDays} into [b1=0-30, b2=31-60, b3=61-90, b4=90+].
-function bsAgeBuckets(list) {
+function bsAgeBuckets(list, side) {
     let b1 = 0, b2 = 0, b3 = 0, b4 = 0;
     list.forEach(r => {
         const a = r.ageDays;
-        const v = Number(r.amount) || 0;
-        if (a === null || a === undefined) { b1 += v; return; } // No invoice date → treat as current
+        const v = bsApplyTax(Number(r.amount) || 0, side);
+        if (a === null || a === undefined) { b1 += v; return; }
         if (a <= 30) b1 += v;
         else if (a <= 60) b2 += v;
         else if (a <= 90) b3 += v;
         else b4 += v;
     });
     return { b1, b2, b3, b4, total: b1 + b2 + b3 + b4 };
+}
+
+// Bucket a TOISSUE/TORECEIVE list by urgency (past bill / this month / later FY).
+function bsUrgencyBuckets(list, side) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const monthOut = new Date(today); monthOut.setDate(monthOut.getDate() + 30);
+    let pastCount = 0, monthCount = 0, laterCount = 0;
+    let pastVal = 0, monthVal = 0, laterVal = 0;
+    list.forEach(r => {
+        const v = bsApplyTax(Number(r.amount) || 0, side);
+        const d = r.billDate;
+        if (!d) { laterCount++; laterVal += v; return; }
+        if (d < today)        { pastCount++;  pastVal  += v; }
+        else if (d <= monthOut){ monthCount++; monthVal += v; }
+        else                   { laterCount++; laterVal += v; }
+    });
+    return { pastCount, monthCount, laterCount, pastVal, monthVal, laterVal,
+             total: pastVal + monthVal + laterVal };
 }
 
 // Click handlers: each navigates and (optionally) sets a filter dropdown.
@@ -33249,6 +33491,13 @@ function bsGotoTab(tab, filterId, filterVal) {
     }
 }
 
+// Escape HTML for safe innerHTML insertion of user-controlled strings.
+function bsEsc(s) {
+    return String(s == null ? '' : s).replace(/[<>&"']/g, c =>
+        ({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c])
+    );
+}
+
 // Main render — pulls live data and writes into the snapshot tab DOM.
 function renderBusinessSnapshot() {
     if (!document.getElementById('businessSnapshotTab')) return;
@@ -33259,58 +33508,105 @@ function renderBusinessSnapshot() {
     const fyLbl = document.getElementById('bsFyLabel');
     if (fyLbl) fyLbl.textContent = `Current FY · ${fy.label}`;
 
-    // ---------- Money side (AR/AP) ----------
-    const { recOpen, payOpen } = bsBuildOpenArAp();
-    const recTotal = recOpen.reduce((s, r) => s + (r.amount || 0), 0);
-    const payTotal = payOpen.reduce((s, r) => s + (r.amount || 0), 0);
-    const recBuckets = bsAgeBuckets(recOpen);
-    const payBuckets = bsAgeBuckets(payOpen);
-    // Carry-forward = open invoices whose FY-bucket date is BEFORE current FY start
-    const recCF = recOpen.filter(r => r.fyDate && r.fyDate < fy.start).reduce((s, r) => s + (r.amount || 0), 0);
-    const payCF = payOpen.filter(r => r.fyDate && r.fyDate < fy.start).reduce((s, r) => s + (r.amount || 0), 0);
+    // Sync GST/TDS toggle visual state from globals (in case user toggled
+    // them on FI before navigating here).
+    const bsGstIcon = document.getElementById('bsGstIcon');
+    const bsGstBtn  = document.getElementById('bsGstToggle');
+    const bsTdsIcon = document.getElementById('bsTdsIcon');
+    const bsTdsBtn  = document.getElementById('bsTdsToggle');
+    const gstOn = (typeof showGST !== 'undefined') && showGST;
+    const tdsOn = (typeof showTDS !== 'undefined') && showTDS;
+    if (bsGstIcon) bsGstIcon.className = gstOn ? 'fas fa-check-square' : 'far fa-square';
+    if (bsGstBtn)  bsGstBtn.classList.toggle('active', gstOn);
+    if (bsTdsIcon) bsTdsIcon.className = tdsOn ? 'fas fa-check-square' : 'far fa-square';
+    if (bsTdsBtn)  bsTdsBtn.classList.toggle('active', tdsOn);
 
     const setT = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-    setT('bsRecVal', bsFmtINRShort(recTotal));
-    setT('bsRecCfVal', bsFmtINRShort(recCF));
-    setT('bsRecB1Val', bsFmtINRShort(recBuckets.b1));
-    setT('bsRecB2Val', bsFmtINRShort(recBuckets.b2));
-    setT('bsRecB3Val', bsFmtINRShort(recBuckets.b3));
-    setT('bsRecB4Val', bsFmtINRShort(recBuckets.b4));
-    setT('bsPayVal', bsFmtINRShort(payTotal));
-    setT('bsPayCfVal', bsFmtINRShort(payCF));
-    setT('bsPayB1Val', bsFmtINRShort(payBuckets.b1));
-    setT('bsPayB2Val', bsFmtINRShort(payBuckets.b2));
-    setT('bsPayB3Val', bsFmtINRShort(payBuckets.b3));
-    setT('bsPayB4Val', bsFmtINRShort(payBuckets.b4));
+
+    // ---------- Build money records ----------
+    const { arInvoiced, arToIssue, apReceived, apToReceive } = bsBuildMoneyRecords();
+
+    // Tax-applied totals
+    const recInvoicedTotal = arInvoiced.reduce((s, r) => s + bsApplyTax(r.amount, 'AR'), 0);
+    const payReceivedTotal = apReceived.reduce((s, r) => s + bsApplyTax(r.amount, 'AP'), 0);
+
+    // Aging buckets for the "raised" boxes
+    const recBuckets = bsAgeBuckets(arInvoiced, 'AR');
+    const payBuckets = bsAgeBuckets(apReceived, 'AP');
+
+    // Carry-forward = invoices dated before current FY start
+    const recCF = arInvoiced
+        .filter(r => r.fyDate && r.fyDate < fy.start)
+        .reduce((s, r) => s + bsApplyTax(r.amount, 'AR'), 0);
+    const payCF = apReceived
+        .filter(r => r.fyDate && r.fyDate < fy.start)
+        .reduce((s, r) => s + bsApplyTax(r.amount, 'AP'), 0);
+
+    // Urgency buckets for the "to be issued/received" boxes
+    const recToIssueBuckets = bsUrgencyBuckets(arToIssue, 'AR');
+    const payToReceiveBuckets = bsUrgencyBuckets(apToReceive, 'AP');
+
+    // ---------- Money tiles: write to DOM ----------
+    setT('bsRecVal',          bsFmtINRShort(recInvoicedTotal));
+    setT('bsRecCfVal',        bsFmtINRShort(recCF));
+    setT('bsRecB1Val',        bsFmtINRShort(recBuckets.b1));
+    setT('bsRecB2Val',        bsFmtINRShort(recBuckets.b2));
+    setT('bsRecB3Val',        bsFmtINRShort(recBuckets.b3));
+    setT('bsRecB4Val',        bsFmtINRShort(recBuckets.b4));
+    setT('bsRecToIssueVal',   bsFmtINRShort(recToIssueBuckets.total));
+    setT('bsRecToIssueCount', String(arToIssue.length));
+
+    setT('bsPayVal',           bsFmtINRShort(payReceivedTotal));
+    setT('bsPayCfVal',         bsFmtINRShort(payCF));
+    setT('bsPayB1Val',         bsFmtINRShort(payBuckets.b1));
+    setT('bsPayB2Val',         bsFmtINRShort(payBuckets.b2));
+    setT('bsPayB3Val',         bsFmtINRShort(payBuckets.b3));
+    setT('bsPayB4Val',         bsFmtINRShort(payBuckets.b4));
+    setT('bsPayToReceiveVal',  bsFmtINRShort(payToReceiveBuckets.total));
+    setT('bsPayToReceiveCount', String(apToReceive.length));
+
+    // Urgency rows for Box 2 (AR To Be Issued)
+    const rtiEl = document.getElementById('bsRecToIssueRows');
+    if (rtiEl) {
+        rtiEl.innerHTML = `
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
+        `;
+    }
+    // Urgency rows for Box 4 (AP To Be Received)
+    const ptrEl = document.getElementById('bsPayToReceiveRows');
+    if (ptrEl) {
+        ptrEl.innerHTML = `
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab')"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab')"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
+        `;
+    }
 
     // ---------- Headline KPI strip ----------
-    // 1) FY Invoiced — sum of pre-tax AR invoice amounts dated this FY
-    let fyInvoiced = 0;
+    // 1) FY Invoiced — sum of AR invoice amounts dated this FY (tax-aware)
+    let fyInvoicedBase = 0;
     if (Array.isArray(contracts)) {
         contracts.forEach(c => {
             if (!c || !c.billingYears) return;
-            c.billingYears.forEach((y, yIdx) => {
+            c.billingYears.forEach(y => {
                 const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
-                const cycleRev = baseSell * y.ratio;
+                const cycleRev = baseSell * (y.ratio || 0);
                 if (cycleRev <= 0) return;
                 const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
                     ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ date: y.actualInvoiceDate || '', amount: cycleRev }] : []);
-                if (arInvs.length === 0) return;
-                if (arInvs.length >= 2) {
-                    arInvs.forEach(inv => {
-                        if (!inv.date) return;
-                        const d = new Date(inv.date);
-                        if (d >= fy.start && d <= fy.end) fyInvoiced += (Number(inv.amount) || 0);
-                    });
-                } else {
-                    const inv = arInvs[0];
-                    if (!inv.date) return;
+                const raised = arInvs.filter(i => !!i.date);
+                raised.forEach(inv => {
                     const d = new Date(inv.date);
-                    if (d >= fy.start && d <= fy.end) fyInvoiced += (Number(inv.amount) || cycleRev);
-                }
+                    if (d >= fy.start && d <= fy.end) {
+                        fyInvoicedBase += (Number(inv.amount) || (raised.length === 1 ? cycleRev : 0));
+                    }
+                });
             });
         });
     }
+    const fyInvoiced = bsApplyTax(fyInvoicedBase, 'AR');
 
     // 2) Active contracts — today between c.start and c.endDate
     const activeContracts = (Array.isArray(contracts) ? contracts : []).filter(c => {
@@ -33319,10 +33615,10 @@ function renderBusinessSnapshot() {
         return today >= s && today <= e;
     });
 
-    // 3) Net cash position
-    const netCash = recTotal - payTotal;
+    // 3) Net cash position (real cash only — excludes future commitments)
+    const netCash = recInvoicedTotal - payReceivedTotal;
 
-    // 4) Pipeline value — sum of dealValue for prospects in OPEN stages
+    // 4) Pipeline value — sum of dealValue for prospects in OPEN stages (no tax)
     let pipelineRaw = 0, pipelineWeighted = 0;
     if (Array.isArray(prospects) && typeof isStageOpen === 'function') {
         prospects.forEach(p => {
@@ -33336,7 +33632,7 @@ function renderBusinessSnapshot() {
     }
 
     setT('bsKpi_invoicedVal', bsFmtINRShort(fyInvoiced));
-    setT('bsKpi_activeVal', String(activeContracts.length));
+    setT('bsKpi_activeVal',   String(activeContracts.length));
     const cashEl = document.getElementById('bsKpi_cashVal');
     if (cashEl) {
         cashEl.textContent = bsFmtINRSigned(netCash);
@@ -33351,9 +33647,7 @@ function renderBusinessSnapshot() {
     }
 
     // ---------- Activity tiles ----------
-
-    // Prospects — count of OPEN-stage, non-archived; sub = pipeline value;
-    // 3 breakdown rows per spec: Qualified / Proposal Sent / Negotiation
+    // Prospects
     const openProspects = (Array.isArray(prospects) ? prospects : []).filter(p => !p.archived && (typeof isStageOpen === 'function' ? isStageOpen(p.stage) : false));
     setT('bsPrCount', String(openProspects.length));
     setT('bsPrSub', `Pipeline · ${bsFmtINRShort(pipelineRaw)}`);
@@ -33382,10 +33676,6 @@ function renderBusinessSnapshot() {
     });
     const fyPOTotal = fyPOs.reduce((s, po) => s + bsPOTotalINR(po), 0);
     const poByStatus = { Open: 0, AwaitingVendor: 0, Closed: 0 };
-    // Map full statuses → 3-bucket sketch model:
-    //   Open = Draft + Issued     (issued or being prepared)
-    //   AwaitingVendor = Acknowledged + Received   (with vendor / waiting receipt)
-    //   Closed = Closed + Cancelled
     fyPOs.forEach(po => {
         if (po.status === 'Draft' || po.status === 'Issued') poByStatus.Open++;
         else if (po.status === 'Acknowledged' || po.status === 'Received') poByStatus.AwaitingVendor++;
@@ -33411,12 +33701,11 @@ function renderBusinessSnapshot() {
     const renewedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Confirmed');
     const churnedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Lost');
     const renewedValueINR = renewedThisFY.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
-    // Bucket the still-active expiring contracts by days until end-date
     const buckets30 = []; const buckets60 = []; const buckets90 = [];
     fyExpiring.forEach(c => {
         const e = new Date(c.endDate);
         const daysOut = Math.floor((e - today) / 86400000);
-        if (daysOut < 0) return; // already expired
+        if (daysOut < 0) return;
         if ((c.renewalStatus || 'Not Started') === 'Confirmed' || (c.renewalStatus || 'Not Started') === 'Lost') return;
         if (daysOut <= 30) buckets30.push(c);
         else if (daysOut <= 60) buckets60.push(c);
@@ -33433,7 +33722,7 @@ function renderBusinessSnapshot() {
         `;
     }
 
-    // Contracts — active count + ACV; sub = ACV + new in FY; rows = top 2 OEMs + Others
+    // Contracts
     const acvTotal = activeContracts.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
     const newInFY = activeContracts.filter(c => {
         if (!c.start) return false;
@@ -33453,7 +33742,7 @@ function renderBusinessSnapshot() {
     const ctRowsEl = document.getElementById('bsCtRows');
     if (ctRowsEl) {
         let html = top2.map(([oem, n]) =>
-            `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${(oem || '').replace(/[<>&"']/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c]))}</span><span class="bs-tile-row-val">${n}</span></div>`
+            `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${bsEsc(oem)}</span><span class="bs-tile-row-val">${n}</span></div>`
         ).join('');
         if (othersCount > 0) {
             html += `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">Others</span><span class="bs-tile-row-val">${othersCount}</span></div>`;
@@ -33461,27 +33750,103 @@ function renderBusinessSnapshot() {
         ctRowsEl.innerHTML = html;
     }
 
-    // ---------- Headline strip click handlers ----------
+    // ---------- Action Center ----------
+    // Column 1: Renewals due this month (≤30 days, not Confirmed/Lost)
+    const urgentRenewals = (Array.isArray(contracts) ? contracts : []).filter(c => {
+        if (!c || !c.endDate) return false;
+        const e = new Date(c.endDate);
+        const daysOut = Math.floor((e - today) / 86400000);
+        if (daysOut < 0 || daysOut > 30) return false;
+        const st = c.renewalStatus || 'Not Started';
+        return st !== 'Confirmed' && st !== 'Lost';
+    }).map(c => ({
+        label: c.client || '(no client)',
+        sub: c.product || c.oem || '',
+        meta: `${Math.floor((new Date(c.endDate) - today) / 86400000)}d`,
+        c
+    }));
+    const renEl = document.getElementById('bsActRenewals');
+    if (renEl) {
+        if (urgentRenewals.length === 0) {
+            renEl.innerHTML = `<div class="bs-action-empty">None due this month</div>`
+              + `<div class="bs-action-meta">${buckets60.length + buckets90.length} contracts in 31-90 day window</div>`;
+        } else {
+            const top = urgentRenewals.slice(0, 3);
+            let html = top.map(r =>
+                `<div class="bs-action-item" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-action-item-lbl">${bsEsc(r.label)}${r.sub ? ' · ' + bsEsc(r.sub) : ''}</span><span class="bs-action-item-val">${r.meta}</span></div>`
+            ).join('');
+            const more = urgentRenewals.length - 3;
+            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
+            renEl.innerHTML = html;
+        }
+    }
+
+    // Column 2: Overdue receivables (raised invoices > 60 days old)
+    const overdueAR = arInvoiced.filter(r => r.ageDays !== null && r.ageDays > 60)
+        .map(r => ({ ...r, taxedAmount: bsApplyTax(r.amount, 'AR') }))
+        .sort((a, b) => b.taxedAmount - a.taxedAmount);
+    const ovdEl = document.getElementById('bsActOverdue');
+    if (ovdEl) {
+        if (overdueAR.length === 0) {
+            ovdEl.innerHTML = `<div class="bs-action-empty">None over 60 days</div>`
+              + `<div class="bs-action-meta">${bsFmtINRShort(recBuckets.b2)} in 31-60 day bucket</div>`;
+        } else {
+            const top = overdueAR.slice(0, 3);
+            let html = top.map(r =>
+                `<div class="bs-action-item" onclick="bsGotoTab('invoicesTab')"><span class="bs-action-item-lbl">${bsEsc(r.client)} · ${r.ageDays}d</span><span class="bs-action-item-val">${bsFmtINRShort(r.taxedAmount)}</span></div>`
+            ).join('');
+            const more = overdueAR.length - 3;
+            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
+            ovdEl.innerHTML = html;
+        }
+    }
+
+    // Column 3: Open POs awaiting vendor (Acknowledged or Received)
+    const awaitingPOs = (Array.isArray(purchaseOrders) ? purchaseOrders : [])
+        .filter(po => po.status === 'Acknowledged' || po.status === 'Received')
+        .map(po => ({
+            label: po.poNumber || po.poNo || ('PO #' + (po.id || '')),
+            oem: po.oem || '',
+            value: bsPOTotalINR(po),
+            po
+        }))
+        .sort((a, b) => b.value - a.value);
+    const poEl = document.getElementById('bsActPOs');
+    if (poEl) {
+        if (awaitingPOs.length === 0) {
+            const allOpen = (Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(po => po.status === 'Draft' || po.status === 'Issued').length;
+            poEl.innerHTML = `<div class="bs-action-empty">None awaiting vendor</div>`
+              + `<div class="bs-action-meta">${allOpen} POs in Draft/Issued</div>`;
+        } else {
+            const top = awaitingPOs.slice(0, 3);
+            let html = top.map(p =>
+                `<div class="bs-action-item" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Acknowledged')"><span class="bs-action-item-lbl">${bsEsc(p.label)}${p.oem ? ' · ' + bsEsc(p.oem) : ''}</span><span class="bs-action-item-val">${bsFmtINRShort(p.value)}</span></div>`
+            ).join('');
+            const more = awaitingPOs.length - 3;
+            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
+            poEl.innerHTML = html;
+        }
+    }
+
+    // ---------- Click handlers (KPI strip + money headlines) ----------
     const wireClick = (id, fn) => {
         const el = document.getElementById(id);
         if (el) el.onclick = fn;
     };
     wireClick('bsKpi_invoiced', () => bsGotoTab('invoicesTab'));
-    wireClick('bsKpi_active', () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
+    wireClick('bsKpi_active',   () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
     wireClick('bsKpi_pipeline', () => bsGotoTab('prospectPipelineTab', 'pipelineStageFilter', 'OPEN'));
 
-    // ---------- Money tile click handlers ----------
-    wireClick('bsRecVal', () => bsGotoTab('invoicesTab'));
-    wireClick('bsPayVal', () => bsGotoTab('purchaseInvoicesTab'));
-    wireClick('bsRecCfWrap', () => bsGotoTab('invoicesTab'));
-    wireClick('bsPayCfWrap', () => bsGotoTab('purchaseInvoicesTab'));
-    // Bucket clicks — all open the relevant tab; AR/AP tabs don't currently
-    // expose an aging-bucket dropdown, so we just navigate. (Future: wire to a
-    // real aging filter on the AR/AP page.)
+    wireClick('bsRecVal',         () => bsGotoTab('invoicesTab'));
+    wireClick('bsPayVal',         () => bsGotoTab('purchaseInvoicesTab'));
+    wireClick('bsRecToIssueVal',  () => bsGotoTab('invoicesTab'));
+    wireClick('bsPayToReceiveVal',() => bsGotoTab('purchaseInvoicesTab'));
+    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab'));
+    wireClick('bsPayCfWrap',      () => bsGotoTab('purchaseInvoicesTab'));
+
     ['bsRecB1','bsRecB2','bsRecB3','bsRecB4'].forEach(id => wireClick(id, () => bsGotoTab('invoicesTab')));
     ['bsPayB1','bsPayB2','bsPayB3','bsPayB4'].forEach(id => wireClick(id, () => bsGotoTab('purchaseInvoicesTab')));
 
-    // ---------- Activity-tile big-number click handlers ----------
     wireClick('bsPrCount', () => bsGotoTab('prospectPipelineTab', 'pipelineStageFilter', 'OPEN'));
     wireClick('bsPoCount', () => bsGotoTab('purchaseOrdersTab'));
     wireClick('bsRnCount', () => bsGotoTab('renewalsTab'));
