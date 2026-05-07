@@ -7,17 +7,33 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Build 8Z — Splash matches the user's chosen theme.
+       Default = light. body.dark-mode flips to dark.
+       Theme is detected via localStorage 'ms_theme' (set by main app). */
     :root {
-      --bg-primary: #0e1014;
-      --bg-card: #161a21;
-      --border-soft: #232832;
-      --accent-cyan: #4fd1c5;
-      --accent-amber: #f59e0b;
-      --accent-green: #10b981;
-      --accent-red: #ef4444;
-      --accent-indigo: #6366f1;
-      --text-bright: #f0f3f8;
-      --text-dim: #8a93a3;
+      /* Light Theme (Default) */
+      --bg-primary: #fbfbf9;
+      --bg-card: #ffffff;
+      --border-soft: rgba(20, 20, 15, 0.10);
+      --accent-cyan: #0c5e5b;        /* deep teal — matches main app */
+      --accent-amber: #8a4d12;
+      --accent-green: #1e6135;
+      --accent-red: #8a2424;
+      --accent-indigo: #0c5e5b;      /* unified to teal for consistency */
+      --text-bright: #14140f;
+      --text-dim: #74716a;
+    }
+    body.dark-mode {
+      --bg-primary: #0e0e10;
+      --bg-card: #131318;
+      --border-soft: #26262d;
+      --accent-cyan: #4eadab;
+      --accent-amber: #d8924a;
+      --accent-green: #5dba7e;
+      --accent-red: #d96b6b;
+      --accent-indigo: #4eadab;
+      --text-bright: #f0efe9;
+      --text-dim: #8b877d;
     }
 
     html, body {
@@ -52,7 +68,7 @@
       font-size: 32px;
       font-weight: 600;
       margin-bottom: 28px;
-      background: linear-gradient(135deg, var(--accent-cyan) 0%, #5eead4 100%);
+      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-indigo) 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
@@ -60,7 +76,7 @@
 
     .spinner {
       width: 32px; height: 32px;
-      border: 3px solid rgba(79, 209, 197, 0.18);
+      border: 3px solid var(--border-soft);
       border-top-color: var(--accent-cyan);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -101,7 +117,7 @@
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
       font-size: 12.5px;
       color: var(--accent-cyan);
-      background: rgba(79, 209, 197, 0.08);
+      background: rgba(12, 94, 91, 0.08);
       padding: 10px 12px;
       border-radius: 4px;
       word-break: break-all;
@@ -123,7 +139,7 @@
       color: white;
       border-color: var(--accent-indigo);
     }
-    .wizard button.primary:hover { background: #4f46e5; }
+    .wizard button.primary:hover { background: var(--accent-indigo); filter: brightness(0.85); }
     .wizard button.secondary {
       background: transparent;
       color: var(--text-dim);
@@ -153,7 +169,7 @@
       white-space: pre-wrap;
       margin-top: 8px;
       padding: 10px;
-      background: rgba(0,0,0,0.4);
+      background: rgba(20, 20, 15, 0.05);
       border-radius: 4px;
     }
 
@@ -357,6 +373,16 @@
 
       setTimeout(function () { window.location.href = 'crm.html'; }, 400);
     }
+
+    // Theme init for splash — match user's chosen theme from localStorage.
+    // Default is light if no preference saved. Set BEFORE first paint to avoid flash.
+    (function () {
+      try {
+        if (localStorage.getItem('ms_theme') === 'dark') {
+          document.body.classList.add('dark-mode');
+        }
+      } catch (e) { /* localStorage unavailable */ }
+    })();
 
     document.addEventListener('DOMContentLoaded', function () {
       $status     = document.getElementById('status');
