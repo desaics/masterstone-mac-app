@@ -18159,33 +18159,49 @@ function saveContract() {
     };
 
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
-    // Phase 8O — Contract → PO path cascade. When the user edits the
-    // OEM PO link / local file path on the contract side, the matching
-    // PO record needs the same values so its "Open Original" anchor
-    // doesn't go stale. Match is by PO number (c.internalPO === po.poNumber).
-    // Updates only when the contract actually has a PO ref set, to avoid
-    // accidentally touching a record whose internalPO is blank.
+    // Phase 8P — Contract → PO path cascade (hardened). Two complementary
+    // matching strategies, applied together so any matching PO gets updated:
+    //   (1) String match on PO number — c.internalPO === po.poNumber, both
+    //       trimmed so trailing whitespace doesn't silently break the link.
+    //   (2) Reverse linkedContractIdx — find any PO whose linkedContractIdx
+    //       points to this contract's index. Catches the case where the
+    //       contract's internalPO field was hand-edited, blank, or has
+    //       punctuation drift (e.g. trailing dot, prefix change).
+    // The 8O cascade only used (1); when the user's contract had any
+    // string mismatch the cascade silently no-op'd, leaving the PO with
+    // stale path values.
     try {
-        const _ipoNum = (data.internalPO || '').trim();
-        if (_ipoNum && typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
-            const _matchedPo = purchaseOrders.find(p => p && (p.poNumber || '') === _ipoNum);
-            if (_matchedPo) {
-                let _changed = false;
-                const _newLink  = data.internalPOLink || '';
-                const _newLocal = data.internalPOLocalPath || '';
-                if ((_matchedPo.externalLink || '') !== _newLink) {
-                    _matchedPo.externalLink = _newLink;
+        if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
+            const _ipoNum = (data.internalPO || '').trim();
+            const _ctrIdxAfterSave = (idx > -1) ? idx : (contracts.length - 1);
+            const _matchedPos = [];
+            purchaseOrders.forEach(p => {
+                if (!p) return;
+                let _matched = false;
+                if (_ipoNum && ((p.poNumber || '').trim()) === _ipoNum) _matched = true;
+                const _lci = parseInt(p.linkedContractIdx);
+                if (!isNaN(_lci) && _lci === _ctrIdxAfterSave) _matched = true;
+                if (_matched && !_matchedPos.includes(p)) _matchedPos.push(p);
+            });
+            let _changed = false;
+            const _newLink  = data.internalPOLink || '';
+            const _newLocal = data.internalPOLocalPath || '';
+            _matchedPos.forEach(_po => {
+                let _poChanged = false;
+                if ((_po.externalLink || '') !== _newLink) {
+                    _po.externalLink = _newLink;
+                    _poChanged = true;
+                }
+                if ((_po.externalLinkLocalPath || '') !== _newLocal) {
+                    _po.externalLinkLocalPath = _newLocal;
+                    _poChanged = true;
+                }
+                if (_poChanged) {
+                    _po.updatedAt = new Date().toISOString();
                     _changed = true;
                 }
-                if ((_matchedPo.externalLinkLocalPath || '') !== _newLocal) {
-                    _matchedPo.externalLinkLocalPath = _newLocal;
-                    _changed = true;
-                }
-                if (_changed) {
-                    _matchedPo.updatedAt = new Date().toISOString();
-                    if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
-                }
-            }
+            });
+            if (_changed && typeof savePurchaseOrders === 'function') savePurchaseOrders();
         }
     } catch (e) { console.warn('Contract→PO path cascade failed:', e); }
     // 8U — PO → Contract conversion back-link: if the user kicked off this
@@ -23923,7 +23939,17 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     page-break-inside: avoid;
 }
 
-/* SCREEN PREVIEW — A4 frame, letterhead tiled per-page-worth */
+/* SCREEN PREVIEW — Phase 8P
+   Was (8I/8J): tiled the letterhead vertically every 297mm via
+   background-image + repeat-y, on the assumption content would break at
+   matching boundaries. In practice content runs continuously, so the
+   second copy of the letterhead landed mid-document — diamond logo
+   appearing where "page 2" was supposed to start.
+   Now: show ONE letterhead at the top of the doc using the same <img>
+   element print mode uses. Pages 2+ in the actual PDF still get their
+   own letterhead (handled by the @media print block below); the screen
+   preview is just for verifying page 1 looks right. The user clicks
+   Print/Save as PDF to see actual paginated output. */
 @media screen {
     body {
         background: #f4f3ef;
@@ -23934,18 +23960,33 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         max-width: 210mm;
         margin: 0 auto;
         box-shadow: 0 2px 12px rgba(0,0,0,0.12);
-        background-image: url("${lhUrl}");
-        background-size: 100% 297mm;
-        background-repeat: repeat-y;
-        background-position: top left;
+        position: relative;
     }
-    .ms-svc-letterhead-bg { display: none; }
+    .ms-svc-letterhead-bg {
+        display: block;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 297mm;
+        z-index: 0;
+        object-fit: fill;
+    }
     .ms-svc-pdf-content {
         padding: 35mm 18mm 25mm 35mm;
+        position: relative;
+        z-index: 1;
     }
 }
 
-/* PRINT — @page margins per page + fixed letterhead spans full paper */
+/* PRINT — @page margins per page + fixed letterhead spans full paper.
+   Phase 8P: switched object-fit from 'cover' to 'fill'. With 'cover',
+   non-A4-aspect letterhead images were getting cropped to fill the
+   210x297mm box, chopping artwork on the overflowing axis (the user's
+   diamond logo "MASTE..." text was being chopped on the right edge).
+   'fill' stretches the image to exactly 210x297mm without cropping —
+   any aspect-ratio mismatch produces a slight squish rather than a
+   guillotined logo. */
 @media print {
     @page {
         size: A4;
@@ -23970,7 +24011,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         left: -35mm;
         width: 210mm;
         height: 297mm;
-        object-fit: cover;
+        object-fit: fill;
     }
     .ms-svc-pdf-content {
         padding: 0;
@@ -25355,8 +25396,12 @@ function renderPOsListView(filtered) {
         const gst = determinePOGSTMode(po.oem);
         const totals = computePOTotals(po.lineItems, gst.mode);
         const foreign = isOemForeign(po.oem);
+        // Phase 8P — resolve path against linked contract; freshest wins.
+        const _resolvedPo = (typeof resolvePOPath === 'function')
+            ? resolvePOPath(po)
+            : { link: po.externalLink || '', localPath: po.externalLinkLocalPath || '' };
         return `<tr class="clickable-row" onclick="openPODetail('${po.id}')">
-            <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(po.externalLinkLocalPath, true)}</td>
+            <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(_resolvedPo.localPath, true)}</td>
             <td style="font-weight:600;">${pEsc(po.oem || '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(po.subject || '')}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
@@ -25991,32 +26036,49 @@ function savePOFromForm() {
     rec.lineItems = poFormLineItems.map(li => ({ ...li }));
     rec.updatedAt = now;
     if (isNew) purchaseOrders.push(rec);
-    // Phase 8O — PO → Contract path cascade. Symmetric counterpart to the
-    // saveContract block: when the user edits the External Document Link
-    // / local file path on the PO, propagate the new values to any
-    // contract whose internalPO field references this PO. Match by PO
-    // number string. persistData() flushes the contracts mutation; the
-    // savePurchaseOrders() call further down handles the PO side.
+    // Phase 8P — PO → Contract path cascade (hardened). Symmetric
+    // counterpart to the saveContract cascade. Two complementary match
+    // strategies, applied together:
+    //   (1) String match on PO number — c.internalPO === rec.poNumber,
+    //       both trimmed.
+    //   (2) Forward linkedContractIdx — if rec.linkedContractIdx points
+    //       to a contracts[] entry, that contract is also a match.
+    // Also fixes a per-row bug from the 8O loop: the outer _ctrChanged
+    // was being checked instead of per-contract change state, so once
+    // any contract changed, every subsequent contract in the loop got
+    // its updatedAt bumped even when nothing about it actually changed.
     try {
-        const _poNum = (rec.poNumber || '').trim();
-        if (_poNum && typeof contracts !== 'undefined' && Array.isArray(contracts)) {
-            let _ctrChanged = false;
-            contracts.forEach(c => {
+        if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+            const _poNum = (rec.poNumber || '').trim();
+            const _lci = parseInt(rec.linkedContractIdx);
+            const _hasLci = !isNaN(_lci) && _lci >= 0 && _lci < contracts.length;
+            const _matchedCtrs = [];
+            contracts.forEach((c, i) => {
                 if (!c) return;
-                if ((c.internalPO || '').trim() !== _poNum) return;
-                const _newLink  = rec.externalLink || '';
-                const _newLocal = rec.externalLinkLocalPath || '';
+                let _matched = false;
+                if (_poNum && ((c.internalPO || '').trim()) === _poNum) _matched = true;
+                if (_hasLci && i === _lci) _matched = true;
+                if (_matched && !_matchedCtrs.includes(c)) _matchedCtrs.push(c);
+            });
+            let _anyChanged = false;
+            const _newLink  = rec.externalLink || '';
+            const _newLocal = rec.externalLinkLocalPath || '';
+            _matchedCtrs.forEach(c => {
+                let _cChanged = false;
                 if ((c.internalPOLink || '') !== _newLink) {
                     c.internalPOLink = _newLink;
-                    _ctrChanged = true;
+                    _cChanged = true;
                 }
                 if ((c.internalPOLocalPath || '') !== _newLocal) {
                     c.internalPOLocalPath = _newLocal;
-                    _ctrChanged = true;
+                    _cChanged = true;
                 }
-                if (_ctrChanged) c.updatedAt = new Date().toISOString();
+                if (_cChanged) {
+                    c.updatedAt = new Date().toISOString();
+                    _anyChanged = true;
+                }
             });
-            if (_ctrChanged && typeof persistData === 'function') persistData();
+            if (_anyChanged && typeof persistData === 'function') persistData();
         }
     } catch (e) { console.warn('PO→Contract path cascade failed:', e); }
     savePurchaseOrders();
@@ -26078,6 +26140,10 @@ function renderPODetail(po) {
     const gst = determinePOGSTMode(po.oem);
     const t = computePOTotals(po.lineItems, gst.mode);
     const foreign = isOemForeign(po.oem);
+    // Phase 8P — resolve PO path against linked contract; freshest wins.
+    const _resolvedPo = (typeof resolvePOPath === 'function')
+        ? resolvePOPath(po)
+        : { link: po.externalLink || '', localPath: po.externalLinkLocalPath || '' };
 
     const header = document.getElementById('poDetailHeader');
     header.innerHTML = `
@@ -26097,7 +26163,7 @@ function renderPODetail(po) {
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openPOForm('${po.id}')"><i class="fas fa-edit"></i> Edit</button>
                 <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview the PO and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
-                ${(po.externalLink || po.externalLinkLocalPath) ? (window.__msDocAnchor(po.externalLinkLocalPath, po.externalLink, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
+                ${(_resolvedPo.link || _resolvedPo.localPath) ? (window.__msDocAnchor(_resolvedPo.localPath, _resolvedPo.link, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
                 ${po.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markPOIssued('${po.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
                 ${(po.status === 'Issued' || po.status === 'Acknowledged') ? `<button class="btn btn-primary btn-sm" onclick="markPOReceived('${po.id}')" style="background:var(--success);"><i class="fas fa-box-open"></i> Mark Received</button>` : ''}
@@ -33490,6 +33556,58 @@ function getPOsLinkedToReseller(resellerKey) {
 function getContractsLinkedToReseller(resellerKey) {
     if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return [];
     return contracts.filter(c => c && c.sourcedViaResellerKey === resellerKey);
+}
+
+// Phase 8P — Read-side resolver for the OEM PO file path. The PO record
+// stores its own externalLink/externalLinkLocalPath, but the user's
+// natural editing surface is the contract form (where the same path
+// lives as internalPOLink/internalPOLocalPath). The 8O cascade keeps
+// the two in sync on save, but if the cascade ever silently no-ops
+// (string drift on PO number, save flow that bypasses the cascade,
+// stale data from before 8O shipped), the PO would still show the old
+// path. This resolver routes around that:
+//
+//   1. Find a linked contract — first by po.linkedContractIdx, then
+//      fall back to a trimmed match on c.internalPO === po.poNumber.
+//   2. If the contract has a non-empty path AND its updatedAt is
+//      newer than the PO's, return the contract's values.
+//   3. Otherwise return the PO's own values.
+//
+// Used by the PO list table file icon and the PO detail "Open Original"
+// anchor — anywhere we render the PO's external file link.
+function resolvePOPath(po) {
+    if (!po) return { link: '', localPath: '' };
+    let linkedContract = null;
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        const _lciRaw = po.linkedContractIdx;
+        const _lci = (_lciRaw !== undefined && _lciRaw !== null && _lciRaw !== '')
+            ? parseInt(_lciRaw)
+            : NaN;
+        if (!isNaN(_lci) && _lci >= 0 && _lci < contracts.length) {
+            linkedContract = contracts[_lci];
+        }
+        if (!linkedContract) {
+            const _poNum = (po.poNumber || '').trim();
+            if (_poNum) {
+                linkedContract = contracts.find(c => c && (c.internalPO || '').trim() === _poNum) || null;
+            }
+        }
+    }
+    if (linkedContract) {
+        const _cTime = linkedContract.updatedAt ? new Date(linkedContract.updatedAt).getTime() : 0;
+        const _pTime = po.updatedAt ? new Date(po.updatedAt).getTime() : 0;
+        const _cHasPath = !!(linkedContract.internalPOLink || linkedContract.internalPOLocalPath);
+        if (_cTime > _pTime && _cHasPath) {
+            return {
+                link:      linkedContract.internalPOLink      || '',
+                localPath: linkedContract.internalPOLocalPath || ''
+            };
+        }
+    }
+    return {
+        link:      po.externalLink           || '',
+        localPath: po.externalLinkLocalPath  || ''
+    };
 }
 
 function buildLinkedDealsTableForReseller(resellerKey) {
