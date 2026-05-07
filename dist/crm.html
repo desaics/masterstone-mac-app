@@ -23829,9 +23829,13 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         }
     } catch (_) { validUntilStr = proposal.validUntil || ''; }
 
-    // Numbered scope sections
+    // Phase 8S — Each content block is wrapped in a <div class="page-chunk">
+    // so the JS paginator (see inline pagination block at the bottom) can
+    // treat it as an atomic unit when distributing content across pages.
+
+    // Numbered scope sections — one chunk per section
     const scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
-    let sectionsHtml = '';
+    let sectionChunksHtml = '';
     let sectionNum = 0;
     scope.forEach((sec) => {
         const title = (sec.title || '').trim();
@@ -23841,90 +23845,146 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         const bulletsHtml = bullets.map((b) =>
             `<li style="margin-bottom:5px; line-height:1.55; color:${COL_BODY};">${safe(b)}</li>`
         ).join('');
-        sectionsHtml += `
-            <div class="ms-svc-section">
-                <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
-                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> ${safe(title || '(Untitled section)')}
+        sectionChunksHtml += `
+            <div class="page-chunk">
+                <div class="ms-svc-section">
+                    <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                        <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> ${safe(title || '(Untitled section)')}
+                    </div>
+                    ${bullets.length ? `<ul style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; margin:0 0 6px 0; padding-left:32px;">${bulletsHtml}</ul>` : ''}
                 </div>
-                ${bullets.length ? `<ul style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; margin:0 0 6px 0; padding-left:32px;">${bulletsHtml}</ul>` : ''}
-            </div>
-            <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">`;
+                <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">
+            </div>`;
     });
 
-    let durationHtml = '';
+    let durationChunkHtml = '';
     if ((proposal.serviceDuration || '').trim()) {
         sectionNum++;
-        durationHtml = `
-            <div class="ms-svc-section">
-                <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
-                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Duration
+        durationChunkHtml = `
+            <div class="page-chunk">
+                <div class="ms-svc-section">
+                    <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                        <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Duration
+                    </div>
+                    <div style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; padding-left:18px;">
+                        The consultancy engagement will span <strong>${safe(proposal.serviceDuration)}</strong> from the date of acceptance and commencement.
+                    </div>
                 </div>
-                <div style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; padding-left:18px;">
-                    The consultancy engagement will span <strong>${safe(proposal.serviceDuration)}</strong> from the date of acceptance and commencement.
-                </div>
-            </div>
-            <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">`;
+                <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">
+            </div>`;
     }
 
     sectionNum++;
     const paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
     const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
     const sacCode = (proposal.serviceSAC || '').trim();
-    const commercialsHtml = `
-        <div class="ms-svc-section">
-            <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
-                <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Commercials
+    const commercialsChunkHtml = `
+        <div class="page-chunk">
+            <div class="ms-svc-section">
+                <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Commercials
+                </div>
+                <ul style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; margin:0; padding-left:32px;">
+                    <li style="margin-bottom:5px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
+                    <li style="margin-bottom:5px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
+                    <li style="margin-bottom:5px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
+                    ${validUntilStr ? `<li style="margin-bottom:5px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
+                    ${sacCode ? `<li style="margin-bottom:5px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
+                </ul>
             </div>
-            <ul style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; margin:0; padding-left:32px;">
-                <li style="margin-bottom:5px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
-                <li style="margin-bottom:5px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
-                <li style="margin-bottom:5px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
-                ${validUntilStr ? `<li style="margin-bottom:5px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
-                ${sacCode ? `<li style="margin-bottom:5px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
-            </ul>
         </div>`;
 
     const signatureHtml = (proposal.signatureShown === false) ? '' : (cp.signatureImageDataUrl
         ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:55px; max-width:170px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:55px; border-bottom:1px solid ${COL_BODY}; width:170px; margin-bottom:4px;"></div>`);
 
-    // Phase 8R — Replaced the @page / position:fixed multi-page approach
-    // with the proven pdf-fit-host pattern that PO, Subscription Proposal,
-    // and Invoice letterheads have been using reliably all along. Pattern:
-    //   - Fixed-size A4 frame: 794x1123px (= A4 at 96 DPI), overflow:hidden
-    //   - Letterhead <img> as position:absolute, fills the frame edge-to-edge
-    //     with object-fit:fill (no cropping; slight stretch if source isn't
-    //     A4 aspect, but nothing is chopped off — strictly better than the
-    //     8I→8Q multi-page attempts where Chrome's print engine silently
-    //     clipped the image at @page content-area boundaries)
-    //   - Content wrapped in .pdf-fit-target; pdfFitScript() auto-scales it
-    //     down if natural height exceeds 1123px so it always fits one page
+    // Phase 8S — JS-based pagination with per-page letterhead.
     //
-    // Trade-off: service proposals are now SINGLE-PAGE. Content auto-shrinks
-    // for very long proposals. Standard business-letter convention; same
-    // behaviour as the other PDF builders in this app.
+    // The journey:
+    //   8I→8J:  position:fixed + @page negative offsets.   Chrome clipped.
+    //   8O:     object-fit:cover.                          Cropped diamond.
+    //   8P:     object-fit:fill.                           Same crop (wrong fix).
+    //   8Q:     position:absolute.                         Letterhead vanished.
+    //   8R:     pdf-fit-host single-page auto-shrink.      Cramped unreadable.
+    //   8S:     JS pagination, this approach.              <- you are here
+    //
+    // Why this finally works:
+    //   - Each "page" is a self-contained <div> sized exactly 210x297mm,
+    //     positioned in normal flow with page-break-after:always.
+    //   - The letterhead is a position:absolute <img> INSIDE each page div,
+    //     not a position:fixed page-level overlay. Chrome can't clip it
+    //     because it's an ordinary absolutely-positioned child of an
+    //     ordinary block — no @page interactions.
+    //   - With @page { margin: 0 }, Chrome's print engine renders each
+    //     210x297mm div as exactly one A4 sheet, full-bleed.
+    //   - Inline JS walks through the content "chunks" (page-chunk class)
+    //     in order, appending each to the current page until adding the
+    //     next chunk would exceed page height (297mm). At that point a new
+    //     page is created and continues. Result: content flows naturally
+    //     across as many pages as needed, with letterhead on every page,
+    //     no auto-shrinking, no cropping.
     const lhUrl = cp.letterheadDataUrl || '';
     return `
 <style>
-/* Phase 8R — only inline-class style needed; everything else uses inline
-   styles. No @media queries, no @page rules — single fixed-size A4 frame
-   keeps the rendering identical between screen preview and printed PDF. */
+* { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: #1f2937;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+#ms-svc-source { display: none; }
+.ms-svc-page {
+    position: relative;
+    width: 210mm;
+    height: 297mm;
+    overflow: hidden;
+    page-break-after: always;
+    background: white;
+}
+.ms-svc-page:last-child { page-break-after: auto; }
+.ms-svc-page-letterhead {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    z-index: 0;
+    pointer-events: none;
+    user-select: none;
+}
+.ms-svc-page-content {
+    position: relative;
+    z-index: 1;
+    padding: 35mm 18mm 25mm 35mm;
+    height: 100%;
+}
 .ms-svc-section { margin-bottom: 14px; }
+
+@media screen {
+    body { background: #f4f3ef; padding: 20px 0; }
+    .ms-svc-page {
+        margin: 0 auto 14px auto;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+    }
+}
+@media print {
+    @page { size: A4; margin: 0; }
+    body { background: white; }
+    .ms-svc-page { margin: 0; box-shadow: none; }
+}
 </style>
 
-<div id="pdf-content" class="pdf-fit-host" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: ${COL_BODY}; background: var(--glass-panel); position: relative; width: 794px; height: 1123px; margin: 0 auto; font-size: 12px; line-height: 1.5; box-sizing: border-box; overflow: hidden;">
+<!-- Hidden source: holds the letterhead URL and all content chunks. The
+     paginator walks the chunks and clones them into auto-generated pages. -->
+<img id="ms-svc-letterhead-src" src="${lhUrl}" alt="" style="display:none;">
 
-    <!-- LETTERHEAD: full A4 background, behind content. object-fit:fill so
-         the entire source image is visible (no cropping). -->
-    <img src="${lhUrl}" alt="Letterhead" style="position:absolute; top:0; left:0; width:794px; height:1123px; z-index:1; object-fit:fill; pointer-events:none;">
+<div id="ms-svc-source">
 
-    <!-- CONTENT LAYER: padding clears letterhead's top-right diamond +
-         tagline (140px top), left arc graphic (120px left), bottom-corner
-         artwork (50px right + bottom). Same padding the PO and Subscription
-         Proposal letterhead builders use. -->
-    <div class="pdf-fit-target" style="position: relative; z-index: 2; padding: 140px 50px 50px 120px;">
-
-        <!-- TITLE BAR -->
+    <!-- TITLE BAR chunk -->
+    <div class="page-chunk">
         <div style="background:${COL_HEADER}; color:white; padding:9px 16px; margin-bottom:16px; border-radius:2px;">
             <table style="width:100%;">
                 <tr>
@@ -23936,8 +23996,10 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
                 </tr>
             </table>
         </div>
+    </div>
 
-        <!-- SUBJECT + META -->
+    <!-- SUBJECT + META chunk -->
+    <div class="page-chunk">
         <div style="margin-bottom:18px;">
             <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:4px;">Subject</div>
             <div style="font-size:14px; font-weight:700; color:${COL_HEADER}; margin-bottom:10px; line-height:1.3;">${safe(proposal.subject || 'Professional Services Proposal')}</div>
@@ -23954,21 +24016,25 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
                 </tr>
             </table>
         </div>
-
         <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">
+    </div>
 
-        <!-- BODY: numbered scope sections, duration, commercials -->
-        ${sectionsHtml}
-        ${durationHtml}
-        ${commercialsHtml}
+    <!-- BODY chunks: numbered scope sections, duration, commercials -->
+    ${sectionChunksHtml}
+    ${durationChunkHtml}
+    ${commercialsChunkHtml}
 
-        ${proposal.terms ? `
+    ${proposal.terms ? `
+    <!-- TERMS chunk -->
+    <div class="page-chunk">
         <div style="margin-top:14px; padding-top:10px; border-top:1px solid ${COL_HAIRLINE};">
             <div style="font-size:11.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">Terms &amp; Conditions</div>
             <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.55;">${safe(proposal.terms)}</div>
-        </div>` : ''}
+        </div>
+    </div>` : ''}
 
-        <!-- SIGNATORY -->
+    <!-- SIGNATORY chunk -->
+    <div class="page-chunk">
         <table style="width:100%; margin-top:24px;">
             <tr>
                 <td style="vertical-align:top; text-align:right;">
@@ -23983,7 +24049,80 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         </table>
     </div>
 </div>
-${pdfFitScript()}`;
+
+<!-- Output container — paginator fills this with .ms-svc-page divs -->
+<div id="ms-svc-pages"></div>
+
+<scr` + `ipt>
+(function() {
+    // A4 at 96 DPI = 1123.62px tall. Use 1115 as a slight safety margin so
+    // we never over-fill a page (rounding errors near the boundary cause
+    // print-time overflow that visibly clips content otherwise).
+    var PAGE_HEIGHT_PX = 1115;
+
+    function paginate() {
+        var source = document.getElementById('ms-svc-source');
+        var container = document.getElementById('ms-svc-pages');
+        var lhSrcEl = document.getElementById('ms-svc-letterhead-src');
+        if (!source || !container) return;
+        var lhUrl = lhSrcEl ? lhSrcEl.src : '';
+
+        // Fully rebuild — handles re-pagination on beforeprint after any
+        // late layout shifts (font load, image load, window resize).
+        container.innerHTML = '';
+
+        // Collect chunks from the source div.
+        var chunks = [];
+        var node = source.firstElementChild;
+        while (node) {
+            if (node.classList && node.classList.contains('page-chunk')) {
+                chunks.push(node);
+            }
+            node = node.nextElementSibling;
+        }
+        if (chunks.length === 0) return;
+
+        function createPage() {
+            var page = document.createElement('div');
+            page.className = 'ms-svc-page';
+            var img = document.createElement('img');
+            img.className = 'ms-svc-page-letterhead';
+            img.src = lhUrl;
+            img.alt = '';
+            page.appendChild(img);
+            var content = document.createElement('div');
+            content.className = 'ms-svc-page-content';
+            page.appendChild(content);
+            container.appendChild(page);
+            return { page: page, content: content };
+        }
+
+        var current = createPage();
+        for (var i = 0; i < chunks.length; i++) {
+            var clone = chunks[i].cloneNode(true);
+            current.content.appendChild(clone);
+
+            // If overflow, roll back UNLESS this is the only chunk on the page
+            // (in which case the chunk is just bigger than a page; place it
+            // anyway and accept the visible clip).
+            if (current.page.scrollHeight > PAGE_HEIGHT_PX) {
+                if (current.content.children.length > 1) {
+                    current.content.removeChild(clone);
+                    current = createPage();
+                    current.content.appendChild(clone);
+                }
+            }
+        }
+    }
+
+    if (document.readyState === 'complete') {
+        paginate();
+    } else {
+        window.addEventListener('load', paginate);
+    }
+    window.addEventListener('beforeprint', paginate);
+})();
+<` + `/scr` + `ipt>`;
 }
 
 // =============================================================================
