@@ -23671,8 +23671,205 @@ function _pdfIsolateWrapper(wrapper, htmlContent) {
 // throughout, mirroring buildProposalPDFHTMLDefault. The earlier 8E version
 // rendered correctly in browser preview but the print pipeline strips
 // <style> blocks, dropping the logo, footer and addresses from the saved PDF.
+//
+// 8H fix: re-introduced letterhead-overlay support. When the user has a
+// designed letterhead image uploaded (companyProfile.letterheadDataUrl),
+// the service proposal now uses the same overlay pattern as the Invoice
+// and PO PDFs — A4 frame with the letterhead as a positioned background
+// and content overlaid on top in monochrome. The 8G no-letterhead path
+// is kept as a fallback for users without a letterhead.
 // =============================================================================
 function buildServiceProposalPDFHTML(proposal) {
+    if (!proposal) return '<div>Invalid proposal</div>';
+    const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    if (cp.letterheadDataUrl) {
+        return buildServiceProposalPDFHTMLWithLetterhead(proposal);
+    }
+    return buildServiceProposalPDFHTMLNoLetterhead(proposal);
+}
+
+// =============================================================================
+// SERVICE PROPOSAL PDF — letterhead overlay variant (Phase 8H)
+// =============================================================================
+// Used when companyProfile.letterheadDataUrl is set. Mirrors the pattern of
+// buildProposalPDFHTMLWithLetterhead and buildPOPDFHTMLWithLetterhead:
+//   - A4 portrait frame (794 x 1123 px at 96 DPI)
+//   - Letterhead image positioned absolute as full-page background
+//   - Content overlaid with padding that clears typical letterhead artwork
+//   - Monochrome charcoal/gray palette so content complements (not fights with)
+//     the letterhead design
+// =============================================================================
+function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
+    if (!proposal) return '<div>Invalid proposal</div>';
+    const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    const safe = (s) => pEsc(s || '');
+
+    const fmtInr = (typeof formatINR === 'function')
+        ? formatINR
+        : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    // Monochrome palette — same convention as the subscription / PO letterhead builders
+    const COL_HEADER   = '#2b2b2b';
+    const COL_MUTED    = '#6b7280';
+    const COL_BODY     = 'var(--text-main)';
+    const COL_HAIRLINE = 'var(--text-subtle)';
+
+    const fee = parseFloat(proposal.serviceFee || 0) || 0;
+    const feeWords = (typeof _inrInWords === 'function') ? _inrInWords(fee) : '';
+    const feeFormatted = fmtInr(fee);
+
+    const submitter = cp.signatoryName || 'Chintan Desai';
+    const companyName = cp.legalName || cp.tradingName || 'Masterstone LLP';
+
+    let dateStr = '';
+    try {
+        if (proposal.issueDate) {
+            const d = new Date(proposal.issueDate + 'T00:00:00');
+            dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
+    } catch (_) { dateStr = proposal.issueDate || ''; }
+
+    let validUntilStr = '';
+    try {
+        if (proposal.validUntil) {
+            const dv = new Date(proposal.validUntil + 'T00:00:00');
+            validUntilStr = dv.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
+    } catch (_) { validUntilStr = proposal.validUntil || ''; }
+
+    // Numbered scope sections
+    const scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
+    let sectionsHtml = '';
+    let sectionNum = 0;
+    scope.forEach((sec) => {
+        const title = (sec.title || '').trim();
+        const bullets = Array.isArray(sec.bullets) ? sec.bullets.filter((b) => (b || '').trim()) : [];
+        if (!title && bullets.length === 0) return;
+        sectionNum++;
+        const bulletsHtml = bullets.map((b) =>
+            `<li style="margin-bottom:5px; line-height:1.55; color:${COL_BODY};">${safe(b)}</li>`
+        ).join('');
+        sectionsHtml += `
+            <div style="margin-bottom:12px;">
+                <div style="font-size:12.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> ${safe(title || '(Untitled section)')}
+                </div>
+                ${bullets.length ? `<ul style="font-size:11px; color:${COL_BODY}; line-height:1.5; margin:0 0 6px 0; padding-left:32px;">${bulletsHtml}</ul>` : ''}
+            </div>
+            <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:10px 0;">`;
+    });
+
+    let durationHtml = '';
+    if ((proposal.serviceDuration || '').trim()) {
+        sectionNum++;
+        durationHtml = `
+            <div style="margin-bottom:12px;">
+                <div style="font-size:12.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Duration
+                </div>
+                <div style="font-size:11px; color:${COL_BODY}; line-height:1.55; padding-left:18px;">
+                    The consultancy engagement will span <strong>${safe(proposal.serviceDuration)}</strong> from the date of acceptance and commencement.
+                </div>
+            </div>
+            <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:10px 0;">`;
+    }
+
+    sectionNum++;
+    const paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
+    const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
+    const sacCode = (proposal.serviceSAC || '').trim();
+    const commercialsHtml = `
+        <div style="margin-bottom:12px;">
+            <div style="font-size:12.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
+                <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Commercials
+            </div>
+            <ul style="font-size:11px; color:${COL_BODY}; line-height:1.55; margin:0; padding-left:32px;">
+                <li style="margin-bottom:5px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
+                <li style="margin-bottom:5px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
+                <li style="margin-bottom:5px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
+                ${validUntilStr ? `<li style="margin-bottom:5px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
+                ${sacCode ? `<li style="margin-bottom:5px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
+            </ul>
+        </div>`;
+
+    const signatureHtml = (proposal.signatureShown === false) ? '' : (cp.signatureImageDataUrl
+        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:55px; max-width:170px; object-fit:contain; margin-bottom:4px;">`
+        : `<div style="height:55px; border-bottom:1px solid ${COL_BODY}; width:170px; margin-bottom:4px;"></div>`);
+
+    return `
+<div id="pdf-content" class="pdf-fit-host" style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; color:${COL_BODY}; background:var(--glass-panel); position:relative; width:794px; height:1123px; margin:0 auto; font-size:11.5px; line-height:1.5; box-sizing:border-box; overflow:hidden;">
+
+    <!-- LETTERHEAD BACKGROUND -->
+    <img src="${cp.letterheadDataUrl}" alt="Letterhead" style="position:absolute; top:0; left:0; width:794px; height:1123px; z-index:1; object-fit:cover; pointer-events:none;">
+
+    <!-- CONTENT LAYER -->
+    <div class="pdf-fit-target" style="position:relative; z-index:2; padding:140px 50px 50px 120px;">
+
+        <!-- TITLE BAR -->
+        <div style="background:${COL_HEADER}; color:var(--glass-panel); padding:9px 16px; margin-bottom:16px; border-radius:2px;">
+            <table style="width:100%;">
+                <tr>
+                    <td style="font-size:14px; font-weight:700; letter-spacing:1.2px;">SERVICE PROPOSAL</td>
+                    <td style="text-align:right; font-size:11px;">
+                        ${proposal.proposalNumber ? `<div><strong>${safe(proposal.proposalNumber)}</strong></div>` : ''}
+                        ${dateStr ? `<div style="font-size:10.5px; opacity:0.88;">Issued: ${safe(dateStr)}</div>` : ''}
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- SUBJECT + META -->
+        <div style="margin-bottom:16px;">
+            <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:4px;">Subject</div>
+            <div style="font-size:14px; font-weight:700; color:${COL_HEADER}; margin-bottom:10px; line-height:1.3;">${safe(proposal.subject || 'Professional Services Proposal')}</div>
+            <table style="width:100%; font-size:11px; color:${COL_BODY}; line-height:1.6;">
+                <tr>
+                    <td style="vertical-align:top; width:50%;">
+                        <div><strong>Client:</strong> ${safe(proposal.clientName || '')}</div>
+                        ${dateStr ? `<div><strong>Date:</strong> ${safe(dateStr)}</div>` : ''}
+                    </td>
+                    <td style="vertical-align:top; width:50%;">
+                        <div><strong>Submitted by:</strong> ${safe(submitter)}</div>
+                        <div><strong>Company:</strong> ${safe(companyName)}</div>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">
+
+        <!-- BODY: scope sections + duration + commercials -->
+        ${sectionsHtml}
+        ${durationHtml}
+        ${commercialsHtml}
+
+        ${proposal.terms ? `
+        <div style="margin-top:14px; padding-top:10px; border-top:1px solid ${COL_HAIRLINE};">
+            <div style="font-size:11.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">Terms &amp; Conditions</div>
+            <div style="font-size:10px; color:${COL_BODY}; white-space:pre-line; line-height:1.55;">${safe(proposal.terms)}</div>
+        </div>` : ''}
+
+        <!-- SIGNATORY BLOCK -->
+        <table style="width:100%; margin-top:18px;">
+            <tr>
+                <td style="vertical-align:top; text-align:right;">
+                    <div style="font-size:9.5px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">For ${safe(cp.legalName || cp.tradingName || 'the Company')}</div>
+                    <div style="display:inline-block; text-align:center;">
+                        ${signatureHtml}
+                        <div style="font-size:11.5px; font-weight:700; color:${COL_HEADER};">${safe(cp.signatoryName || '\u2014')}</div>
+                        ${cp.signatoryDesignation ? `<div style="font-size:10px; color:${COL_MUTED};">${safe(cp.signatoryDesignation)}</div>` : ''}
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+</div>`;
+}
+
+// =============================================================================
+// SERVICE PROPOSAL PDF — no-letterhead fallback (Phase 8G)
+// =============================================================================
+function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
     if (!proposal) return '<div>Invalid proposal</div>';
     const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     const safe = (s) => pEsc(s || '');
