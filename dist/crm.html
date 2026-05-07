@@ -23737,8 +23737,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         }
     } catch (_) { validUntilStr = proposal.validUntil || ''; }
 
-    // Numbered scope sections — each wrapped with page-break-inside:avoid so they
-    // don't split awkwardly across pages.
+    // Numbered scope sections
     const scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
     let sectionsHtml = '';
     let sectionNum = 0;
@@ -23751,7 +23750,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
             `<li style="margin-bottom:5px; line-height:1.55; color:${COL_BODY};">${safe(b)}</li>`
         ).join('');
         sectionsHtml += `
-            <div class="ms-svc-section" style="margin-bottom:14px; page-break-inside:avoid;">
+            <div class="ms-svc-section">
                 <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
                     <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> ${safe(title || '(Untitled section)')}
                 </div>
@@ -23764,7 +23763,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     if ((proposal.serviceDuration || '').trim()) {
         sectionNum++;
         durationHtml = `
-            <div class="ms-svc-section" style="margin-bottom:14px; page-break-inside:avoid;">
+            <div class="ms-svc-section">
                 <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
                     <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Duration
                 </div>
@@ -23780,7 +23779,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
     const sacCode = (proposal.serviceSAC || '').trim();
     const commercialsHtml = `
-        <div class="ms-svc-section" style="margin-bottom:14px; page-break-inside:avoid;">
+        <div class="ms-svc-section">
             <div style="font-size:13px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">
                 <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Commercials
             </div>
@@ -23797,43 +23796,43 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:55px; max-width:170px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:55px; border-bottom:1px solid ${COL_BODY}; width:170px; margin-bottom:4px;"></div>`);
 
-    // Multi-page strategy:
-    //   - <img class="ms-svc-letterhead-bg"> uses position:fixed so Chrome's
-    //     print engine repeats it on every printed page (standard technique).
-    //   - Content wrapper uses position:relative with padding to clear typical
-    //     letterhead artwork (top, left, bottom margins).
+    // Multi-page strategy (8J fix):
+    //   - @page margin sets the per-page content area (35mm top clears the
+    //     letterhead's top-right diamond logo on EVERY page, not just page 1).
+    //   - Letterhead uses position:fixed with negative offsets so it spans the
+    //     entire A4 paper (210x297mm) including the @page margin area —
+    //     edge-to-edge artwork, content overlaid in the middle.
     //   - Each section has page-break-inside:avoid so titled sections don't
     //     split mid-bullet.
-    //   - The wrapping previewProposalPDF() function already provides
-    //     @page { size: A4; margin: 0 } via its <style> block when letterhead
-    //     is present, so we don't need to repeat that here.
+    //   - Screen preview: doc container shaped like A4, with the letterhead
+    //     tiled vertically every 297mm via background-image. Mirrors what the
+    //     printed output will look like.
+    const lhUrl = cp.letterheadDataUrl || '';
     return `
 <style>
-.ms-svc-letterhead-bg {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 210mm;
-    height: 297mm;
-    z-index: 0;
-    object-fit: cover;
-    pointer-events: none;
-}
-.ms-svc-pdf-content {
+.ms-svc-doc {
     position: relative;
-    z-index: 1;
-    padding: 35mm 18mm 25mm 35mm;
-    max-width: 210mm;
-    margin: 0 auto;
-    box-sizing: border-box;
+    background: white;
     color: ${COL_BODY};
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 11.5px;
     line-height: 1.5;
 }
+.ms-svc-letterhead-bg {
+    pointer-events: none;
+    z-index: 0;
+}
+.ms-svc-pdf-content {
+    position: relative;
+    z-index: 1;
+}
+.ms-svc-section {
+    margin-bottom: 14px;
+    page-break-inside: avoid;
+}
 .ms-svc-titlebar {
     background: ${COL_HEADER};
-    color: var(--glass-panel);
+    color: white;
     padding: 9px 16px;
     margin-bottom: 16px;
     border-radius: 2px;
@@ -23847,20 +23846,67 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     margin-top: 24px;
     page-break-inside: avoid;
 }
+
+/* SCREEN PREVIEW — A4 frame, letterhead tiled per-page-worth */
 @media screen {
-    /* In on-screen preview the wrapper provides scrolling. The fixed
-       letterhead intentionally sticks to viewport top-left — looks slightly
-       odd in preview but renders correctly on every printed page. */
-    body { background: #f4f3ef; }
+    body {
+        background: #f4f3ef;
+        margin: 0;
+        padding: 20px 0;
+    }
+    .ms-svc-doc {
+        max-width: 210mm;
+        margin: 0 auto;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+        background-image: url("${lhUrl}");
+        background-size: 100% 297mm;
+        background-repeat: repeat-y;
+        background-position: top left;
+    }
+    .ms-svc-letterhead-bg { display: none; }
+    .ms-svc-pdf-content {
+        padding: 35mm 18mm 25mm 35mm;
+    }
+}
+
+/* PRINT — @page margins per page + fixed letterhead spans full paper */
+@media print {
+    @page {
+        size: A4;
+        margin: 35mm 18mm 25mm 35mm;
+    }
+    body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+    }
+    .ms-svc-doc {
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+        background-image: none;
+        background: transparent;
+    }
+    .ms-svc-letterhead-bg {
+        display: block;
+        position: fixed;
+        top: -35mm;
+        left: -35mm;
+        width: 210mm;
+        height: 297mm;
+        object-fit: cover;
+    }
+    .ms-svc-pdf-content {
+        padding: 0;
+    }
 }
 </style>
 
-<div id="pdf-content" style="position:relative;">
+<div class="ms-svc-doc">
+    <!-- LETTERHEAD: visible only in print, fixed-positioned to repeat per page -->
+    <img class="ms-svc-letterhead-bg" src="${lhUrl}" alt="Letterhead">
 
-    <!-- LETTERHEAD: position:fixed repeats on every printed page -->
-    <img class="ms-svc-letterhead-bg" src="${cp.letterheadDataUrl}" alt="Letterhead">
-
-    <!-- CONTENT LAYER: flows naturally across multiple pages -->
+    <!-- CONTENT: flows naturally; @page margins (print) or padding (screen) -->
     <div class="ms-svc-pdf-content">
 
         <!-- TITLE BAR -->
@@ -23896,18 +23942,17 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
 
         <hr style="border:none; border-top:1px solid ${COL_HAIRLINE}; margin:12px 0;">
 
-        <!-- BODY: scope sections + duration + commercials -->
+        <!-- BODY -->
         ${sectionsHtml}
         ${durationHtml}
         ${commercialsHtml}
 
         ${proposal.terms ? `
-        <div style="margin-top:14px; padding-top:10px; border-top:1px solid ${COL_HAIRLINE}; page-break-inside:avoid;">
+        <div class="ms-svc-section" style="margin-top:14px; padding-top:10px; border-top:1px solid ${COL_HAIRLINE};">
             <div style="font-size:11.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">Terms &amp; Conditions</div>
             <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.55;">${safe(proposal.terms)}</div>
         </div>` : ''}
 
-        <!-- SIGNATORY BLOCK -->
         <table class="ms-svc-signatory" style="width:100%;">
             <tr>
                 <td style="vertical-align:top; text-align:right;">
