@@ -23979,14 +23979,23 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     }
 }
 
-/* PRINT — @page margins per page + fixed letterhead spans full paper.
-   Phase 8P: switched object-fit from 'cover' to 'fill'. With 'cover',
-   non-A4-aspect letterhead images were getting cropped to fill the
-   210x297mm box, chopping artwork on the overflowing axis (the user's
-   diamond logo "MASTE..." text was being chopped on the right edge).
-   'fill' stretches the image to exactly 210x297mm without cropping —
-   any aspect-ratio mismatch produces a slight squish rather than a
-   guillotined logo. */
+/* PRINT — Phase 8Q
+   Was (8P): position: fixed with object-fit: fill. Intent was to repeat
+   the letterhead on every page and extend it from paper edge to paper
+   edge via negative offsets. In practice Chrome's print engine clips
+   position:fixed images at the @page CONTENT AREA boundary (not the
+   paper edge), so the image was being cropped to roughly its middle
+   region — the diamond logo's bottom-right edge fell inside the content
+   area's right boundary, producing the "MASTE..." chop.
+
+   Now: position: absolute. Chrome does NOT clip absolutely-positioned
+   elements at the content-area boundary; they render at their actual
+   position/size and can extend into the @page margin space. Negative
+   offsets work correctly. Trade-off: position:absolute does NOT repeat
+   on every page like position:fixed — the letterhead now appears on
+   PAGE 1 ONLY. This matches standard business-letter convention
+   (letterhead on page 1, plain on subsequent pages) and the screen
+   preview behaviour shipped in 8P. */
 @media print {
     @page {
         size: A4;
@@ -24003,18 +24012,22 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
         box-shadow: none;
         background-image: none;
         background: transparent;
+        position: relative;
     }
     .ms-svc-letterhead-bg {
         display: block;
-        position: fixed;
+        position: absolute;
         top: -35mm;
         left: -35mm;
         width: 210mm;
         height: 297mm;
         object-fit: fill;
+        z-index: 0;
     }
     .ms-svc-pdf-content {
         padding: 0;
+        position: relative;
+        z-index: 1;
     }
 }
 </style>
