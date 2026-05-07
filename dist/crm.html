@@ -22675,6 +22675,31 @@ function saveProposalFromForm() {
             bullets: (Array.isArray(sec.bullets) ? sec.bullets : []).map(b => (b || '').trim()).filter(Boolean)
         }))
         .filter(sec => sec.title || sec.bullets.length > 0);
+
+    // Phase 8G fix — for Service-mode proposals, derive a single synthetic line
+    // item from serviceFee so every existing totals/list/KPI/Business-Snapshot
+    // computation works without needing service-aware branches everywhere.
+    // The synthetic line is regenerated on every save, so serviceFee remains
+    // the single source of truth — it cannot drift.
+    // For Subscription-mode proposals, lineItems is whatever the user entered
+    // in the Line Items table (unchanged from pre-8G behaviour).
+    if (rec.type === 'service') {
+        const _svcQty = 1;
+        const _svcUnit = (rec.serviceFee || 0);
+        const _svcDesc = (rec.subject || 'Professional Services').trim();
+        const _svcSAC  = (rec.serviceSAC || '998313').trim();
+        rec.lineItems = [{
+            id: '__svc_synthetic__',
+            oem: '',
+            product: _svcDesc,
+            hsnSac: _svcSAC,
+            qty: _svcQty,
+            unitPrice: _svcUnit,
+            discountPct: 0,
+            gstPct: 18
+        }];
+    }
+
     rec.updatedAt = now;
     if (isNew) proposals.push(rec);
     saveProposals();
@@ -22962,18 +22987,112 @@ function renderProposalDetail(p) {
         </div>
     `;
 
-    // Line items
+    // Line items / Service Engagement
+    // Phase 8G — for Service-mode proposals, replace the Line Items table with a
+    // read-only "Service Engagement" summary (scope sections + fee + duration +
+    // payment terms). The Totals card stays (populated correctly via the
+    // synthetic line item written at save time).
+    const cardHeading = document.querySelector('#proposalDetailLineItems > h3');
     const body = document.getElementById('proposalDetailLineItemsBody');
-    if (!p.lineItems || p.lineItems.length === 0) {
-        body.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-dim); font-style:italic;">No line items.</div>';
+
+    if (p.type === 'service') {
+        // Suppress the static "Line Items" heading — we render our own.
+        if (cardHeading) cardHeading.style.display = 'none';
+
+        // Resolve the linked catalog entry (best-effort; service may have been
+        // deleted from the catalog after the proposal was created).
+        const catalog = (companyProfile && Array.isArray(companyProfile.servicesCatalog))
+            ? companyProfile.servicesCatalog : [];
+        const svcRec = p.serviceId ? catalog.find(s => s.id === p.serviceId) : null;
+        const svcLabel = svcRec
+            ? `${pEsc(svcRec.name)}${svcRec.category ? ` <span style="color:var(--text-dim); font-weight:400;">· ${pEsc(svcRec.category)}</span>` : ''}`
+            : '<span style="color:var(--text-dim); font-style:italic;">Not linked to catalog</span>';
+
+        const fee = parseFloat(p.serviceFee || 0) || 0;
+        const feeFormatted = fmtCurrency(fee);
+        const feeWords = (typeof _inrInWords === 'function' && fee > 0)
+            ? `<div style="font-size:11.5px; color:var(--accent-cyan); font-style:italic; margin-top:2px;">Rupees ${pEsc(_inrInWords(fee))} Only</div>`
+            : '';
+
+        const fmtDate = (iso) => {
+            if (!iso) return '—';
+            try { return formatDateReadable(iso); } catch (_) { return iso; }
+        };
+
+        // Scope sections rendered as numbered bullets (read-only)
+        const scope = Array.isArray(p.scopeSections) ? p.scopeSections : [];
+        let scopeHtml = '';
+        if (scope.length === 0) {
+            scopeHtml = '<div style="padding:12px 4px; color:var(--text-dim); font-style:italic; font-size:12px;">No scope sections defined.</div>';
+        } else {
+            scopeHtml = scope.map((sec, sIdx) => {
+                const bullets = Array.isArray(sec.bullets) ? sec.bullets : [];
+                const bulletsHtml = bullets.map(b => `<li style="margin-bottom:4px;">${pEsc(b)}</li>`).join('');
+                return `
+                    <div style="margin-bottom:14px;">
+                        <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:6px;">
+                            <span style="color:var(--text-dim); margin-right:6px;">${sIdx + 1}.</span>${pEsc(sec.title || '(Untitled section)')}
+                        </div>
+                        ${bullets.length ? `<ul style="font-size:12px; color:var(--text-main); line-height:1.55; margin:0; padding-left:30px;">${bulletsHtml}</ul>` : ''}
+                    </div>`;
+            }).join('');
+        }
+
+        body.innerHTML = `
+            <h3 style="margin-top:0;"><i class="fas fa-briefcase-medical" style="color:var(--accent-cyan);"></i> Service Engagement</h3>
+
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px 24px; margin-bottom:18px;">
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Service from Catalog</div>
+                    <div style="font-size:13px; color:var(--text-main); font-weight:600;">${svcLabel}</div>
+                </div>
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">SAC Code</div>
+                    <div style="font-size:13px; color:var(--text-main); font-family:monospace;">${pEsc(p.serviceSAC || '—')}</div>
+                </div>
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Engagement Start</div>
+                    <div style="font-size:13px; color:var(--text-main);">${fmtDate(p.engagementStart)}</div>
+                </div>
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Engagement End</div>
+                    <div style="font-size:13px; color:var(--text-main);">${fmtDate(p.engagementEnd)}</div>
+                </div>
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Duration</div>
+                    <div style="font-size:13px; color:var(--text-main);">${pEsc(p.serviceDuration || '—')}</div>
+                </div>
+                <div>
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Payment Terms</div>
+                    <div style="font-size:13px; color:var(--text-main);">${pEsc(p.servicePaymentTerms || '—')}</div>
+                </div>
+                <div style="grid-column: 1 / -1; padding-top:10px; border-top:1px solid var(--glass-border);">
+                    <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; margin-bottom:3px;">Total Professional Fee</div>
+                    <div style="font-size:18px; color:var(--accent-cyan); font-weight:700;">${feeFormatted}</div>
+                    ${feeWords}
+                </div>
+            </div>
+
+            <div style="padding-top:14px; border-top:1px solid var(--glass-border);">
+                <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:10px;"><i class="fas fa-list-ol" style="color:var(--purple);"></i> Scope Sections</div>
+                ${scopeHtml}
+            </div>
+        `;
     } else {
-        body.innerHTML = `<table class="prop-line-item-table" style="margin-top:0;">
-            <thead><tr><th>OEM</th><th>Product</th><th>HSN/SAC</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit ₹</th><th style="text-align:right;">Disc</th><th style="text-align:right;">GST%</th><th style="text-align:right;">Subtotal</th></tr></thead>
-            <tbody>${p.lineItems.map(li => {
-                const { net } = computeLineItemSubtotal(li);
-                return `<tr><td>${pEsc(li.oem || '—')}</td><td>${pEsc(li.product || '—')}</td><td style="font-family:monospace; font-size:11.5px;">${pEsc(li.hsnSac || '—')}</td><td style="text-align:right;">${li.qty}</td><td style="text-align:right;">${fmtCurrency(parseFloat(li.unitPrice) || 0)}</td><td style="text-align:right;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td><td style="text-align:right;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td><td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td></tr>`;
-            }).join('')}</tbody>
-        </table>`;
+        // Restore the static heading (in case it was hidden during a previous
+        // render of a different proposal that was service-mode).
+        if (cardHeading) cardHeading.style.display = '';
+        if (!p.lineItems || p.lineItems.length === 0) {
+            body.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-dim); font-style:italic;">No line items.</div>';
+        } else {
+            body.innerHTML = `<table class="prop-line-item-table" style="margin-top:0;">
+                <thead><tr><th>OEM</th><th>Product</th><th>HSN/SAC</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit ₹</th><th style="text-align:right;">Disc</th><th style="text-align:right;">GST%</th><th style="text-align:right;">Subtotal</th></tr></thead>
+                <tbody>${p.lineItems.map(li => {
+                    const { net } = computeLineItemSubtotal(li);
+                    return `<tr><td>${pEsc(li.oem || '—')}</td><td>${pEsc(li.product || '—')}</td><td style="font-family:monospace; font-size:11.5px;">${pEsc(li.hsnSac || '—')}</td><td style="text-align:right;">${li.qty}</td><td style="text-align:right;">${fmtCurrency(parseFloat(li.unitPrice) || 0)}</td><td style="text-align:right;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td><td style="text-align:right;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td><td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td></tr>`;
+                }).join('')}</tbody>
+            </table>`;
+        }
     }
 
     // Totals panel
@@ -23536,7 +23655,7 @@ function _pdfIsolateWrapper(wrapper, htmlContent) {
 }
 
 // =============================================================================
-// SERVICE PROPOSAL PDF BUILDER (Phase 8E)
+// SERVICE PROPOSAL PDF BUILDER (Phase 8E, rewritten in 8G)
 // =============================================================================
 // Generates a narrative-format proposal PDF that mirrors the layout of
 // professional services proposals (e.g. the 63SATS AI Consultancy / AI
@@ -23546,182 +23665,186 @@ function _pdfIsolateWrapper(wrapper, htmlContent) {
 //     Section "Commercials"
 //   - Numbered sections with bullet lists (1. Introduction, 2. Scope, 3. ...)
 //   - Tax: services are SAC-coded, GST 18% standard, no HSN
-//   - Footer carries the Masterstone office + registered addresses
-// Letterhead behaviour: if the user has uploaded a letterhead, we render
-// content over it the same way the subscription builder does.
+//   - Footer carries the Masterstone office addresses + contact info
+//
+// 8G rewrite: replaced <style>+CSS-classes layout with inline styles
+// throughout, mirroring buildProposalPDFHTMLDefault. The earlier 8E version
+// rendered correctly in browser preview but the print pipeline strips
+// <style> blocks, dropping the logo, footer and addresses from the saved PDF.
 // =============================================================================
 function buildServiceProposalPDFHTML(proposal) {
     if (!proposal) return '<div>Invalid proposal</div>';
     const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
-    const useLetterhead = !!cp.letterheadDataUrl;
+    const safe = (s) => pEsc(s || '');
+
+    const fmtInr = (typeof formatINR === 'function')
+        ? formatINR
+        : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     const fee = parseFloat(proposal.serviceFee || 0) || 0;
     const feeWords = (typeof _inrInWords === 'function') ? _inrInWords(fee) : '';
-    const feeFormatted = (typeof formatINR === 'function') ? formatINR(fee) : ('₹ ' + fee.toLocaleString('en-IN'));
+    const feeFormatted = fmtInr(fee);
 
-    // Resolve client display name + address (best effort)
-    var clientDisplay = proposal.clientName || '';
-    var clientLookup = null;
-    try {
-        if (typeof clientMaster === 'object' && clientMaster && proposal.clientName) {
-            clientLookup = clientMaster[proposal.clientName] || null;
-        }
-    } catch (_) {}
+    const submitter   = cp.signatoryName || 'Chintan Desai';
+    const companyName = cp.legalName || cp.tradingName || 'Masterstone LLP';
 
-    var submitter = (cp.signatoryName || 'Chintan Desai');
-    var companyName = cp.legalName || cp.tradingName || 'Masterstone LLP';
-    var dateStr = '';
+    let dateStr = '';
     try {
         if (proposal.issueDate) {
-            var d = new Date(proposal.issueDate + 'T00:00:00');
+            const d = new Date(proposal.issueDate + 'T00:00:00');
             dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
         }
     } catch (_) { dateStr = proposal.issueDate || ''; }
 
-    // Build the numbered sections HTML. If the user hasn't filled in scope
-    // sections (edge case — e.g. saved a service proposal without scope),
-    // we skip those sections entirely rather than emit empty bullets.
-    var scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
-    var sectionsHtml = '';
-    var sectionNum = 0;
-    scope.forEach(function (sec) {
-        var title = (sec.title || '').trim();
-        var bullets = Array.isArray(sec.bullets) ? sec.bullets.filter(function (b) { return (b || '').trim(); }) : [];
-        if (!title && bullets.length === 0) return;
-        sectionNum++;
-        var bulletsHtml = bullets.map(function (b) {
-            return '<li style="margin-bottom:6px; line-height:1.55;">' + pEsc(b) + '</li>';
-        }).join('');
-        sectionsHtml += '' +
-            '<div class="svc-section">' +
-                '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> ' + pEsc(title || '(Untitled section)') + '</div>' +
-                (bullets.length ? '<ul class="svc-bullets">' + bulletsHtml + '</ul>' : '') +
-            '</div>' +
-            '<hr class="svc-rule">';
-    });
-
-    // Duration section — simple paragraph, only if duration is provided
-    var durationHtml = '';
-    if ((proposal.serviceDuration || '').trim()) {
-        sectionNum++;
-        durationHtml = '' +
-            '<div class="svc-section">' +
-                '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> Duration</div>' +
-                '<div class="svc-paragraph">The consultancy engagement will span <strong>' + pEsc(proposal.serviceDuration) + '</strong> from the date of acceptance and commencement.</div>' +
-            '</div>' +
-            '<hr class="svc-rule">';
-    }
-
-    // Commercials section — always emitted
-    sectionNum++;
-    var paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
-    var validUntilStr = '';
+    let validUntilStr = '';
     try {
         if (proposal.validUntil) {
-            var dv = new Date(proposal.validUntil + 'T00:00:00');
+            const dv = new Date(proposal.validUntil + 'T00:00:00');
             validUntilStr = dv.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
         }
     } catch (_) { validUntilStr = proposal.validUntil || ''; }
 
-    var feeWordsLine = feeWords ? (' (' + feeWords + ' Only)') : '';
-    var commercialsHtml = '' +
-        '<div class="svc-section">' +
-            '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> Commercials</div>' +
-            '<ul class="svc-bullets">' +
-                '<li><strong>Total Professional Fees:</strong> ' + pEsc(feeFormatted) + (feeWordsLine ? pEsc(feeWordsLine) : '') + '</li>' +
-                '<li><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>' +
-                '<li><strong>Payment Terms:</strong> ' + pEsc(paymentTerms) + '</li>' +
-                (validUntilStr ? '<li><strong>Quote Validity:</strong> The validity of this quote remains effective until ' + pEsc(validUntilStr) + '.</li>' : '') +
-                ((proposal.serviceSAC || '').trim() ? '<li><strong>SAC Code:</strong> ' + pEsc(proposal.serviceSAC) + '</li>' : '') +
-            '</ul>' +
-        '</div>';
+    // Numbered scope sections
+    const scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
+    let sectionsHtml = '';
+    let sectionNum = 0;
+    scope.forEach((sec) => {
+        const title = (sec.title || '').trim();
+        const bullets = Array.isArray(sec.bullets) ? sec.bullets.filter((b) => (b || '').trim()) : [];
+        if (!title && bullets.length === 0) return;
+        sectionNum++;
+        const bulletsHtml = bullets.map((b) =>
+            `<li style="margin-bottom:6px; line-height:1.55; color:var(--text-main);">${safe(b)}</li>`
+        ).join('');
+        sectionsHtml += `
+            <div style="margin-bottom:14px;">
+                <div style="font-size:13.5px; font-weight:700; color:var(--text-main); margin-bottom:8px;">
+                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> ${safe(title || '(Untitled section)')}
+                </div>
+                ${bullets.length ? `<ul style="font-size:12px; color:var(--text-main); line-height:1.55; margin:0 0 8px 0; padding-left:36px;">${bulletsHtml}</ul>` : ''}
+            </div>
+            <hr style="border:none; border-top:1px solid var(--text-subtle); margin:14px 0;">`;
+    });
 
-    // Compose footer with company addresses
-    var officeAddr = [
-        cp.addressLine1, cp.addressLine2, cp.city, cp.state, cp.pincode, cp.country
-    ].filter(function (x) { return (x || '').trim(); }).join(', ');
-    var phone   = cp.phone   || '';
-    var email   = cp.email   || '';
-    var website = cp.website || '';
-    // Footer is shown only if NOT using letterhead (letterhead has its own footer)
-    var footerHtml = '';
-    if (!useLetterhead && (officeAddr || phone || email || website)) {
-        footerHtml = '' +
-            '<hr class="svc-rule" style="margin-top:24px;">' +
-            '<div class="svc-footer">' +
-                '<div class="svc-footer-name">' + pEsc(companyName) + '</div>' +
-                (officeAddr ? '<div class="svc-footer-addr">' + pEsc(officeAddr) + '</div>' : '') +
-                '<div class="svc-footer-contact">' +
-                    (phone   ? '<span><i class="fas fa-phone-alt"></i> ' + pEsc(phone) + '</span>' : '') +
-                    (email   ? '<span><i class="fas fa-envelope"></i> ' + pEsc(email) + '</span>' : '') +
-                    (website ? '<span><i class="fas fa-globe"></i> ' + pEsc(website) + '</span>' : '') +
-                '</div>' +
-            '</div>';
+    // Duration section (only if duration provided)
+    let durationHtml = '';
+    if ((proposal.serviceDuration || '').trim()) {
+        sectionNum++;
+        durationHtml = `
+            <div style="margin-bottom:14px;">
+                <div style="font-size:13.5px; font-weight:700; color:var(--text-main); margin-bottom:8px;">
+                    <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Duration
+                </div>
+                <div style="font-size:12px; color:var(--text-main); line-height:1.6; padding-left:18px;">
+                    The consultancy engagement will span <strong>${safe(proposal.serviceDuration)}</strong> from the date of acceptance and commencement.
+                </div>
+            </div>
+            <hr style="border:none; border-top:1px solid var(--text-subtle); margin:14px 0;">`;
     }
 
-    // Logo block — top right, only if not using letterhead
-    var logoHtml = '';
-    if (!useLetterhead && cp.logoDataUrl) {
-        logoHtml = '<div class="svc-logo-wrap"><img src="' + cp.logoDataUrl + '" alt="logo"></div>';
-    }
+    // Commercials section (always emitted)
+    sectionNum++;
+    const paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
+    const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
+    const sacCode = (proposal.serviceSAC || '').trim();
+    const commercialsHtml = `
+        <div style="margin-bottom:14px;">
+            <div style="font-size:13.5px; font-weight:700; color:var(--text-main); margin-bottom:8px;">
+                <span style="display:inline-block; min-width:18px;">${sectionNum}.</span> Commercials
+            </div>
+            <ul style="font-size:12px; color:var(--text-main); line-height:1.55; margin:0; padding-left:36px;">
+                <li style="margin-bottom:6px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
+                <li style="margin-bottom:6px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
+                <li style="margin-bottom:6px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
+                ${validUntilStr ? `<li style="margin-bottom:6px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
+                ${sacCode ? `<li style="margin-bottom:6px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
+            </ul>
+        </div>`;
 
-    // Background letterhead overlay — same approach as buildProposalPDFHTMLWithLetterhead
-    var pageBgStyle = '';
-    if (useLetterhead && cp.letterheadUseAsBackground !== false) {
-        pageBgStyle = 'background-image: url(' + cp.letterheadDataUrl + '); background-size: 100% auto; background-repeat: no-repeat; background-position: top left;';
-    }
+    // Logo block — same pattern as buildProposalPDFHTMLDefault
+    const logoHtml = cp.logoDataUrl
+        ? `<img src="${cp.logoDataUrl}" alt="Logo" style="max-height:70px; max-width:200px; object-fit:contain;">`
+        : `<div style="font-size:24px; font-weight:700; color:var(--accent-blue);">${safe(cp.tradingName || cp.legalName || 'Your Company')}</div>`;
 
-    return '' +
-'<style>' +
-'  .svc-page {' +
-'    background: var(--glass-panel);' +
-'    color: var(--text-main);' +
-'    font-family: var(--font-tech), Helvetica, Arial, sans-serif;' +
-'    padding: ' + (useLetterhead ? '120px 70px 100px 70px' : '40px 50px 30px 50px') + ';' +
-'    max-width: 900px;' +
-'    margin: 0 auto;' +
-'    position: relative;' +
-'    ' + pageBgStyle +
-'  }' +
-'  .svc-logo-wrap { position: absolute; top: 30px; right: 50px; }' +
-'  .svc-logo-wrap img { max-height: 64px; max-width: 200px; }' +
-'  .svc-title-row { margin-bottom: 22px; padding-right: 220px; }' +
-'  .svc-title { font-size: 18px; font-weight: 700; color: var(--text-main); text-decoration: underline; margin-bottom: 16px; }' +
-'  .svc-meta { font-size: 12.5px; line-height: 1.7; color: var(--text-main); }' +
-'  .svc-meta strong { font-weight: 700; }' +
-'  .svc-rule { border: none; border-top: 1px solid var(--glass-border-strong); margin: 14px 0 14px 0; }' +
-'  .svc-section { margin: 0 0 4px 0; }' +
-'  .svc-section-title { font-size: 13.5px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }' +
-'  .svc-section-num { display: inline-block; min-width: 18px; }' +
-'  .svc-paragraph { font-size: 12.5px; color: var(--text-main); line-height: 1.6; padding-left: 18px; }' +
-'  .svc-bullets { font-size: 12.5px; color: var(--text-main); line-height: 1.55; margin: 0 0 8px 0; padding-left: 36px; }' +
-'  .svc-bullets li { margin-bottom: 6px; }' +
-'  .svc-footer { margin-top: 18px; text-align: center; font-size: 11.5px; color: var(--text-dim); }' +
-'  .svc-footer-name { font-weight: 700; color: var(--text-main); margin-bottom: 6px; font-size: 12.5px; }' +
-'  .svc-footer-addr { margin-bottom: 8px; line-height: 1.5; }' +
-'  .svc-footer-contact { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; font-size: 11px; }' +
-'  .svc-footer-contact i { color: var(--accent-cyan); margin-right: 4px; }' +
-'</style>' +
-'<div class="svc-page">' +
-    logoHtml +
-    '<div class="svc-title-row">' +
-        '<div class="svc-title">' + pEsc(proposal.subject || 'Professional Services Proposal') + '</div>' +
-        '<div class="svc-meta">' +
-            (dateStr   ? '<div><strong>Date:</strong> ' + pEsc(dateStr) + '</div>' : '') +
-            '<div><strong>Client Name:</strong> ' + pEsc(clientDisplay) + '</div>' +
-            '<div><strong>Submitted by:</strong> ' + pEsc(submitter) + '</div>' +
-            '<div><strong>Company:</strong> ' + pEsc(companyName) + '</div>' +
-        '</div>' +
-    '</div>' +
-    '<hr class="svc-rule">' +
-    sectionsHtml +
-    durationHtml +
-    commercialsHtml +
-    footerHtml +
-'</div>';
+    // Signature block (respect proposal.signatureShown like the subscription builder)
+    const signatureHtml = (proposal.signatureShown === false) ? '' : (cp.signatureImageDataUrl
+        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+        : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
+
+    // Company address block (used in header right column)
+    const companyAddressLines = [
+        cp.addressLine1, cp.addressLine2,
+        [cp.city, cp.state, cp.pincode].filter(Boolean).join(', '),
+        cp.country
+    ].filter(Boolean);
+
+    return `
+<div id="pdf-content" style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; color:var(--text-main); background:var(--glass-panel); padding:30px 36px; max-width:800px; margin:0 auto; font-size:12px; line-height:1.5;">
+
+    <!-- HEADER: Logo + Company details -->
+    <table style="width:100%; border-collapse:collapse; margin-bottom:24px; border-bottom:3px solid var(--accent-blue); padding-bottom:16px;">
+        <tr>
+            <td style="vertical-align:top; width:50%;">
+                ${logoHtml}
+                <div style="font-size:15px; font-weight:700; color:var(--accent-blue); margin-top:8px;">${safe(cp.legalName || cp.tradingName)}</div>
+                ${companyAddressLines.map((l) => `<div style="font-size:11px; color:var(--text-dim);">${safe(l)}</div>`).join('')}
+                ${cp.gstin ? `<div style="font-size:11px; color:var(--text-dim); margin-top:4px;">GSTIN: ${safe(cp.gstin)}</div>` : ''}
+            </td>
+            <td style="vertical-align:top; width:50%; text-align:right;">
+                <div style="font-size:18px; font-weight:700; color:var(--text-main); text-decoration:underline; margin-bottom:6px;">${safe(proposal.subject || 'Professional Services Proposal')}</div>
+                ${proposal.proposalNumber ? `<div style="font-size:11px; color:var(--text-dim);">Ref: ${safe(proposal.proposalNumber)}</div>` : ''}
+                ${cp.phone ? `<div style="margin-top:6px; font-size:11px; color:var(--text-dim);"><i>\u260E</i> ${safe(cp.phone)}</div>` : ''}
+                ${cp.email ? `<div style="font-size:11px; color:var(--text-dim);"><i>\u2709</i> ${safe(cp.email)}</div>` : ''}
+                ${cp.website ? `<div style="font-size:11px; color:var(--text-dim);">${safe(cp.website)}</div>` : ''}
+            </td>
+        </tr>
+    </table>
+
+    <!-- META BLOCK: Date / Client / Submitted by / Company -->
+    <div style="margin-bottom:18px; font-size:12.5px; line-height:1.7; color:var(--text-main);">
+        ${dateStr ? `<div><strong>Date:</strong> ${safe(dateStr)}</div>` : ''}
+        <div><strong>Client Name:</strong> ${safe(proposal.clientName || '')}</div>
+        <div><strong>Submitted by:</strong> ${safe(submitter)}</div>
+        <div><strong>Company:</strong> ${safe(companyName)}</div>
+    </div>
+
+    <hr style="border:none; border-top:1px solid var(--text-subtle); margin:14px 0;">
+
+    <!-- BODY: Numbered scope sections + Duration + Commercials -->
+    ${sectionsHtml}
+    ${durationHtml}
+    ${commercialsHtml}
+
+    <!-- TERMS & CONDITIONS (if provided on the proposal) -->
+    ${proposal.terms ? `
+    <div style="margin-top:20px; padding-top:14px; border-top:1px solid var(--text-subtle);">
+        <div style="font-size:12px; font-weight:700; color:var(--accent-blue); margin-bottom:8px;">Terms &amp; Conditions</div>
+        <div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6;">${safe(proposal.terms)}</div>
+    </div>` : ''}
+
+    <!-- SIGNATORY BLOCK -->
+    <table style="width:100%; margin-top:24px;">
+        <tr>
+            <td style="vertical-align:top; text-align:right;">
+                <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">For ${safe(cp.legalName || cp.tradingName || 'the Company')}</div>
+                <div style="display:inline-block; text-align:center;">
+                    ${signatureHtml}
+                    <div style="font-size:12px; font-weight:700; color:var(--text-main);">${safe(cp.signatoryName || '\u2014')}</div>
+                    ${cp.signatoryDesignation ? `<div style="font-size:10.5px; color:var(--text-dim);">${safe(cp.signatoryDesignation)}</div>` : ''}
+                </div>
+            </td>
+        </tr>
+    </table>
+
+    <!-- FOOTER -->
+    <div style="margin-top:30px; padding-top:14px; border-top:1px solid var(--text-subtle); text-align:center; font-size:10px; color:var(--text-dim);">
+        This is a system-generated proposal. Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+        ${proposal.proposalNumber ? ` &middot; Ref: ${safe(proposal.proposalNumber)}` : ''}
+    </div>
+</div>`;
 }
 // =============================================================================
-// END SERVICE PROPOSAL PDF BUILDER (Phase 8E)
+// END SERVICE PROPOSAL PDF BUILDER (Phase 8E, 8G rewrite)
 // =============================================================================
 
 function buildProposalPDFHTMLDefault(proposal) {
