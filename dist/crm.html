@@ -6664,6 +6664,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div id="sysCtrlTabBtn_company"     class="arap-subtab active" onclick="showSysCtrlSubTab('company')"><i class="fas fa-building" style="color:var(--purple);"></i> Company Profile</div>
       <div id="sysCtrlTabBtn_templates"   class="arap-subtab"        onclick="showSysCtrlSubTab('templates')"><i class="fas fa-file-contract" style="color:var(--accent-cyan);"></i> Templates</div>
       <div id="sysCtrlTabBtn_oem"         class="arap-subtab"        onclick="showSysCtrlSubTab('oem')"><i class="fas fa-database" style="color:var(--success);"></i> OEM &amp; Product Master</div>
+      <div id="sysCtrlTabBtn_services"    class="arap-subtab"        onclick="showSysCtrlSubTab('services')"><i class="fas fa-briefcase-medical" style="color:var(--accent-cyan);"></i> Services Catalog</div>
       <div id="sysCtrlTabBtn_storage"     class="arap-subtab"        onclick="showSysCtrlSubTab('storage')"><i class="fas fa-hdd" style="color:var(--warning);"></i> Storage &amp; Backup</div>
       <div id="sysCtrlTabBtn_macapp"      class="arap-subtab"        onclick="showSysCtrlSubTab('macapp')"><i class="fas fa-cog" style="color:var(--purple);"></i> Mac App</div>
       <div id="sysCtrlTabBtn_diagnostics" class="arap-subtab"        onclick="showSysCtrlSubTab('diagnostics')"><i class="fas fa-tools" style="color:var(--danger);"></i> Migration &amp; Diagnostics</div>
@@ -7223,6 +7224,103 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     </div>
 
                     <div id="oemMeta_saveHint" style="font-size:10.5px; color:var(--text-dim); margin-top:10px;"><i class="fas fa-info-circle"></i> Changes save automatically.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase 8E — Services Catalog Master (sub-tab "services").
+         Mirror of OEM & Product Master, but for one-time professional service
+         offerings (AI Consultancy, Audits, vCISO Retainers, etc.).
+         Persists inside companyProfile.servicesCatalog so it round-trips through
+         the existing company_profile SQLite save path — no lib.rs change needed. -->
+    <div class="card" data-syscat="services" id="servicesCatalogCard" style="margin-top:0; border-top: 3px solid var(--accent-cyan);">
+        <h3><i class="fas fa-briefcase-medical" style="color:var(--accent-cyan);"></i> Services Catalog</h3>
+        <p class="control-info-text" style="margin-bottom:20px;">
+            Maintain the catalog of professional services Masterstone offers directly (AI consultancy, security audits, vCISO retainers, etc.). Used to populate Service-mode proposals and invoices. Each entry can carry a default scope template, duration, fee, and SAC code.
+        </p>
+
+        <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
+            <!-- LEFT: list + add -->
+            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
+                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">Services</h4>
+                <div style="display:flex; gap:8px; margin-bottom:16px;">
+                    <input type="text" id="newServiceName" placeholder="E.g., Cloud Security Assessment" onkeydown="if(event.key==='Enter'){event.preventDefault();addNewService();}">
+                    <button class="btn btn-primary" onclick="addNewService()"><i class="fas fa-plus"></i></button>
+                </div>
+                <div id="servicesCatalogListContainer" class="scroll-container" style="max-height: 420px; border:1px solid var(--glass-border); border-radius:6px;"></div>
+            </div>
+
+            <!-- RIGHT: editor for selected service -->
+            <div style="background:var(--detail-bg); padding:16px; border-radius:8px; border:1px solid var(--glass-border);">
+                <h4 style="margin-top:0; color:var(--text-main); margin-bottom:16px;">
+                    Editing:
+                    <span id="servicesCatalogSelectedLabel" style="color:var(--accent-cyan);">Select a service to edit</span>
+                </h4>
+
+                <!-- Empty state -->
+                <div id="servicesCatalogEmpty" style="color:var(--text-dim); font-size:12px; font-style:italic; padding:20px 4px;">
+                    Pick a service from the list on the left to view and edit its template, or add a new one above.
+                </div>
+
+                <!-- Editor — visible when a service is selected -->
+                <div id="servicesCatalogEditor" style="display:none;">
+                    <input type="hidden" id="servicesEditor_id" value="">
+
+                    <div class="prospect-form-grid-2" style="margin-bottom:12px;">
+                        <div>
+                            <label>Service Name <span style="color:var(--danger);">*</span></label>
+                            <input type="text" id="servicesEditor_name" placeholder="e.g. AI Consultancy" oninput="commitServicesEditor()">
+                        </div>
+                        <div>
+                            <label>Category</label>
+                            <select id="servicesEditor_category" onchange="commitServicesEditor()">
+                                <option value="Consultancy">Consultancy</option>
+                                <option value="Implementation">Implementation</option>
+                                <option value="Audit">Audit</option>
+                                <option value="Managed Service">Managed Service</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="prospect-form-grid-3" style="margin-bottom:12px;">
+                        <div>
+                            <label>Default Duration</label>
+                            <input type="text" id="servicesEditor_duration" placeholder="e.g. 3-4 weeks" oninput="commitServicesEditor()">
+                            <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Free-text (e.g. "4-6 weeks", "Annual", "Retainer").</div>
+                        </div>
+                        <div>
+                            <label>Default Fee (₹)</label>
+                            <input type="number" id="servicesEditor_fee" placeholder="Leave blank for quote-by-quote" min="0" step="1" oninput="commitServicesEditor()">
+                            <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Pre-tax. Editable per proposal.</div>
+                        </div>
+                        <div>
+                            <label>SAC Code</label>
+                            <input type="text" id="servicesEditor_sac" placeholder="998313" oninput="commitServicesEditor()">
+                            <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">998313 = IT consulting (default).</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label>Internal Notes (not printed)</label>
+                        <textarea id="servicesEditor_notes" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="Anything you want to remember about this service offering" oninput="commitServicesEditor()"></textarea>
+                    </div>
+
+                    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--glass-border);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <h4 style="margin:0; color:var(--text-main);"><i class="fas fa-list-ul" style="color:var(--accent-cyan);"></i> Default Scope Template</h4>
+                            <button class="btn btn-ghost btn-sm" onclick="addServiceScopeSection()"><i class="fas fa-plus"></i> Add Section</button>
+                        </div>
+                        <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.55;">
+                            This template auto-fills when you create a Service proposal that references this service. Numbered sections with bullets — exactly the format used in your professional service proposals.
+                        </div>
+                        <div id="servicesEditor_scopeContainer"></div>
+                    </div>
+
+                    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--glass-border); display:flex; justify-content:flex-end;">
+                        <button class="btn btn-ghost btn-sm" onclick="deleteCurrentService()" style="color:var(--danger);"><i class="fas fa-trash"></i> Delete this service</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -8314,6 +8412,25 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <input type="hidden" id="proposalFormId" value="">
 
+  <!-- Phase 8E — Type toggle. Subscription = traditional reseller deal with line items.
+       Service = one-time professional services engagement (AI consultancy, audit, etc.).
+       Default Subscription so existing flow is unchanged. -->
+  <div class="card" style="margin-bottom:20px; border-top: 3px solid var(--purple);">
+    <div class="kpi-section-title" style="margin-bottom:10px;"><i class="fas fa-shapes" style="color:var(--purple);"></i> Proposal Type</div>
+    <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="proposalType" value="subscription" checked onchange="onProposalTypeChange()">
+        <span style="font-weight:600; color:var(--text-main);">Subscription / Reseller</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— OEM products, line items, renewable</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="proposalType" value="service" onchange="onProposalTypeChange()">
+        <span style="font-weight:600; color:var(--text-main);">Service / Consultancy</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— professional services, fixed fee, one-time</span>
+      </label>
+    </div>
+  </div>
+
   <!-- SECTION 1: Proposal & Client -->
   <div class="card" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-file-alt" style="color:var(--accent-cyan);"></i> Proposal &amp; Client</div>
@@ -8354,7 +8471,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <!-- SECTION 2: Commercial Routing -->
   <!-- Phase 4B — Commercial Model + Sourced Via + Ship-to -->
-  <div class="card" style="margin-bottom:20px;">
+  <!-- Phase 8E — data-proptype="subscription" hides this in Service mode -->
+  <div class="card proposal-subscription-only" data-proptype="subscription" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:6px;"><i class="fas fa-handshake" style="color:var(--success);"></i> Commercial Routing</div>
     <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:14px; font-style:italic;">Drives how Bill-To and Ship-To print on the proposal PDF.</div>
     <div class="prospect-form-grid-3">
@@ -8438,7 +8556,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <!-- SECTION 4: Line Items -->
-  <div class="card" style="margin-bottom:20px;">
+  <!-- Phase 8E — data-proptype="subscription" hides this in Service mode -->
+  <div class="card proposal-subscription-only" data-proptype="subscription" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-list-ul" style="color:var(--accent-cyan);"></i> Line Items</div>
     <div style="overflow-x:auto;">
       <table class="prop-line-item-table" id="proposalLineItemsTable">
@@ -8463,6 +8582,77 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     </div>
     <div class="prop-totals-box" id="proposalTotalsBox" style="margin-top:18px;">
       <!-- Populated dynamically -->
+    </div>
+  </div>
+
+  <!-- Phase 8E — Service Engagement card. Visible only when type=service.
+       Captures: service catalog selection, engagement dates, fee, payment terms,
+       and the scope sections (numbered headings + bullets) that print on the PDF. -->
+  <div class="card proposal-service-only" data-proptype="service" style="display:none; margin-bottom:20px; border-top: 3px solid var(--accent-cyan);">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-briefcase-medical" style="color:var(--accent-cyan);"></i> Service Engagement</div>
+
+    <div class="prospect-form-grid-2" style="margin-bottom:14px;">
+      <div>
+        <label>Service from Catalog <span style="color:var(--danger);">*</span></label>
+        <div style="display:flex; gap:6px; align-items:stretch;">
+          <select id="proposalServiceId" onchange="onProposalServiceChange()" style="flex:1;">
+            <option value="">— Select a service —</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="closeProposalForm(); showTab('backupTab'); setTimeout(function(){showSysCtrlSubTab('services');}, 100); return false;" title="Manage Services Catalog" style="padding:0 10px; font-size:11.5px; flex-shrink:0; white-space:nowrap;"><i class="fas fa-cog"></i> Manage</button>
+        </div>
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Selecting a service auto-fills the scope template and SAC code. Edit freely after.</div>
+      </div>
+      <div>
+        <label>SAC Code</label>
+        <input type="text" id="proposalServiceSAC" placeholder="998313">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Services Accounting Code (printed on invoice).</div>
+      </div>
+    </div>
+
+    <div class="prospect-form-grid-3" style="margin-bottom:14px;">
+      <div>
+        <label>Engagement Start</label>
+        <input type="date" id="proposalEngagementStart">
+      </div>
+      <div>
+        <label>Engagement End</label>
+        <input type="date" id="proposalEngagementEnd">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Or leave blank if duration is open-ended.</div>
+      </div>
+      <div>
+        <label>Duration (free text)</label>
+        <input type="text" id="proposalServiceDuration" placeholder="e.g. 4-6 weeks">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Printed on the PDF in the Duration section.</div>
+      </div>
+    </div>
+
+    <div class="prospect-form-grid-2" style="margin-bottom:14px;">
+      <div>
+        <label>Total Professional Fee (₹) <span style="color:var(--danger);">*</span></label>
+        <input type="number" id="proposalServiceFee" placeholder="e.g. 1100000" min="0" step="1" oninput="updateProposalServiceFeeWords()">
+        <div id="proposalServiceFeeWords" style="font-size:10.5px; color:var(--accent-cyan); margin-top:4px; font-style:italic;"></div>
+      </div>
+      <div>
+        <label>Payment Terms</label>
+        <input type="text" id="proposalServicePaymentTerms" placeholder="100% advance upon acceptance">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Free-text. Printed in the Commercials section.</div>
+      </div>
+    </div>
+
+    <!-- Scope Sections editor — numbered headings + bullets, mirrors the format
+         used in your professional service proposals -->
+    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--glass-border);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div class="kpi-section-title" style="margin:0;"><i class="fas fa-list-ol" style="color:var(--purple);"></i> Scope Sections</div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-ghost btn-sm" onclick="reloadProposalScopeFromCatalog()" title="Reload from selected service in catalog"><i class="fas fa-sync"></i> Reload from catalog</button>
+          <button class="btn btn-ghost btn-sm" onclick="addProposalScopeSection()"><i class="fas fa-plus"></i> Add Section</button>
+        </div>
+      </div>
+      <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.55;">
+        Numbered sections with bullets. Edit freely — each proposal can diverge from the catalog template. The numbering on the PDF is automatic (1, 2, 3...).
+      </div>
+      <div id="proposalServiceScopeContainer"></div>
     </div>
   </div>
 
@@ -9342,6 +9532,48 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <input type="hidden" id="invFormId" value="">
 
+  <!-- Phase 8E — Type toggle for invoices. Subscription = traditional reseller
+       deal with multiple line items. Service = professional services invoice
+       (single SAC-coded line, GST 18% default, optional TDS notice). -->
+  <div class="card" style="margin-bottom:20px; border-top: 3px solid var(--purple);">
+    <div class="kpi-section-title" style="margin-bottom:10px;"><i class="fas fa-shapes" style="color:var(--purple);"></i> Invoice Type</div>
+    <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="invoiceType" value="subscription" checked onchange="onInvoiceTypeChange()">
+        <span style="font-weight:600; color:var(--text-main);">Subscription / Reseller</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— OEM products, line items, HSN codes</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="invoiceType" value="service" onchange="onInvoiceTypeChange()">
+        <span style="font-weight:600; color:var(--text-main);">Service / Consultancy</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— professional services, SAC code, TDS expected</span>
+      </label>
+    </div>
+    <!-- Service-mode helper card: appears below the toggle when type=service -->
+    <div id="invServiceHelper" class="invoice-service-only" style="display:none; margin-top:14px; padding:12px 14px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px;">
+      <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap:14px;">
+        <div>
+          <label>Pre-fill from Service in Catalog</label>
+          <select id="invServiceCatalogPick" onchange="applyInvoiceServicePrefill()">
+            <option value="">— Pick a service to prefill a line item —</option>
+          </select>
+          <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Adds a single line: description = service name, SAC = catalog SAC, GST 18%. Editable.</div>
+        </div>
+        <div>
+          <label>SAC Code</label>
+          <input type="text" id="invServiceSAC" placeholder="998313">
+          <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Default SAC for new line items.</div>
+        </div>
+        <div>
+          <label style="display:block;">Client TDS Notice</label>
+          <div style="padding:7px 10px; font-size:11.5px; line-height:1.5; background:rgba(138, 77, 18, 0.08); border-left:3px solid var(--warning); border-radius:4px; color:var(--text-main);">
+            Client may withhold 10% TDS u/s 194J. Bank receipt = invoice net of TDS.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- SECTION 1: Invoice & Client -->
   <div class="card" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-receipt" style="color:var(--accent-cyan);"></i> Invoice &amp; Client</div>
@@ -9428,7 +9660,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <!-- SECTION 3: Commercial Routing -->
-  <div class="card" style="margin-bottom:20px;">
+  <!-- Phase 8E — data-invtype="subscription" hides this in Service mode -->
+  <div class="card invoice-subscription-only" data-invtype="subscription" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:6px;"><i class="fas fa-handshake" style="color:var(--success);"></i> Commercial Routing</div>
     <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:14px; font-style:italic;">Drives Bill-To on the invoice PDF. Editable — but a warning appears if it differs from the linked contract or proposal.</div>
     <div class="prospect-form-grid-3">
@@ -11316,7 +11549,16 @@ function initCompanyProfile() {
         defaultPOInstructions: 'Please acknowledge receipt of this PO and confirm expected delivery timeline.',
         defaultInvoiceTerms: '1. Interest @ 18% p.a. applicable on invoices outstanding beyond the due date.\n2. TDS, if any, to be deducted as per applicable provisions of the Income Tax Act.\n3. Any dispute regarding this invoice must be raised in writing within 7 days of receipt.\n4. All disputes subject to Mumbai jurisdiction.',
         defaultInvoicePaymentTerms: '30 days from invoice date',
-        defaultGSTRate: 18
+        defaultGSTRate: 18,
+        // Phase 8E — Services Catalog
+        // Master list of one-time professional service offerings (AI consultancy,
+        // security audits, vCISO retainers, etc.). Parallel to OEM/Product master,
+        // but services are sold directly by Masterstone (no OEM cost, no commission,
+        // no renewal cycle). Each entry seeds the Service Proposal scope template.
+        // Shape of each entry:
+        //   { id, name, category, defaultDuration, defaultFee,
+        //     defaultScopeSections: [{ title, bullets: [] }], sacCode, notes }
+        servicesCatalog: []
     };
     let changed = false;
     Object.keys(defaults).forEach(k => {
@@ -11383,6 +11625,12 @@ function initCompanyProfile() {
     });
 
     if (changed) saveCompanyProfile();
+
+    // Phase 8E — seed default services catalog on very first init (idempotent;
+    // only runs when companyProfile.servicesCatalog has never been set).
+    if (typeof initServicesCatalogIfNeeded === 'function') {
+        initServicesCatalogIfNeeded();
+    }
 }
 
 function saveCompanyProfile() {
@@ -15228,6 +15476,775 @@ let debounceTimer;
 // MasterstoneDB IndexedDB, initDB, getDirHandle, saveDirHandle,
 // setProjectFolder, connectLocalFile, and the storageStatus badge.
 
+// =============================================================================
+// SERVICES CATALOG (Phase 8E)
+// =============================================================================
+// Master list of professional services offered (AI consultancy, AI integration,
+// security audits, etc.). Stored inside companyProfile.servicesCatalog so it
+// rides along on the existing storage_save_company_profile round-trip — no
+// lib.rs schema change needed.
+//
+// Each entry shape:
+//   { id, name, category, defaultDuration, defaultFee, sacCode,
+//     defaultScopeSections: [{ title, bullets: [string] }], notes }
+//
+// Used by:
+//   - Service-type proposals (pre-fill scope, fee, duration, SAC)
+//   - Service-type invoices (SAC code, GST default)
+// =============================================================================
+
+const SERVICES_CATALOG_DEFAULT_SAC = '998313';   // SAC code for Information technology consulting
+
+// Read-only accessor — always returns an array, even if companyProfile is uninit.
+function getServicesCatalog() {
+    if (!companyProfile || typeof companyProfile !== 'object') return [];
+    if (!Array.isArray(companyProfile.servicesCatalog)) return [];
+    return companyProfile.servicesCatalog;
+}
+
+// Persist the catalog. Mutates companyProfile, then routes through the existing
+// company-profile save path so the change reaches SQLite.
+function setServicesCatalog(arr) {
+    if (!Array.isArray(arr)) return;
+    if (!companyProfile || typeof companyProfile !== 'object') {
+        companyProfile = {};
+    }
+    companyProfile.servicesCatalog = arr;
+    try {
+        if (typeof saveCompanyProfile === 'function') {
+            saveCompanyProfile();
+        } else {
+            // Fallback — write straight to localStorage if saveCompanyProfile is somehow
+            // not yet defined at call time. Rare; mostly defensive.
+            localStorage.setItem('ms_company_profile_v1', JSON.stringify(companyProfile));
+        }
+    } catch (e) {
+        console.warn('[8E] Services catalog save failed:', e);
+    }
+}
+
+// Generate a stable ID for new entries.
+function servicesCatalogNewId() {
+    return 'svc_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 9999).toString(36);
+}
+
+// Default seed list — used only on first run when the catalog is empty.
+function servicesCatalogDefaultSeed() {
+    return [
+        {
+            id: servicesCatalogNewId(),
+            name: 'AI Consultancy',
+            category: 'Consultancy',
+            defaultDuration: '3-4 weeks',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['One-time consultancy services in the field of Artificial Intelligence (AI), aimed at providing strategic and technical guidance to support the organization\'s journey in exploring, evaluating, and possibly implementing AI-driven initiatives.'] },
+                { title: 'Scope of Consultancy Services', bullets: [
+                    'AI Readiness Assessment — understand the current data ecosystem and digital maturity; identify areas where AI can be applied for business enhancement.',
+                    'Opportunity Mapping — evaluate specific business use cases where AI could bring value; suggest high-impact and feasible AI initiatives.',
+                    'Technical Advisory — overview of relevant AI technologies, frameworks, tools, platforms, and architecture suitable for the organization.',
+                    'Resource and Partner Planning — suggest internal skillset needs or external partners/vendors; advise on potential hiring or collaborations.',
+                    'Roadmap & Recommendations — provide a high-level implementation roadmap and strategic recommendations aligned with business objectives.',
+                    'One-Time Workshop / Presentation — summary workshop with key stakeholders to present findings and recommendations.'
+                ] },
+                { title: 'Expected Outcomes', bullets: [
+                    'Clear understanding of the organization\'s AI readiness',
+                    'Prioritized list of high-impact AI use cases',
+                    'Implementation roadmap aligned with business goals',
+                    'Knowledge transfer for operational continuity'
+                ] }
+            ],
+            notes: ''
+        },
+        {
+            id: servicesCatalogNewId(),
+            name: 'AI Integration',
+            category: 'Implementation',
+            defaultDuration: '4-6 weeks',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['One-time AI integration with the client platform, aimed at enhancing capability through intelligent insights, automation, and real-time analytics. The engagement focuses on seamlessly embedding AI features within the existing system to deliver tangible operational and security benefits.'] },
+                { title: 'Scope of Consultancy Services', bullets: [
+                    'Requirement & Architecture Assessment — review of platform architecture and identification of integration points.',
+                    'AI Model Design & Integration — deployment of suitable AI models (e.g., anomaly detection, predictive insights, pattern recognition) into client workflows.',
+                    'Data Pipeline Enablement — enabling secure and optimized data flow between the platform and the AI layer.',
+                    'Testing & Validation — end-to-end validation of integrated AI components to ensure stability, accuracy, and performance.',
+                    'Handover & Documentation — delivery of final implementation guide, architecture diagram, and knowledge transfer to internal teams.'
+                ] },
+                { title: 'Expected Outcomes', bullets: [
+                    'Real-time AI-driven insights within the platform',
+                    'Improved detection and decision-making capabilities',
+                    'Scalable integration architecture for future AI expansion',
+                    'Knowledge transfer for operational continuity'
+                ] }
+            ],
+            notes: ''
+        },
+        {
+            id: servicesCatalogNewId(),
+            name: 'Security Audit',
+            category: 'Audit',
+            defaultDuration: '2-3 weeks',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['Comprehensive security audit covering infrastructure, applications, and operational controls, aimed at identifying gaps and providing a prioritized remediation roadmap.'] },
+                { title: 'Scope of Audit', bullets: [
+                    'Infrastructure review — network architecture, perimeter controls, segmentation, and cloud configuration.',
+                    'Application review — authentication, authorization, data handling, and known vulnerability classes (OWASP Top 10).',
+                    'Operational controls — access management, logging & monitoring, incident response readiness, backup strategy.',
+                    'Compliance alignment — gap assessment against the relevant standards (ISO 27001, SOC 2, RBI, etc.).',
+                    'Findings report — prioritized remediation plan with severity, effort estimate, and recommendations.'
+                ] }
+            ],
+            notes: ''
+        },
+        {
+            id: servicesCatalogNewId(),
+            name: 'VAPT (Vulnerability Assessment & Penetration Testing)',
+            category: 'Audit',
+            defaultDuration: '2-4 weeks',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['VAPT engagement combining automated vulnerability scanning with manual penetration testing across the agreed asset scope.'] },
+                { title: 'Scope of Engagement', bullets: [
+                    'Asset enumeration and scope confirmation',
+                    'Automated vulnerability scanning across in-scope assets',
+                    'Manual penetration testing — exploitation of identified vulnerabilities to validate impact',
+                    'Findings report — CVSS-scored issues, proof-of-concept evidence, and remediation guidance',
+                    'Re-test (one round) after remediation, included in scope'
+                ] }
+            ],
+            notes: ''
+        },
+        {
+            id: servicesCatalogNewId(),
+            name: 'vCISO Retainer',
+            category: 'Managed Service',
+            defaultDuration: 'Retainer (advisory)',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['Virtual Chief Information Security Officer engagement providing strategic security leadership on a retainer basis.'] },
+                { title: 'Scope of Services', bullets: [
+                    'Security strategy and roadmap ownership',
+                    'Risk assessment and risk register maintenance',
+                    'Vendor and tooling advisory',
+                    'Board / leadership reporting and stakeholder briefings',
+                    'Incident response coordination (advisory)',
+                    'Compliance program oversight'
+                ] }
+            ],
+            notes: 'For retainer-style engagements; convert to subscription-mode contract if billing is recurring rather than upfront.'
+        },
+        {
+            id: servicesCatalogNewId(),
+            name: 'SOC-as-a-Service',
+            category: 'Managed Service',
+            defaultDuration: 'Annual',
+            defaultFee: '',
+            sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+            defaultScopeSections: [
+                { title: 'Introduction', bullets: ['24x7 Security Operations Center service providing continuous monitoring, threat detection, and incident response across the agreed asset perimeter.'] },
+                { title: 'Scope of Services', bullets: [
+                    'Continuous log collection and SIEM correlation',
+                    '24x7 monitoring by SOC analysts',
+                    'Threat detection, triage, and escalation per agreed SLAs',
+                    'Monthly threat-landscape reporting',
+                    'Quarterly tuning and detection-rule review',
+                    'Incident response coordination (containment + handover to client IR)'
+                ] }
+            ],
+            notes: 'For retainer-style engagements; consider modeling as subscription-type if billed annually upfront with renewal.'
+        }
+    ];
+}
+
+// Seed the catalog with defaults if it has never been populated. Idempotent —
+// runs on app boot via initServicesCatalogIfNeeded(). Will not overwrite an
+// existing catalog (even an empty one once the user has explicitly cleared it,
+// because the seeding flag is also stored).
+function initServicesCatalogIfNeeded() {
+    if (!companyProfile || typeof companyProfile !== 'object') return;
+    // Only seed when the field has never been set (undefined). An empty array
+    // means the user has deleted everything and we respect that.
+    if (companyProfile.servicesCatalog === undefined) {
+        companyProfile.servicesCatalog = servicesCatalogDefaultSeed();
+        try {
+            if (typeof saveCompanyProfile === 'function') saveCompanyProfile();
+        } catch (e) {
+            console.warn('[8E] Services catalog seed save failed:', e);
+        }
+    }
+}
+
+// ---- Catalog UI: render list panel ----
+function renderServicesCatalogList() {
+    const host = document.getElementById('servicesCatalogListContainer');
+    if (!host) return;
+    const list = getServicesCatalog();
+    if (list.length === 0) {
+        host.innerHTML = '<div style="padding:20px 14px; color:var(--text-dim); font-size:12px; font-style:italic; text-align:center;">No services in catalog yet. Add one using the input above.</div>';
+        return;
+    }
+    const activeId = window.__servicesEditorActiveId || '';
+    const html = list.map(s => {
+        const isActive = (s.id === activeId);
+        const bg = isActive ? 'var(--hover-bg)' : 'transparent';
+        const borderL = isActive ? 'border-left: 3px solid var(--accent-cyan);' : 'border-left: 3px solid transparent;';
+        const cat = pEsc(s.category || 'Other');
+        const dur = s.defaultDuration ? ` · ${pEsc(s.defaultDuration)}` : '';
+        return `
+            <div class="services-catalog-row" onclick="selectServiceForEdit('${pEsc(s.id)}')" style="padding:10px 14px; cursor:pointer; ${borderL} background:${bg}; border-bottom:1px solid var(--glass-border);">
+                <div style="font-weight:600; color:var(--text-main); font-size:13px;">${pEsc(s.name || '(unnamed)')}</div>
+                <div style="font-size:11px; color:var(--text-dim); margin-top:3px;">${cat}${dur}</div>
+            </div>`;
+    }).join('');
+    host.innerHTML = html;
+}
+
+// ---- Catalog UI: select an entry for editing ----
+function selectServiceForEdit(id) {
+    window.__servicesEditorActiveId = id || '';
+    const list = getServicesCatalog();
+    const rec = list.find(s => s.id === id);
+    const editor = document.getElementById('servicesCatalogEditor');
+    const empty  = document.getElementById('servicesCatalogEmpty');
+    const label  = document.getElementById('servicesCatalogSelectedLabel');
+    if (!editor || !empty || !label) return;
+
+    if (!rec) {
+        editor.style.display = 'none';
+        empty.style.display = '';
+        label.textContent = 'Select a service to edit';
+        renderServicesCatalogList();
+        return;
+    }
+
+    label.textContent = rec.name || '(unnamed)';
+    editor.style.display = '';
+    empty.style.display = 'none';
+
+    document.getElementById('servicesEditor_id').value          = rec.id || '';
+    document.getElementById('servicesEditor_name').value        = rec.name || '';
+    document.getElementById('servicesEditor_category').value    = rec.category || 'Consultancy';
+    document.getElementById('servicesEditor_duration').value    = rec.defaultDuration || '';
+    document.getElementById('servicesEditor_fee').value         = (rec.defaultFee === '' || rec.defaultFee == null) ? '' : rec.defaultFee;
+    document.getElementById('servicesEditor_sac').value         = rec.sacCode || '';
+    document.getElementById('servicesEditor_notes').value       = rec.notes || '';
+
+    renderServicesEditorScopeSections(rec.defaultScopeSections || []);
+    renderServicesCatalogList();
+}
+
+// ---- Catalog UI: render the scope-section editor inside the right panel ----
+function renderServicesEditorScopeSections(sections) {
+    const host = document.getElementById('servicesEditor_scopeContainer');
+    if (!host) return;
+    if (!Array.isArray(sections) || sections.length === 0) {
+        host.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic; padding:8px 4px;">No scope sections yet. Click "Add Section" below to build the template.</div>';
+        return;
+    }
+    const html = sections.map((sec, sIdx) => {
+        const bullets = Array.isArray(sec.bullets) ? sec.bullets : [];
+        const bulletsHtml = bullets.map((b, bIdx) => `
+            <div style="display:flex; gap:6px; align-items:flex-start; margin-bottom:6px;">
+                <span style="color:var(--text-dim); margin-top:6px;">•</span>
+                <textarea data-sidx="${sIdx}" data-bidx="${bIdx}" rows="1" style="flex:1; resize:vertical; font-family:inherit; font-size:12px; padding:5px 8px;" oninput="onServiceScopeBulletInput(this)">${pEsc(b)}</textarea>
+                <button class="btn btn-ghost btn-sm" onclick="removeServiceScopeBullet(${sIdx}, ${bIdx})" title="Remove bullet" style="padding:4px 8px; color:var(--danger);"><i class="fas fa-times"></i></button>
+            </div>
+        `).join('');
+        return `
+            <div style="border:1px solid var(--glass-border); border-radius:6px; padding:10px 12px; margin-bottom:10px; background:var(--detail-bg);">
+                <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:11px; color:var(--text-dim); font-weight:600;">${sIdx + 1}.</span>
+                    <input type="text" data-sidx="${sIdx}" placeholder="Section title (e.g. Introduction)" value="${pEsc(sec.title || '')}" style="flex:1; font-size:12.5px; padding:5px 8px; font-weight:600;" oninput="onServiceScopeSectionTitleInput(this)">
+                    <button class="btn btn-ghost btn-sm" onclick="removeServiceScopeSection(${sIdx})" title="Remove section" style="padding:4px 10px; color:var(--danger);"><i class="fas fa-trash"></i></button>
+                </div>
+                <div>${bulletsHtml}</div>
+                <button class="btn btn-ghost btn-sm" onclick="addServiceScopeBullet(${sIdx})" style="font-size:11px; padding:3px 8px;"><i class="fas fa-plus"></i> Add bullet</button>
+            </div>
+        `;
+    }).join('');
+    host.innerHTML = html;
+}
+
+// ---- Catalog UI: scope-editor mutation helpers ----
+function _editorCurrentService() {
+    const id = document.getElementById('servicesEditor_id').value;
+    const list = getServicesCatalog();
+    return list.find(s => s.id === id);
+}
+
+function addServiceScopeSection() {
+    const rec = _editorCurrentService();
+    if (!rec) return;
+    if (!Array.isArray(rec.defaultScopeSections)) rec.defaultScopeSections = [];
+    rec.defaultScopeSections.push({ title: '', bullets: [''] });
+    setServicesCatalog(getServicesCatalog());  // persists
+    renderServicesEditorScopeSections(rec.defaultScopeSections);
+}
+
+function removeServiceScopeSection(sIdx) {
+    const rec = _editorCurrentService();
+    if (!rec || !Array.isArray(rec.defaultScopeSections)) return;
+    rec.defaultScopeSections.splice(sIdx, 1);
+    setServicesCatalog(getServicesCatalog());
+    renderServicesEditorScopeSections(rec.defaultScopeSections);
+}
+
+function addServiceScopeBullet(sIdx) {
+    const rec = _editorCurrentService();
+    if (!rec || !Array.isArray(rec.defaultScopeSections)) return;
+    const sec = rec.defaultScopeSections[sIdx];
+    if (!sec) return;
+    if (!Array.isArray(sec.bullets)) sec.bullets = [];
+    sec.bullets.push('');
+    setServicesCatalog(getServicesCatalog());
+    renderServicesEditorScopeSections(rec.defaultScopeSections);
+}
+
+function removeServiceScopeBullet(sIdx, bIdx) {
+    const rec = _editorCurrentService();
+    if (!rec || !Array.isArray(rec.defaultScopeSections)) return;
+    const sec = rec.defaultScopeSections[sIdx];
+    if (!sec || !Array.isArray(sec.bullets)) return;
+    sec.bullets.splice(bIdx, 1);
+    setServicesCatalog(getServicesCatalog());
+    renderServicesEditorScopeSections(rec.defaultScopeSections);
+}
+
+function onServiceScopeSectionTitleInput(el) {
+    const rec = _editorCurrentService();
+    if (!rec || !Array.isArray(rec.defaultScopeSections)) return;
+    const sIdx = parseInt(el.getAttribute('data-sidx'), 10);
+    const sec = rec.defaultScopeSections[sIdx];
+    if (!sec) return;
+    sec.title = el.value;
+    setServicesCatalog(getServicesCatalog());
+    // Don't re-render here — that would steal focus from the input as user types.
+}
+
+function onServiceScopeBulletInput(el) {
+    const rec = _editorCurrentService();
+    if (!rec || !Array.isArray(rec.defaultScopeSections)) return;
+    const sIdx = parseInt(el.getAttribute('data-sidx'), 10);
+    const bIdx = parseInt(el.getAttribute('data-bidx'), 10);
+    const sec = rec.defaultScopeSections[sIdx];
+    if (!sec || !Array.isArray(sec.bullets)) return;
+    sec.bullets[bIdx] = el.value;
+    setServicesCatalog(getServicesCatalog());
+    // Same — no re-render to avoid focus loss.
+}
+
+// ---- Catalog UI: top-level CRUD ----
+function addNewService() {
+    const input = document.getElementById('newServiceName');
+    if (!input) return;
+    const name = (input.value || '').trim();
+    if (!name) { alert('Enter a service name first.'); return; }
+    const list = getServicesCatalog().slice();
+    if (list.some(s => (s.name || '').toLowerCase() === name.toLowerCase())) {
+        alert('A service with that name already exists.');
+        return;
+    }
+    const rec = {
+        id: servicesCatalogNewId(),
+        name: name,
+        category: 'Consultancy',
+        defaultDuration: '',
+        defaultFee: '',
+        sacCode: SERVICES_CATALOG_DEFAULT_SAC,
+        defaultScopeSections: [],
+        notes: ''
+    };
+    list.push(rec);
+    setServicesCatalog(list);
+    input.value = '';
+    selectServiceForEdit(rec.id);
+}
+
+function commitServicesEditor() {
+    const id = document.getElementById('servicesEditor_id').value;
+    if (!id) return;
+    const list = getServicesCatalog().slice();
+    const rec = list.find(s => s.id === id);
+    if (!rec) return;
+    rec.name              = (document.getElementById('servicesEditor_name').value || '').trim();
+    rec.category          = document.getElementById('servicesEditor_category').value || 'Consultancy';
+    rec.defaultDuration   = (document.getElementById('servicesEditor_duration').value || '').trim();
+    const feeRaw          = document.getElementById('servicesEditor_fee').value;
+    rec.defaultFee        = (feeRaw === '' || feeRaw == null) ? '' : (parseFloat(feeRaw) || 0);
+    rec.sacCode           = (document.getElementById('servicesEditor_sac').value || '').trim();
+    rec.notes             = document.getElementById('servicesEditor_notes').value || '';
+    setServicesCatalog(list);
+    renderServicesCatalogList();   // refresh left list (name / cat may have changed)
+    // Update the right-panel header text without disturbing focus.
+    const label = document.getElementById('servicesCatalogSelectedLabel');
+    if (label) label.textContent = rec.name || '(unnamed)';
+}
+
+function deleteCurrentService() {
+    const id = document.getElementById('servicesEditor_id').value;
+    if (!id) return;
+    const list = getServicesCatalog().slice();
+    const rec = list.find(s => s.id === id);
+    if (!rec) return;
+    if (!confirm(`Delete service "${rec.name || '(unnamed)'}"?\n\nProposals and invoices that reference this service will keep their existing data — only the catalog entry is removed.`)) return;
+    const newList = list.filter(s => s.id !== id);
+    setServicesCatalog(newList);
+    window.__servicesEditorActiveId = '';
+    selectServiceForEdit('');  // clears editor, falls through to empty state
+}
+
+// =============================================================================
+// END SERVICES CATALOG (Phase 8E)
+// =============================================================================
+
+
+// =============================================================================
+// SERVICE-MODE PROPOSAL HELPERS (Phase 8E)
+// =============================================================================
+// Wires the Type toggle, the catalog dropdown, the scope-sections editor, and
+// the fee-in-words display for Service-mode proposals. All operate against the
+// existing `proposals` array — service proposals are just records with
+// type='service' plus a few extra fields.
+// =============================================================================
+
+// Module-level scratch — the scope sections of the proposal currently being
+// edited in the form. Mirrors `proposalFormLineItems` for line items.
+var proposalServiceScopeSections = [];
+
+// Read the current Type radio. Defaults to 'subscription' if not set.
+function getProposalFormType() {
+    var checked = document.querySelector('input[name="proposalType"]:checked');
+    return (checked && checked.value === 'service') ? 'service' : 'subscription';
+}
+
+// Toggle visibility of subscription-only vs service-only cards on the form.
+function onProposalTypeChange() {
+    var type = getProposalFormType();
+    var subOnly = document.querySelectorAll('.proposal-subscription-only');
+    var svcOnly = document.querySelectorAll('.proposal-service-only');
+    subOnly.forEach(function (el) { el.style.display = (type === 'subscription') ? '' : 'none'; });
+    svcOnly.forEach(function (el) { el.style.display = (type === 'service') ? '' : 'none'; });
+    // When switching INTO service mode, populate the catalog dropdown if not yet done.
+    if (type === 'service') {
+        populateProposalServiceDropdown();
+    }
+}
+
+// Populate the Services Catalog dropdown on the proposal form.
+function populateProposalServiceDropdown() {
+    var sel = document.getElementById('proposalServiceId');
+    if (!sel) return;
+    var current = sel.value;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var html = '<option value="">— Select a service —</option>';
+    list.forEach(function (s) {
+        var name = s.name || '(unnamed)';
+        var cat = s.category ? ' · ' + s.category : '';
+        html += '<option value="' + pEsc(s.id) + '">' + pEsc(name + cat) + '</option>';
+    });
+    sel.innerHTML = html;
+    if (current && list.some(function (s) { return s.id === current; })) {
+        sel.value = current;
+    }
+}
+
+// When a service is picked from the catalog, auto-fill SAC, duration, fee, and
+// scope template. User can edit any of these afterwards — this is just a
+// convenience pre-fill, not a binding link.
+function onProposalServiceChange() {
+    var sel = document.getElementById('proposalServiceId');
+    if (!sel) return;
+    var id = sel.value;
+    if (!id) return;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var rec = list.find(function (s) { return s.id === id; });
+    if (!rec) return;
+
+    // SAC
+    var sacEl = document.getElementById('proposalServiceSAC');
+    if (sacEl && (!sacEl.value || sacEl.value === '998313')) {
+        sacEl.value = rec.sacCode || '998313';
+    }
+
+    // Duration
+    var durEl = document.getElementById('proposalServiceDuration');
+    if (durEl && !durEl.value) {
+        durEl.value = rec.defaultDuration || '';
+    }
+
+    // Fee
+    var feeEl = document.getElementById('proposalServiceFee');
+    if (feeEl && !feeEl.value && rec.defaultFee !== '' && rec.defaultFee != null) {
+        feeEl.value = rec.defaultFee;
+        updateProposalServiceFeeWords();
+    }
+
+    // Subject — pre-fill if blank
+    var subjEl = document.getElementById('proposalSubject');
+    if (subjEl && !subjEl.value.trim() && rec.name) {
+        subjEl.value = 'Proposal for ' + rec.name;
+    }
+
+    // Scope sections — only auto-fill if currently empty (don't clobber edits)
+    var emptyScope = (proposalServiceScopeSections.length === 0) ||
+                     (proposalServiceScopeSections.length === 1 && !proposalServiceScopeSections[0].title && (!proposalServiceScopeSections[0].bullets || proposalServiceScopeSections[0].bullets.length === 0));
+    if (emptyScope && Array.isArray(rec.defaultScopeSections)) {
+        // Deep-clone so edits don't mutate the catalog
+        proposalServiceScopeSections = rec.defaultScopeSections.map(function (sec) {
+            return {
+                title: sec.title || '',
+                bullets: Array.isArray(sec.bullets) ? sec.bullets.slice() : []
+            };
+        });
+        renderProposalServiceScope();
+    }
+}
+
+// Force-reload scope from the currently-selected catalog entry, replacing any
+// edits. Confirms before destruction.
+function reloadProposalScopeFromCatalog() {
+    var sel = document.getElementById('proposalServiceId');
+    if (!sel || !sel.value) { alert('Pick a service from the catalog first.'); return; }
+    if (proposalServiceScopeSections.length > 0) {
+        if (!confirm('This will replace your current scope sections with the catalog template. Continue?')) return;
+    }
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var rec = list.find(function (s) { return s.id === sel.value; });
+    if (!rec) return;
+    proposalServiceScopeSections = (rec.defaultScopeSections || []).map(function (sec) {
+        return {
+            title: sec.title || '',
+            bullets: Array.isArray(sec.bullets) ? sec.bullets.slice() : []
+        };
+    });
+    renderProposalServiceScope();
+}
+
+// Render the scope sections into the form. Same pattern as the catalog editor.
+function renderProposalServiceScope() {
+    var host = document.getElementById('proposalServiceScopeContainer');
+    if (!host) return;
+    if (!Array.isArray(proposalServiceScopeSections) || proposalServiceScopeSections.length === 0) {
+        host.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic; padding:8px 4px;">No scope sections yet. Click "Add Section" to start, or pick a service from the catalog above to load a template.</div>';
+        return;
+    }
+    var html = proposalServiceScopeSections.map(function (sec, sIdx) {
+        var bullets = Array.isArray(sec.bullets) ? sec.bullets : [];
+        var bulletsHtml = bullets.map(function (b, bIdx) {
+            return '<div style="display:flex; gap:6px; align-items:flex-start; margin-bottom:6px;">' +
+                '<span style="color:var(--text-dim); margin-top:6px;">•</span>' +
+                '<textarea data-sidx="' + sIdx + '" data-bidx="' + bIdx + '" rows="1" style="flex:1; resize:vertical; font-family:inherit; font-size:12px; padding:5px 8px;" oninput="onProposalScopeBulletInput(this)">' + pEsc(b) + '</textarea>' +
+                '<button class="btn btn-ghost btn-sm" onclick="removeProposalScopeBullet(' + sIdx + ',' + bIdx + ')" title="Remove bullet" style="padding:4px 8px; color:var(--danger);"><i class="fas fa-times"></i></button>' +
+                '</div>';
+        }).join('');
+        return '<div style="border:1px solid var(--glass-border); border-radius:6px; padding:10px 12px; margin-bottom:10px; background:var(--detail-bg);">' +
+            '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">' +
+                '<span style="font-size:11px; color:var(--text-dim); font-weight:600;">' + (sIdx + 1) + '.</span>' +
+                '<input type="text" data-sidx="' + sIdx + '" placeholder="Section title (e.g. Introduction)" value="' + pEsc(sec.title || '') + '" style="flex:1; font-size:12.5px; padding:5px 8px; font-weight:600;" oninput="onProposalScopeSectionTitleInput(this)">' +
+                '<button class="btn btn-ghost btn-sm" onclick="removeProposalScopeSection(' + sIdx + ')" title="Remove section" style="padding:4px 10px; color:var(--danger);"><i class="fas fa-trash"></i></button>' +
+            '</div>' +
+            '<div>' + bulletsHtml + '</div>' +
+            '<button class="btn btn-ghost btn-sm" onclick="addProposalScopeBullet(' + sIdx + ')" style="font-size:11px; padding:3px 8px;"><i class="fas fa-plus"></i> Add bullet</button>' +
+        '</div>';
+    }).join('');
+    host.innerHTML = html;
+}
+
+function addProposalScopeSection() {
+    proposalServiceScopeSections.push({ title: '', bullets: [''] });
+    renderProposalServiceScope();
+}
+function removeProposalScopeSection(sIdx) {
+    if (sIdx < 0 || sIdx >= proposalServiceScopeSections.length) return;
+    proposalServiceScopeSections.splice(sIdx, 1);
+    renderProposalServiceScope();
+}
+function addProposalScopeBullet(sIdx) {
+    var sec = proposalServiceScopeSections[sIdx];
+    if (!sec) return;
+    if (!Array.isArray(sec.bullets)) sec.bullets = [];
+    sec.bullets.push('');
+    renderProposalServiceScope();
+}
+function removeProposalScopeBullet(sIdx, bIdx) {
+    var sec = proposalServiceScopeSections[sIdx];
+    if (!sec || !Array.isArray(sec.bullets)) return;
+    sec.bullets.splice(bIdx, 1);
+    renderProposalServiceScope();
+}
+function onProposalScopeSectionTitleInput(el) {
+    var sIdx = parseInt(el.getAttribute('data-sidx'), 10);
+    var sec = proposalServiceScopeSections[sIdx];
+    if (sec) sec.title = el.value;
+    // No re-render — would steal focus.
+}
+function onProposalScopeBulletInput(el) {
+    var sIdx = parseInt(el.getAttribute('data-sidx'), 10);
+    var bIdx = parseInt(el.getAttribute('data-bidx'), 10);
+    var sec = proposalServiceScopeSections[sIdx];
+    if (sec && Array.isArray(sec.bullets)) sec.bullets[bIdx] = el.value;
+    // No re-render — would steal focus.
+}
+
+// Convert a number to Indian-style words (Lakhs, Crores). Lightweight — only
+// covers integer rupees up to 99,99,99,999 (~10^10), which is way more than any
+// realistic professional services proposal.
+function _inrInWords(n) {
+    n = Math.round(n);
+    if (!isFinite(n) || n < 0) return '';
+    if (n === 0) return 'Zero';
+    var ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+                'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+                'Seventeen', 'Eighteen', 'Nineteen'];
+    var tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    function below100(num) {
+        if (num < 20) return ones[num];
+        return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '');
+    }
+    function below1000(num) {
+        if (num < 100) return below100(num);
+        return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 ? ' ' + below100(num % 100) : '');
+    }
+    var parts = [];
+    var crore = Math.floor(n / 10000000); n %= 10000000;
+    var lakh  = Math.floor(n / 100000);   n %= 100000;
+    var thousand = Math.floor(n / 1000);  n %= 1000;
+    var rest = n;
+    if (crore) parts.push(below1000(crore) + ' Crore');
+    if (lakh)  parts.push(below100(lakh) + ' Lakh');
+    if (thousand) parts.push(below1000(thousand) + ' Thousand');
+    if (rest) parts.push(below1000(rest));
+    return parts.join(' ');
+}
+
+// Update the live "in words" display under the fee input.
+function updateProposalServiceFeeWords() {
+    var feeEl = document.getElementById('proposalServiceFee');
+    var wordsEl = document.getElementById('proposalServiceFeeWords');
+    if (!feeEl || !wordsEl) return;
+    var v = parseFloat(feeEl.value);
+    if (!isFinite(v) || v <= 0) { wordsEl.textContent = ''; return; }
+    wordsEl.textContent = 'Rupees ' + _inrInWords(v) + ' Only';
+}
+
+// =============================================================================
+// END SERVICE-MODE PROPOSAL HELPERS (Phase 8E)
+// =============================================================================
+
+
+// =============================================================================
+// SERVICE-MODE INVOICE HELPERS (Phase 8E)
+// =============================================================================
+// Lighter-weight than the proposal side: invoices already have a flexible line-
+// items table (with HSN/SAC field per line and per-line GST %), so the service
+// flow piggybacks on that. The Type toggle just:
+//   - Hides Commercial Routing in service mode (no resale routing for direct
+//     services billing)
+//   - Shows a small helper that lets the user pre-fill a single line item from
+//     the Services Catalog
+//   - Tags the invoice with type='service' for reporting
+// =============================================================================
+
+function getInvoiceFormType() {
+    var checked = document.querySelector('input[name="invoiceType"]:checked');
+    return (checked && checked.value === 'service') ? 'service' : 'subscription';
+}
+
+function onInvoiceTypeChange() {
+    var type = getInvoiceFormType();
+    document.querySelectorAll('.invoice-subscription-only').forEach(function (el) {
+        el.style.display = (type === 'subscription') ? '' : 'none';
+    });
+    document.querySelectorAll('.invoice-service-only').forEach(function (el) {
+        el.style.display = (type === 'service') ? '' : 'none';
+    });
+    if (type === 'service') {
+        populateInvoiceServiceCatalogDropdown();
+    }
+}
+
+function populateInvoiceServiceCatalogDropdown() {
+    var sel = document.getElementById('invServiceCatalogPick');
+    if (!sel) return;
+    var current = sel.value;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var html = '<option value="">— Pick a service to prefill a line item —</option>';
+    list.forEach(function (s) {
+        var name = s.name || '(unnamed)';
+        var cat = s.category ? ' · ' + s.category : '';
+        html += '<option value="' + pEsc(s.id) + '">' + pEsc(name + cat) + '</option>';
+    });
+    sel.innerHTML = html;
+    if (current && list.some(function (s) { return s.id === current; })) {
+        sel.value = current;
+    }
+}
+
+// Replace the current invoice line items with a single line built from the
+// chosen catalog entry. Confirms before clobbering existing lines.
+function applyInvoiceServicePrefill() {
+    var sel = document.getElementById('invServiceCatalogPick');
+    if (!sel || !sel.value) return;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var rec = list.find(function (s) { return s.id === sel.value; });
+    if (!rec) return;
+
+    // Ask before destroying existing lines (only if there's meaningful content)
+    var existing = (typeof invFormLineItems !== 'undefined' && Array.isArray(invFormLineItems))
+        ? invFormLineItems
+        : [];
+    var hasMeaningful = existing.some(function (li) {
+        return (li.product || '').trim() || parseFloat(li.qty || 0) > 1 || parseFloat(li.unitPrice || 0) > 0;
+    });
+    if (hasMeaningful) {
+        if (!confirm('Replace existing invoice line items with the chosen service?')) return;
+    }
+
+    // Pre-fill SAC code field
+    var sacEl = document.getElementById('invServiceSAC');
+    if (sacEl) sacEl.value = rec.sacCode || '998313';
+
+    // Subject — pre-fill if blank
+    var subjEl = document.getElementById('invSubject');
+    if (subjEl && !(subjEl.value || '').trim() && rec.name) {
+        subjEl.value = 'Professional Fees — ' + rec.name;
+    }
+
+    // Build a single line item.
+    var newLine = {
+        id: (typeof invoiceLineItemBlank === 'function') ? invoiceLineItemBlank().id : ('li_' + Date.now()),
+        oem: '',
+        product: rec.name + ((rec.defaultDuration || '').trim() ? ' (' + rec.defaultDuration + ')' : ''),
+        hsnSac: rec.sacCode || '998313',
+        qty: 1,
+        unitPrice: (rec.defaultFee === '' || rec.defaultFee == null) ? 0 : (parseFloat(rec.defaultFee) || 0),
+        discountPct: 0,
+        gstPct: 18
+    };
+
+    if (typeof invFormLineItems !== 'undefined') {
+        invFormLineItems.length = 0;
+        invFormLineItems.push(newLine);
+    }
+    if (typeof renderInvoiceLineItems === 'function') renderInvoiceLineItems();
+    if (typeof updateInvoiceTotalsDisplay === 'function') updateInvoiceTotalsDisplay();
+}
+
+// =============================================================================
+// END SERVICE-MODE INVOICE HELPERS (Phase 8E)
+// =============================================================================
+
+
+// safeSetStorage — wraps localStorage.setItem with quota-exceeded handling.
+// Function declaration restored after Phase 8E auto-insertion accidentally
+// swallowed it while leaving its body in place.
 function safeSetStorage(dataStr) {
     try {
         localStorage.setItem(STORAGE_KEY, dataStr);
@@ -20194,6 +21211,18 @@ function proposalBlank() {
         shipToChoice: 'EndUser',          // 'EndUser' | 'Reseller' | 'Custom'
         shipToCustomAddress: '',          // used only when shipToChoice = 'Custom'
         convertedContractIdx: null, // set when Accepted → converted to contract
+        // Phase 8E — proposal type + service-mode fields. Default 'subscription'
+        // for back-compat with all existing records (records loaded without a
+        // type field are treated as subscription by getProposalType()).
+        type: 'subscription',                // 'subscription' | 'service'
+        serviceId: '',                       // links to companyProfile.servicesCatalog entry
+        serviceSAC: '',                      // SAC code (e.g. 998313)
+        serviceDuration: '',                 // free text (e.g. "4-6 weeks")
+        engagementStart: '',                 // ISO date — only used in service mode
+        engagementEnd: '',                   // ISO date — only used in service mode
+        serviceFee: 0,                       // pre-tax INR
+        servicePaymentTerms: '',             // free text (e.g. "100% advance upon acceptance")
+        scopeSections: [],                   // [{ title, bullets: [string] }]
         createdAt: now,
         updatedAt: now,
         statusHistory: [{ status: 'Draft', changedAt: now }]
@@ -20645,6 +21674,29 @@ function openProposalForm(id) {
         }, 0);
         // Deep-copy line items so cancel doesn't mutate the saved record
         proposalFormLineItems = (p.lineItems || []).map(li => ({ ...li }));
+        // Phase 8E — type + service-mode hydration
+        const propType = (p.type === 'service') ? 'service' : 'subscription';
+        try {
+            const typeRadios = document.querySelectorAll('input[name="proposalType"]');
+            typeRadios.forEach(r => { r.checked = (r.value === propType); });
+        } catch (_) {}
+        populateProposalServiceDropdown();
+        val('proposalServiceId', p.serviceId || '');
+        val('proposalServiceSAC', p.serviceSAC || '');
+        val('proposalServiceDuration', p.serviceDuration || '');
+        val('proposalEngagementStart', p.engagementStart || '');
+        val('proposalEngagementEnd', p.engagementEnd || '');
+        val('proposalServiceFee', (p.serviceFee === '' || p.serviceFee == null) ? '' : p.serviceFee);
+        val('proposalServicePaymentTerms', p.servicePaymentTerms || '');
+        proposalServiceScopeSections = Array.isArray(p.scopeSections)
+            ? p.scopeSections.map(sec => ({
+                title: sec.title || '',
+                bullets: Array.isArray(sec.bullets) ? sec.bullets.slice() : []
+              }))
+            : [];
+        renderProposalServiceScope();
+        updateProposalServiceFeeWords();
+        onProposalTypeChange();   // applies the show/hide based on type
         document.getElementById('proposalDeleteBtn').style.display = 'inline-flex';
     } else {
         const blank = proposalBlank();
@@ -20673,6 +21725,23 @@ function openProposalForm(id) {
             onProposalCommercialModelChange();
         }, 0);
         proposalFormLineItems = [proposalLineItemBlank()];
+        // Phase 8E — reset Type to subscription, clear all service fields
+        try {
+            const typeRadios = document.querySelectorAll('input[name="proposalType"]');
+            typeRadios.forEach(r => { r.checked = (r.value === 'subscription'); });
+        } catch (_) {}
+        populateProposalServiceDropdown();
+        val('proposalServiceId', '');
+        val('proposalServiceSAC', '998313');
+        val('proposalServiceDuration', '');
+        val('proposalEngagementStart', '');
+        val('proposalEngagementEnd', '');
+        val('proposalServiceFee', '');
+        val('proposalServicePaymentTerms', '100% advance upon acceptance');
+        proposalServiceScopeSections = [];
+        renderProposalServiceScope();
+        updateProposalServiceFeeWords();
+        onProposalTypeChange();
         document.getElementById('proposalDeleteBtn').style.display = 'none';
     }
     populateProposalBillingAddressDropdown();
@@ -21525,8 +22594,17 @@ function saveProposalFromForm() {
     const subject = document.getElementById('proposalSubject').value.trim();
     if (!client) { alert("Please select a client."); return; }
     if (!subject) { alert("Subject is required."); return; }
-    if (proposalFormLineItems.length === 0) {
-        if (!confirm("No line items — proposal will be empty. Save anyway?")) return;
+    // Phase 8E — split validation by type
+    const proposalType = (typeof getProposalFormType === 'function') ? getProposalFormType() : 'subscription';
+    if (proposalType === 'service') {
+        const svcId = (document.getElementById('proposalServiceId') || {}).value || '';
+        const svcFee = parseFloat((document.getElementById('proposalServiceFee') || {}).value || '0');
+        if (!svcId) { alert("Please select a service from the catalog."); return; }
+        if (!isFinite(svcFee) || svcFee <= 0) { alert("Please enter a valid Total Professional Fee (positive number)."); return; }
+    } else {
+        if (proposalFormLineItems.length === 0) {
+            if (!confirm("No line items — proposal will be empty. Save anyway?")) return;
+        }
     }
 
     const idVal = document.getElementById('proposalFormId').value;
@@ -21570,6 +22648,23 @@ function saveProposalFromForm() {
     rec.shipToCustomAddress = (rec.shipToChoice === 'Custom')
         ? (document.getElementById('proposalShipToCustomAddress').value || '').trim()
         : '';
+    // Phase 8E — type + service-mode persistence. Service fields are written
+    // unconditionally so toggling back-and-forth doesn't lose data.
+    rec.type = proposalType;
+    rec.serviceId          = (document.getElementById('proposalServiceId') || {}).value || '';
+    rec.serviceSAC         = ((document.getElementById('proposalServiceSAC') || {}).value || '').trim();
+    rec.serviceDuration    = ((document.getElementById('proposalServiceDuration') || {}).value || '').trim();
+    rec.engagementStart    = (document.getElementById('proposalEngagementStart') || {}).value || '';
+    rec.engagementEnd      = (document.getElementById('proposalEngagementEnd') || {}).value || '';
+    var _feeRaw            = (document.getElementById('proposalServiceFee') || {}).value || '';
+    rec.serviceFee         = (_feeRaw === '') ? 0 : (parseFloat(_feeRaw) || 0);
+    rec.servicePaymentTerms= ((document.getElementById('proposalServicePaymentTerms') || {}).value || '').trim();
+    rec.scopeSections      = (Array.isArray(proposalServiceScopeSections) ? proposalServiceScopeSections : [])
+        .map(sec => ({
+            title: (sec.title || '').trim(),
+            bullets: (Array.isArray(sec.bullets) ? sec.bullets : []).map(b => (b || '').trim()).filter(Boolean)
+        }))
+        .filter(sec => sec.title || sec.bullets.length > 0);
     rec.updatedAt = now;
     if (isNew) proposals.push(rec);
     saveProposals();
@@ -22259,6 +23354,12 @@ function numberToIndianWords(num, opts) {
 function buildProposalPDFHTML(proposal) {
     if (!proposal) return '<div>Invalid proposal</div>';
     const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    // Phase 8E — Service-mode proposals use a different narrative format
+    // (numbered sections + bullets, mirroring traditional professional services
+    // proposals) rather than the line-item subscription template.
+    if (proposal.type === 'service') {
+        return buildServiceProposalPDFHTML(proposal);
+    }
     // If a letterhead template is uploaded, use the overlay renderer (monochrome,
     // content flows over the letterhead image); otherwise use the default renderer.
     if (cp.letterheadDataUrl) {
@@ -22423,6 +23524,195 @@ function _pdfIsolateWrapper(wrapper, htmlContent) {
 
     return function cleanup() { /* inline styles vanish with the wrapper */ };
 }
+
+// =============================================================================
+// SERVICE PROPOSAL PDF BUILDER (Phase 8E)
+// =============================================================================
+// Generates a narrative-format proposal PDF that mirrors the layout of
+// professional services proposals (e.g. the 63SATS AI Consultancy / AI
+// Integration with CYBX templates). Key differences from the subscription
+// builder:
+//   - No line items table — a single "Total Professional Fees" line under
+//     Section "Commercials"
+//   - Numbered sections with bullet lists (1. Introduction, 2. Scope, 3. ...)
+//   - Tax: services are SAC-coded, GST 18% standard, no HSN
+//   - Footer carries the Masterstone office + registered addresses
+// Letterhead behaviour: if the user has uploaded a letterhead, we render
+// content over it the same way the subscription builder does.
+// =============================================================================
+function buildServiceProposalPDFHTML(proposal) {
+    if (!proposal) return '<div>Invalid proposal</div>';
+    const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    const useLetterhead = !!cp.letterheadDataUrl;
+
+    const fee = parseFloat(proposal.serviceFee || 0) || 0;
+    const feeWords = (typeof _inrInWords === 'function') ? _inrInWords(fee) : '';
+    const feeFormatted = (typeof formatINR === 'function') ? formatINR(fee) : ('₹ ' + fee.toLocaleString('en-IN'));
+
+    // Resolve client display name + address (best effort)
+    var clientDisplay = proposal.clientName || '';
+    var clientLookup = null;
+    try {
+        if (typeof clientMaster === 'object' && clientMaster && proposal.clientName) {
+            clientLookup = clientMaster[proposal.clientName] || null;
+        }
+    } catch (_) {}
+
+    var submitter = (cp.signatoryName || 'Chintan Desai');
+    var companyName = cp.legalName || cp.tradingName || 'Masterstone LLP';
+    var dateStr = '';
+    try {
+        if (proposal.issueDate) {
+            var d = new Date(proposal.issueDate + 'T00:00:00');
+            dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
+    } catch (_) { dateStr = proposal.issueDate || ''; }
+
+    // Build the numbered sections HTML. If the user hasn't filled in scope
+    // sections (edge case — e.g. saved a service proposal without scope),
+    // we skip those sections entirely rather than emit empty bullets.
+    var scope = Array.isArray(proposal.scopeSections) ? proposal.scopeSections : [];
+    var sectionsHtml = '';
+    var sectionNum = 0;
+    scope.forEach(function (sec) {
+        var title = (sec.title || '').trim();
+        var bullets = Array.isArray(sec.bullets) ? sec.bullets.filter(function (b) { return (b || '').trim(); }) : [];
+        if (!title && bullets.length === 0) return;
+        sectionNum++;
+        var bulletsHtml = bullets.map(function (b) {
+            return '<li style="margin-bottom:6px; line-height:1.55;">' + pEsc(b) + '</li>';
+        }).join('');
+        sectionsHtml += '' +
+            '<div class="svc-section">' +
+                '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> ' + pEsc(title || '(Untitled section)') + '</div>' +
+                (bullets.length ? '<ul class="svc-bullets">' + bulletsHtml + '</ul>' : '') +
+            '</div>' +
+            '<hr class="svc-rule">';
+    });
+
+    // Duration section — simple paragraph, only if duration is provided
+    var durationHtml = '';
+    if ((proposal.serviceDuration || '').trim()) {
+        sectionNum++;
+        durationHtml = '' +
+            '<div class="svc-section">' +
+                '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> Duration</div>' +
+                '<div class="svc-paragraph">The consultancy engagement will span <strong>' + pEsc(proposal.serviceDuration) + '</strong> from the date of acceptance and commencement.</div>' +
+            '</div>' +
+            '<hr class="svc-rule">';
+    }
+
+    // Commercials section — always emitted
+    sectionNum++;
+    var paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
+    var validUntilStr = '';
+    try {
+        if (proposal.validUntil) {
+            var dv = new Date(proposal.validUntil + 'T00:00:00');
+            validUntilStr = dv.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
+    } catch (_) { validUntilStr = proposal.validUntil || ''; }
+
+    var feeWordsLine = feeWords ? (' (' + feeWords + ' Only)') : '';
+    var commercialsHtml = '' +
+        '<div class="svc-section">' +
+            '<div class="svc-section-title"><span class="svc-section-num">' + sectionNum + '.</span> Commercials</div>' +
+            '<ul class="svc-bullets">' +
+                '<li><strong>Total Professional Fees:</strong> ' + pEsc(feeFormatted) + (feeWordsLine ? pEsc(feeWordsLine) : '') + '</li>' +
+                '<li><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>' +
+                '<li><strong>Payment Terms:</strong> ' + pEsc(paymentTerms) + '</li>' +
+                (validUntilStr ? '<li><strong>Quote Validity:</strong> The validity of this quote remains effective until ' + pEsc(validUntilStr) + '.</li>' : '') +
+                ((proposal.serviceSAC || '').trim() ? '<li><strong>SAC Code:</strong> ' + pEsc(proposal.serviceSAC) + '</li>' : '') +
+            '</ul>' +
+        '</div>';
+
+    // Compose footer with company addresses
+    var officeAddr = [
+        cp.addressLine1, cp.addressLine2, cp.city, cp.state, cp.pincode, cp.country
+    ].filter(function (x) { return (x || '').trim(); }).join(', ');
+    var phone   = cp.phone   || '';
+    var email   = cp.email   || '';
+    var website = cp.website || '';
+    // Footer is shown only if NOT using letterhead (letterhead has its own footer)
+    var footerHtml = '';
+    if (!useLetterhead && (officeAddr || phone || email || website)) {
+        footerHtml = '' +
+            '<hr class="svc-rule" style="margin-top:24px;">' +
+            '<div class="svc-footer">' +
+                '<div class="svc-footer-name">' + pEsc(companyName) + '</div>' +
+                (officeAddr ? '<div class="svc-footer-addr">' + pEsc(officeAddr) + '</div>' : '') +
+                '<div class="svc-footer-contact">' +
+                    (phone   ? '<span><i class="fas fa-phone-alt"></i> ' + pEsc(phone) + '</span>' : '') +
+                    (email   ? '<span><i class="fas fa-envelope"></i> ' + pEsc(email) + '</span>' : '') +
+                    (website ? '<span><i class="fas fa-globe"></i> ' + pEsc(website) + '</span>' : '') +
+                '</div>' +
+            '</div>';
+    }
+
+    // Logo block — top right, only if not using letterhead
+    var logoHtml = '';
+    if (!useLetterhead && cp.logoDataUrl) {
+        logoHtml = '<div class="svc-logo-wrap"><img src="' + cp.logoDataUrl + '" alt="logo"></div>';
+    }
+
+    // Background letterhead overlay — same approach as buildProposalPDFHTMLWithLetterhead
+    var pageBgStyle = '';
+    if (useLetterhead && cp.letterheadUseAsBackground !== false) {
+        pageBgStyle = 'background-image: url(' + cp.letterheadDataUrl + '); background-size: 100% auto; background-repeat: no-repeat; background-position: top left;';
+    }
+
+    return '' +
+'<style>' +
+'  .svc-page {' +
+'    background: var(--glass-panel);' +
+'    color: var(--text-main);' +
+'    font-family: var(--font-tech), Helvetica, Arial, sans-serif;' +
+'    padding: ' + (useLetterhead ? '120px 70px 100px 70px' : '40px 50px 30px 50px') + ';' +
+'    max-width: 900px;' +
+'    margin: 0 auto;' +
+'    position: relative;' +
+'    ' + pageBgStyle +
+'  }' +
+'  .svc-logo-wrap { position: absolute; top: 30px; right: 50px; }' +
+'  .svc-logo-wrap img { max-height: 64px; max-width: 200px; }' +
+'  .svc-title-row { margin-bottom: 22px; padding-right: 220px; }' +
+'  .svc-title { font-size: 18px; font-weight: 700; color: var(--text-main); text-decoration: underline; margin-bottom: 16px; }' +
+'  .svc-meta { font-size: 12.5px; line-height: 1.7; color: var(--text-main); }' +
+'  .svc-meta strong { font-weight: 700; }' +
+'  .svc-rule { border: none; border-top: 1px solid var(--glass-border-strong); margin: 14px 0 14px 0; }' +
+'  .svc-section { margin: 0 0 4px 0; }' +
+'  .svc-section-title { font-size: 13.5px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; }' +
+'  .svc-section-num { display: inline-block; min-width: 18px; }' +
+'  .svc-paragraph { font-size: 12.5px; color: var(--text-main); line-height: 1.6; padding-left: 18px; }' +
+'  .svc-bullets { font-size: 12.5px; color: var(--text-main); line-height: 1.55; margin: 0 0 8px 0; padding-left: 36px; }' +
+'  .svc-bullets li { margin-bottom: 6px; }' +
+'  .svc-footer { margin-top: 18px; text-align: center; font-size: 11.5px; color: var(--text-dim); }' +
+'  .svc-footer-name { font-weight: 700; color: var(--text-main); margin-bottom: 6px; font-size: 12.5px; }' +
+'  .svc-footer-addr { margin-bottom: 8px; line-height: 1.5; }' +
+'  .svc-footer-contact { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; font-size: 11px; }' +
+'  .svc-footer-contact i { color: var(--accent-cyan); margin-right: 4px; }' +
+'</style>' +
+'<div class="svc-page">' +
+    logoHtml +
+    '<div class="svc-title-row">' +
+        '<div class="svc-title">' + pEsc(proposal.subject || 'Professional Services Proposal') + '</div>' +
+        '<div class="svc-meta">' +
+            (dateStr   ? '<div><strong>Date:</strong> ' + pEsc(dateStr) + '</div>' : '') +
+            '<div><strong>Client Name:</strong> ' + pEsc(clientDisplay) + '</div>' +
+            '<div><strong>Submitted by:</strong> ' + pEsc(submitter) + '</div>' +
+            '<div><strong>Company:</strong> ' + pEsc(companyName) + '</div>' +
+        '</div>' +
+    '</div>' +
+    '<hr class="svc-rule">' +
+    sectionsHtml +
+    durationHtml +
+    commercialsHtml +
+    footerHtml +
+'</div>';
+}
+// =============================================================================
+// END SERVICE PROPOSAL PDF BUILDER (Phase 8E)
+// =============================================================================
 
 function buildProposalPDFHTMLDefault(proposal) {
     if (!proposal) return '<div>Invalid proposal</div>';
@@ -25448,6 +26738,11 @@ function invoiceBlank() {
         creditNoteNumber: '',
         creditNoteDate: '',
         creditNoteReason: '',
+        // Phase 8E — invoice type. Default 'subscription' for back-compat.
+        // Service invoices are tagged for reporting; the form auto-hides
+        // Commercial Routing in service mode and offers a catalog-prefill
+        // helper to populate a single SAC-coded line item.
+        type: 'subscription',
         createdAt: now,
         updatedAt: now,
         issuedAt: null,
@@ -26138,6 +27433,20 @@ function openInvoiceForm(id) {
     onInvoiceBillingAddressChange();
     renderInvoiceLineItems();
     updateInvoiceTotalsDisplay();
+
+    // Phase 8E — restore Type radio + apply visibility. Default to 'subscription'
+    // for all records that don't carry a type (back-compat).
+    try {
+        var invForRadio = id ? (invoices.find(function (x) { return x.id === id; }) || {}) : {};
+        var invType = (invForRadio.type === 'service') ? 'service' : 'subscription';
+        var typeRadios = document.querySelectorAll('input[name="invoiceType"]');
+        typeRadios.forEach(function (r) { r.checked = (r.value === invType); });
+        // Initialize the SAC field — for new invoices, default the helper SAC.
+        var sacEl = document.getElementById('invServiceSAC');
+        if (sacEl && !sacEl.value) sacEl.value = '998313';
+        if (typeof onInvoiceTypeChange === 'function') onInvoiceTypeChange();
+    } catch (_) {}
+
     // Bug fix #36 — Navigate to the new full-page form (replaces modal display).
     showTab('invoiceFormTab');
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -26673,6 +27982,12 @@ function saveInvoiceFromForm() {
     rec.invoiceDate = document.getElementById('invInvoiceDate').value;
     rec.dueDate = document.getElementById('invDueDate').value;
     rec.status = document.getElementById('invStatus').value;
+    // Phase 8E — persist invoice type. In service mode, also store the
+    // helper SAC code (used as default for new line items).
+    rec.type = (typeof getInvoiceFormType === 'function') ? getInvoiceFormType() : 'subscription';
+    if (rec.type === 'service') {
+        rec.serviceSAC = ((document.getElementById('invServiceSAC') || {}).value || '').trim();
+    }
     // Phase 4D — detect manual Paid-status set and set paidAt if missing
     // (refreshInvoiceComputedFields further down handles auto-accrual trigger when status transitions)
     const __wasPaidBefore = !isNew && (invoices.find(x => x.id === rec.id) || {}).status === 'Paid';
@@ -34007,7 +35322,7 @@ function showARSubTab(tab) {
 // show only elements whose data-syscat list contains the selected sub-tab.
 function showSysCtrlSubTab(cat) {
     if (!cat) cat = 'company';
-    const validCats = ['company', 'templates', 'oem', 'storage', 'diagnostics', 'macapp'];
+    const validCats = ['company', 'templates', 'oem', 'services', 'storage', 'diagnostics', 'macapp'];
     if (!validCats.includes(cat)) cat = 'company';
 
     // Toggle visibility of all tagged elements inside backupTab
@@ -34030,6 +35345,12 @@ function showSysCtrlSubTab(cat) {
     // saved values (they may have been changed via the indigo banner gear).
     if (cat === 'macapp' && typeof window.__msLoadMacAppSettings === 'function') {
         window.__msLoadMacAppSettings();
+    }
+
+    // Phase 8E — when the Services Catalog sub-tab is opened, render the
+    // catalog list (it's data-driven from companyProfile.servicesCatalog).
+    if (cat === 'services' && typeof renderServicesCatalogList === 'function') {
+        renderServicesCatalogList();
     }
 
     // Persist last-selected sub-tab
