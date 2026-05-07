@@ -8675,6 +8675,24 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <label>Internal Notes (not printed)</label>
       <textarea id="proposalNotes" rows="2" style="width:100%; resize:vertical; font-family:inherit;" placeholder="Internal notes, reminders, context..."></textarea>
     </div>
+    <!-- Phase 8O — PDF Display toggles, mirror of the PO form's 8K block.
+         Both default OFF (clean PDF). Discount and GST control the line
+         item columns AND the corresponding GST breakdown rows. Service
+         proposals (no line items) ignore these. -->
+    <div style="margin-top:14px; padding:12px 14px; background:var(--input-bg); border:1px solid var(--glass-border); border-radius:6px;">
+      <div style="font-size:11.5px; color:var(--text-dim); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">PDF Display Options</div>
+      <div style="display:flex; gap:24px; align-items:center; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; margin:0; color:var(--text-main); white-space:nowrap;">
+          <input type="checkbox" id="proposalShowDiscountOnPdf" style="margin:0; cursor:pointer;">
+          <span>Show Discount % column</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer; margin:0; color:var(--text-main); white-space:nowrap;">
+          <input type="checkbox" id="proposalShowGstOnPdf" style="margin:0; cursor:pointer;">
+          <span>Show GST % column</span>
+        </label>
+        <span style="font-size:10.5px; color:var(--text-dim); font-style:italic; margin-left:auto; white-space:nowrap;">Both hidden by default · subscription only</span>
+      </div>
+    </div>
     <div class="prospect-form-grid-2" style="margin-top:14px;">
       <div>
         <label>Signature Display</label>
@@ -18141,6 +18159,35 @@ function saveContract() {
     };
 
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
+    // Phase 8O — Contract → PO path cascade. When the user edits the
+    // OEM PO link / local file path on the contract side, the matching
+    // PO record needs the same values so its "Open Original" anchor
+    // doesn't go stale. Match is by PO number (c.internalPO === po.poNumber).
+    // Updates only when the contract actually has a PO ref set, to avoid
+    // accidentally touching a record whose internalPO is blank.
+    try {
+        const _ipoNum = (data.internalPO || '').trim();
+        if (_ipoNum && typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
+            const _matchedPo = purchaseOrders.find(p => p && (p.poNumber || '') === _ipoNum);
+            if (_matchedPo) {
+                let _changed = false;
+                const _newLink  = data.internalPOLink || '';
+                const _newLocal = data.internalPOLocalPath || '';
+                if ((_matchedPo.externalLink || '') !== _newLink) {
+                    _matchedPo.externalLink = _newLink;
+                    _changed = true;
+                }
+                if ((_matchedPo.externalLinkLocalPath || '') !== _newLocal) {
+                    _matchedPo.externalLinkLocalPath = _newLocal;
+                    _changed = true;
+                }
+                if (_changed) {
+                    _matchedPo.updatedAt = new Date().toISOString();
+                    if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
+                }
+            }
+        }
+    } catch (e) { console.warn('Contract→PO path cascade failed:', e); }
     // 8U — PO → Contract conversion back-link: if the user kicked off this
     // save from convertPOToContract, complete the linkage by stamping the
     // PO's linkedContractIdx with the new contract's index. Only runs on
@@ -21248,7 +21295,8 @@ function proposalLineItemBlank() {
         qty: 1,
         unitPrice: 0,
         discountPct: 0,
-        gstPct: (companyProfile && companyProfile.defaultGSTRate !== undefined) ? companyProfile.defaultGSTRate : 18
+        gstPct: (companyProfile && companyProfile.defaultGSTRate !== undefined) ? companyProfile.defaultGSTRate : 18,
+        notes: ''   // Phase 8O — free-text per-line-item description (mirrors PO 8L)
     };
 }
 
@@ -21665,6 +21713,14 @@ function openProposalForm(id) {
         val('proposalTerms', p.terms);
         val('proposalNotes', p.notes);
         val('proposalShowSignature', p.signatureShown === false ? 'false' : 'true');
+        // Phase 8O — hydrate PDF Display toggles. Default false on legacy
+        // proposals that pre-date this field (matches PO 8K behaviour).
+        try {
+            var _pdEl = document.getElementById('proposalShowDiscountOnPdf');
+            if (_pdEl) _pdEl.checked = !!p.showDiscountOnPdf;
+            var _pgEl = document.getElementById('proposalShowGstOnPdf');
+            if (_pgEl) _pgEl.checked = !!p.showGstOnPdf;
+        } catch (_) {}
         val('proposalExternalLink', p.externalLink || '');
         val('proposalExternalLink__local', p.externalLinkLocalPath || '');
         try { var __peLp = document.getElementById('proposalExternalLink__local'); if (__peLp) window.__msUpdateLocalToggleState(__peLp); } catch (_) {}
@@ -21722,6 +21778,13 @@ function openProposalForm(id) {
         val('proposalTerms', (companyProfile && companyProfile.defaultProposalTerms) || '');
         val('proposalNotes', '');
         val('proposalShowSignature', 'true');
+        // Phase 8O — PDF Display toggles default OFF on new proposal.
+        try {
+            var _pdEl = document.getElementById('proposalShowDiscountOnPdf');
+            if (_pdEl) _pdEl.checked = false;
+            var _pgEl = document.getElementById('proposalShowGstOnPdf');
+            if (_pgEl) _pgEl.checked = false;
+        } catch (_) {}
         val('proposalExternalLink', '');
         val('proposalExternalLink__local', '');
         try { var __peLp = document.getElementById('proposalExternalLink__local'); if (__peLp) window.__msUpdateLocalToggleState(__peLp); } catch (_) {}
@@ -21975,8 +22038,16 @@ function renderProposalLineItems() {
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td>
             <td><button class="prop-line-delete-btn" onclick="removeProposalLineItem(${idx})" title="Remove line"><i class="fas fa-times"></i></button></td>
-        </tr>`;
+        </tr>
+        <tr data-prop-li-notes-idx="${idx}" class="prop-li-notes-row"><td colspan="9" style="padding:2px 6px 10px 6px; border-top:none;">
+            <textarea class="prop-li-notes-textarea" data-idx="${idx}" rows="2" onchange="onLineItemFieldChange(${idx}, 'notes', this.value)" oninput="this.style.height='auto'; this.style.height=this.scrollHeight+'px';" placeholder="Description / notes for this line item (optional — prints on proposal PDF)" style="width:100%; font-size:11.5px; padding:6px 8px; box-sizing:border-box; resize:vertical; min-height:38px; line-height:1.4; font-family:inherit;">${pEsc(li.notes || '')}</textarea>
+        </td></tr>`;
     }).join('');
+    // Phase 8O — autosize notes textareas to fit any pre-existing content
+    tbody.querySelectorAll('textarea.prop-li-notes-textarea').forEach(ta => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    });
 }
 
 function addProposalLineItem() {
@@ -22645,6 +22716,11 @@ function saveProposalFromForm() {
     rec.terms = document.getElementById('proposalTerms').value;
     rec.notes = document.getElementById('proposalNotes').value;
     rec.signatureShown = document.getElementById('proposalShowSignature').value === 'true';
+    // Phase 8O — PDF Display toggles (mirror of PO 8K). Both default false
+    // when unchecked. The Default + Letterhead PDF builders gate the
+    // Discount/GST line-item columns AND the GST breakdown rows on these.
+    rec.showDiscountOnPdf = !!(document.getElementById('proposalShowDiscountOnPdf') || {}).checked;
+    rec.showGstOnPdf      = !!(document.getElementById('proposalShowGstOnPdf') || {}).checked;
     rec.externalLink = (document.getElementById('proposalExternalLink').value || '').trim();
     rec.externalLinkLocalPath = ((document.getElementById('proposalExternalLink__local') || {}).value || '').trim();
     rec.lineItems = proposalFormLineItems.map(li => ({ ...li }));
@@ -24209,6 +24285,13 @@ function buildProposalPDFHTMLDefault(proposal) {
         ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
+    // Phase 8O — PDF Display toggles. Both default false (clean PDF) — same
+    // behaviour as PO 8K. When off, the corresponding line-item column AND
+    // the GST breakdown rows are suppressed. Grand Total continues to
+    // include any GST amounts in the totals (matches PO behaviour).
+    const _showDisc = !!proposal.showDiscountOnPdf;
+    const _showGst  = !!proposal.showGstOnPdf;
+
     // Line items HTML
     const lineItemsHtml = (proposal.lineItems || []).map((li, idx) => {
         const { net } = computeLineItemSubtotal(li);
@@ -24220,24 +24303,29 @@ function buildProposalPDFHTMLDefault(proposal) {
             <td style="padding:8px 6px; border:1px solid var(--text-subtle); vertical-align:top;">
                 <div style="font-weight:600;">${safe(li.oem)} — ${safe(li.product)}</div>
                 ${li.hsnSac ? `<div style="font-size:10px; color:var(--text-dim); margin-top:2px;">HSN/SAC: ${safe(li.hsnSac)}</div>` : ''}
+                ${li.notes ? `<div style="font-size:10.5px; color:var(--text-dim); margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${fmtInr(unit)}</td>
-            <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>
-            <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
+            ${_showDisc ? `<td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
+            ${_showGst  ? `<td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-weight:600;">${fmtInr(net)}</td>
         </tr>`;
     }).join('');
 
-    // GST rows
+    // GST rows (gated on _showGst — matches PO 8K behaviour)
     let gstRows = '';
-    if (gst.mode === 'intra') {
-        gstRows = `
-            <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
-            <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
-    } else {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+    if (_showGst) {
+        if (gst.mode === 'intra') {
+            gstRows = `
+                <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
+                <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
+        } else {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+        }
     }
+    // Phase 8O — colspan for empty-state cell tracks visible column count
+    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0);
 
     // Build the full HTML — all styles inline for reliable PDF rendering
     return `
@@ -24305,12 +24393,12 @@ function buildProposalPDFHTMLDefault(proposal) {
                 <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:left; font-weight:600;">Description</th>
                 <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:50px;">Qty</th>
                 <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:90px;">Unit Price</th>
-                <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">Disc</th>
-                <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">GST</th>
+                ${_showDisc ? `<th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
+                ${_showGst  ? `<th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
                 <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:100px;">Amount</th>
             </tr>
         </thead>
-        <tbody>${lineItemsHtml || '<tr><td colspan="7" style="padding:20px; text-align:center; border:1px solid var(--text-subtle); color:var(--text-subtle); font-style:italic;">No line items</td></tr>'}</tbody>
+        <tbody>${lineItemsHtml || `<tr><td colspan="${_liColspan}" style="padding:20px; text-align:center; border:1px solid var(--text-subtle); color:var(--text-subtle); font-style:italic;">No line items</td></tr>`}</tbody>
     </table>
 
     <!-- TOTALS -->
@@ -24418,6 +24506,10 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
     const COL_BODY = 'var(--text-main)';        // main body text
     const COL_HAIRLINE = 'var(--text-subtle)'; // table borders / dividers
 
+    // Phase 8O — PDF Display toggles (mirror of default builder + PO 8K).
+    const _showDisc = !!proposal.showDiscountOnPdf;
+    const _showGst  = !!proposal.showGstOnPdf;
+
     // Line items HTML
     const lineItemsHtml = (proposal.lineItems || []).map((li, idx) => {
         const { net } = computeLineItemSubtotal(li);
@@ -24429,24 +24521,28 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; vertical-align:top;">
                 <div style="font-weight:600;">${safe(li.oem)} — ${safe(li.product)}</div>
                 ${li.hsnSac ? `<div style="font-size:10px; color:${COL_MUTED}; margin-top:2px;">HSN/SAC: ${safe(li.hsnSac)}</div>` : ''}
+                ${li.notes ? `<div style="font-size:10.5px; color:${COL_MUTED}; margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${qty}</td>
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${fmtInr(unit)}</td>
-            <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>
-            <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
+            ${_showDisc ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
+            ${_showGst  ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600;">${fmtInr(net)}</td>
         </tr>`;
     }).join('');
 
-    // GST rows
+    // GST rows (gated on _showGst)
     let gstRows = '';
-    if (gst.mode === 'intra') {
-        gstRows = `
-            <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
-            <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
-    } else {
-        gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+    if (_showGst) {
+        if (gst.mode === 'intra') {
+            gstRows = `
+                <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
+                <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
+        } else {
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+        }
     }
+    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0);
 
     // Signature
     const signatureHtml = (proposal.signatureShown === false) ? "" : (cp.signatureImageDataUrl
@@ -24512,12 +24608,12 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:left; font-weight:600;">Description</th>
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:50px;">Qty</th>
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:90px;">Unit Price</th>
-                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">Disc</th>
-                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">GST</th>
+                    ${_showDisc ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
+                    ${_showGst  ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:100px;">Amount</th>
                 </tr>
             </thead>
-            <tbody>${lineItemsHtml || `<tr><td colspan="7" style="padding:20px; text-align:center; border:1px solid ${COL_HAIRLINE}; color:${COL_MUTED}; font-style:italic;">No line items</td></tr>`}</tbody>
+            <tbody>${lineItemsHtml || `<tr><td colspan="${_liColspan}" style="padding:20px; text-align:center; border:1px solid ${COL_HAIRLINE}; color:${COL_MUTED}; font-style:italic;">No line items</td></tr>`}</tbody>
         </table>
 
         <!-- TOTALS -->
@@ -24744,7 +24840,7 @@ body { margin: 0; padding: 0; background: var(--detail-bg); font-family: Helveti
 #toolbar button.secondary { background: #4b5563; }
 #toolbar button.secondary:hover { background: #374151; }
 #container { padding: 20px; max-width: 900px; margin: 0 auto; }
-#container > div { background: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+/* Phase 8O — longhand background-color (instead of the 'background:' shorthand) so this rule does not reset background-image. The Service Proposal letterhead builder paints the letterhead via CSS background-image on .ms-svc-doc in @media screen — using the shorthand here was clobbering it, leaving an empty white preview. Other PDF builders use <img> overlays so this change is invisible to them. */ #container > div { background-color: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
 </style>
 </head><body>
 <div id="toolbar">
@@ -25895,6 +25991,34 @@ function savePOFromForm() {
     rec.lineItems = poFormLineItems.map(li => ({ ...li }));
     rec.updatedAt = now;
     if (isNew) purchaseOrders.push(rec);
+    // Phase 8O — PO → Contract path cascade. Symmetric counterpart to the
+    // saveContract block: when the user edits the External Document Link
+    // / local file path on the PO, propagate the new values to any
+    // contract whose internalPO field references this PO. Match by PO
+    // number string. persistData() flushes the contracts mutation; the
+    // savePurchaseOrders() call further down handles the PO side.
+    try {
+        const _poNum = (rec.poNumber || '').trim();
+        if (_poNum && typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+            let _ctrChanged = false;
+            contracts.forEach(c => {
+                if (!c) return;
+                if ((c.internalPO || '').trim() !== _poNum) return;
+                const _newLink  = rec.externalLink || '';
+                const _newLocal = rec.externalLinkLocalPath || '';
+                if ((c.internalPOLink || '') !== _newLink) {
+                    c.internalPOLink = _newLink;
+                    _ctrChanged = true;
+                }
+                if ((c.internalPOLocalPath || '') !== _newLocal) {
+                    c.internalPOLocalPath = _newLocal;
+                    _ctrChanged = true;
+                }
+                if (_ctrChanged) c.updatedAt = new Date().toISOString();
+            });
+            if (_ctrChanged && typeof persistData === 'function') persistData();
+        }
+    } catch (e) { console.warn('PO→Contract path cascade failed:', e); }
     savePurchaseOrders();
     closePOForm();
 
@@ -26966,7 +27090,7 @@ body { margin: 0; padding: 0; background: var(--detail-bg); font-family: Helveti
 #toolbar button:hover { background: #6d28d9; }
 #toolbar button.secondary { background: #4b5563; }
 #container { padding: 20px; max-width: 900px; margin: 0 auto; }
-#container > div { background: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+/* Phase 8O — longhand background-color (instead of the 'background:' shorthand) so this rule does not reset background-image. The Service Proposal letterhead builder paints the letterhead via CSS background-image on .ms-svc-doc in @media screen — using the shorthand here was clobbering it, leaving an empty white preview. Other PDF builders use <img> overlays so this change is invisible to them. */ #container > div { background-color: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
 </style>
 </head><body>
 <div id="toolbar">
@@ -29955,7 +30079,7 @@ body { margin: 0; padding: 0; background: var(--detail-bg); font-family: Helveti
 #toolbar button.secondary { background: #4b5563; }
 #toolbar button.secondary:hover { background: #374151; }
 #container { padding: 20px; max-width: 900px; margin: 0 auto; }
-#container > div { background: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+/* Phase 8O — longhand background-color (instead of the 'background:' shorthand) so this rule does not reset background-image. The Service Proposal letterhead builder paints the letterhead via CSS background-image on .ms-svc-doc in @media screen — using the shorthand here was clobbering it, leaving an empty white preview. Other PDF builders use <img> overlays so this change is invisible to them. */ #container > div { background-color: var(--glass-panel); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
 ${editableCss}
 </style>
 </head><body>
@@ -33360,13 +33484,21 @@ function getPOsLinkedToReseller(resellerKey) {
     if (typeof purchaseOrders === 'undefined' || !Array.isArray(purchaseOrders)) return [];
     return purchaseOrders.filter(p => p && p.sourcedViaResellerKey === resellerKey);
 }
+// Phase 8O — Subscription contracts sourced via this reseller. Match the
+// other helpers' shape (no archived flag on contracts; cancelled stays
+// visible because users still want to see the relationship history).
+function getContractsLinkedToReseller(resellerKey) {
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return [];
+    return contracts.filter(c => c && c.sourcedViaResellerKey === resellerKey);
+}
 
 function buildLinkedDealsTableForReseller(resellerKey) {
     const pros = getProspectsLinkedToReseller(resellerKey);
     const prop = getProposalsLinkedToReseller(resellerKey);
     const pos  = getPOsLinkedToReseller(resellerKey);
-    if (pros.length === 0 && prop.length === 0 && pos.length === 0) {
-        return '<div style="color:var(--text-dim); font-style:italic; font-size:13px; padding:8px 0;">No prospects, proposals, or POs sourced via this reseller yet. Tag deals to see them here.</div>';
+    const ctr  = getContractsLinkedToReseller(resellerKey);
+    if (pros.length === 0 && prop.length === 0 && pos.length === 0 && ctr.length === 0) {
+        return '<div style="color:var(--text-dim); font-style:italic; font-size:13px; padding:8px 0;">No prospects, proposals, POs, or contracts sourced via this reseller yet. Tag deals to see them here.</div>';
     }
     // Build unified rows
     const rows = [];
@@ -33407,6 +33539,21 @@ function buildLinkedDealsTableForReseller(resellerKey) {
             subtotal += qty * unit * (1 - disc / 100);
         });
         const inr = (po.currency === 'INR') ? subtotal : subtotal * (parseFloat(po.fxRate) || 1);
+        // Phase 8O — when a PO has been converted to a contract, Open jumps
+        // to the contract (the reseller-facing "deal") rather than the PO
+        // form. Falls back to the PO form for un-converted POs.
+        const _lcIdxRaw = po.linkedContractIdx;
+        const _lcIdx = (_lcIdxRaw !== undefined && _lcIdxRaw !== null && _lcIdxRaw !== '')
+            ? parseInt(_lcIdxRaw)
+            : NaN;
+        const _hasLinkedContract = !isNaN(_lcIdx)
+            && typeof contracts !== 'undefined'
+            && Array.isArray(contracts)
+            && _lcIdx >= 0
+            && _lcIdx < contracts.length;
+        const _poAction = _hasLinkedContract
+            ? `showTab('contractsTab'); setTimeout(()=>scrollToContract(${_lcIdx}), 250);`
+            : `showTab('purchaseOrdersTab'); setTimeout(()=>openPOForm('${po.id}'), 250);`;
         rows.push({
             type: 'PO',
             title: po.poNumber ? (po.poNumber + (po.subject ? ' — ' + po.subject : '')) : (po.subject || '—'),
@@ -33416,13 +33563,51 @@ function buildLinkedDealsTableForReseller(resellerKey) {
             date: po.updatedAt ? po.updatedAt.slice(0,10) : '',
             model: po.commercialModel || 'Direct',
             id: po.id,
-            action: `showTab('purchaseOrdersTab'); setTimeout(()=>openPOForm('${po.id}'), 250);`
+            action: _poAction
+        });
+    });
+    // Phase 8O — Contract rows. Stage shows the contract status (Active /
+    // Expired / Cancelled). Amount uses INR sell × term ratio so totals
+    // reflect TOTAL contract value, not the annualised storage figure.
+    // Open jumps to the contract row in the portfolio (scrollToContract
+    // expands the client group and highlights the row).
+    ctr.forEach(c => {
+        const idx = contracts.indexOf(c);
+        const sellINR = parseFloat(c.sellINR) || 0;
+        let termMonths = 0;
+        if (c.endDate && c.start && typeof calcExactTerm === 'function') {
+            try { termMonths = calcExactTerm(c.start, c.endDate); } catch (_) { termMonths = 0; }
+        }
+        if (!termMonths || termMonths <= 0) termMonths = parseFloat(c.term) || 12;
+        const termRatio = termMonths > 0 ? termMonths / 12 : 1;
+        const totalSell = sellINR * termRatio;
+        let stageLbl = 'Active';
+        if (c.cancelled || c.status === 'Cancelled') stageLbl = 'Cancelled';
+        else if (c.endDate) {
+            try {
+                const ed = new Date(c.endDate);
+                if (!isNaN(ed.getTime()) && ed < new Date()) stageLbl = 'Expired';
+            } catch (_) {}
+        }
+        rows.push({
+            type: 'Contract',
+            title: (c.product || '—') + (c.internalPO ? ' (PO ' + c.internalPO + ')' : ''),
+            client: c.client || '—',
+            stage: stageLbl,
+            amount: '₹ ' + totalSell.toLocaleString('en-IN', { maximumFractionDigits: 0 }),
+            date: c.updatedAt ? c.updatedAt.slice(0,10) : (c.start || ''),
+            model: c.commercialModel || 'Direct',
+            id: c.id || ('contract-' + idx),
+            action: (idx >= 0)
+                ? `showTab('contractsTab'); setTimeout(()=>scrollToContract(${idx}), 250);`
+                : `showTab('contractsTab');`
         });
     });
     rows.sort((a,b) => (b.date || '').localeCompare(a.date || ''));
     const pillColorFor = (t) => {
         if (t === 'Proposal') return { bg: 'var(--accent-tint-mid)', fg: 'var(--accent-cyan)' };
         if (t === 'PO')       return { bg: 'rgba(245,158,11,0.12)', fg: 'var(--warning)' };
+        if (t === 'Contract') return { bg: 'rgba(30,97,53,0.12)',   fg: 'var(--accent-green)' };
         return { bg: 'var(--accent-tint-mid)', fg: 'var(--purple)' };
     };
     const rowsHtml = rows.map(r => {
