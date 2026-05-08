@@ -23959,7 +23959,6 @@ body {
     position: relative;
     z-index: 1;
     padding: 35mm 18mm 25mm 35mm;
-    height: 100%;
 }
 .ms-svc-section { margin-bottom: 14px; }
 
@@ -24105,7 +24104,16 @@ body {
             // If overflow, roll back UNLESS this is the only chunk on the page
             // (in which case the chunk is just bigger than a page; place it
             // anyway and accept the visible clip).
-            if (current.page.scrollHeight > PAGE_HEIGHT_PX) {
+            //
+            // Phase 8T fix: measure current.content (the inner content layer)
+            // not current.page. The page wrapper has height:297mm and
+            // overflow:hidden, so its scrollHeight is pinned at minimum 1123px
+            // regardless of content — making any threshold under 1123 trip
+            // every time. The content layer has no fixed height (8T also
+            // dropped height:100% from its CSS), so its scrollHeight reflects
+            // the actual padding+content extent and grows monotonically as
+            // chunks are appended.
+            if (current.content.scrollHeight > PAGE_HEIGHT_PX) {
                 if (current.content.children.length > 1) {
                     current.content.removeChild(clone);
                     current = createPage();
