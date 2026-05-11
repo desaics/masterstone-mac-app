@@ -10452,7 +10452,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         If your CA has returned the digitally-signed PDF (with QR + IRN + DSC applied), upload it here. It becomes the canonical signed copy of this invoice and is downloadable from the invoice detail page.
       </div>
       <input type="file" id="miSignedPdfFile" accept="application/pdf" style="font-size:11.5px; width:100%;">
-      <div style="font-size:10.5px; color:var(--text-dim); margin-top:6px; font-style:italic;">PDF only · up to 500 KB. To record the IRN number itself searchably, use the <strong>Record IRN</strong> button on the invoice page after issuing.</div>
+      <div style="font-size:10.5px; color:var(--text-dim); margin-top:6px; font-style:italic;">PDF only · up to 10 MB. To record the IRN number itself searchably, use the <strong>Record IRN</strong> button on the invoice page after issuing.</div>
     </div>
 
     <div style="display:flex; justify-content:space-between; margin-top:18px; gap:10px;">
@@ -10683,7 +10683,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div class="att-quota-meter" id="attMgrQuotaMeter"></div>
       <div style="margin-top:10px; font-size:11px; color:var(--text-dim); line-height:1.5;">
-        <strong>Limits:</strong> 500 KB per file · 2 MB per entity · 4 MB global soft limit (warning above this) · 4.5 MB hard block to preserve CRM operation. Browser localStorage caps total CRM data at ~5 MB — keep attachments compact.
+        <strong>Limits:</strong> 10 MB per file · 50 MB per entity · 200 MB global soft limit (warning above this) · 250 MB hard block to preserve CRM operation. Data persists to SQLite via the desktop app; localStorage is the in-memory cache.
       </div>
     </div>
 
@@ -31869,10 +31869,16 @@ function renderDashboardRenewals() {
    ====================================================================== */
 
 const ATTACHMENTS_KEY = 'ms_attachments_v1';
-const ATT_MAX_FILE_BYTES    = 500 * 1024;         // 500 KB per file
-const ATT_MAX_ENTITY_BYTES  = 2 * 1024 * 1024;    // 2 MB per entity
-const ATT_WARN_GLOBAL_BYTES = 4 * 1024 * 1024;    // 4 MB global soft warn
-const ATT_HARD_GLOBAL_BYTES = 4.5 * 1024 * 1024;  // 4.5 MB hard block
+// 8AE — Raised attachment size limits. Original limits were sized for the
+// browser-localStorage era (~5 MB total localStorage cap). Now that data
+// persists to SQLite (Phase 2 onward), per-file blobs of 10 MB are well within
+// SQLite TEXT column comfort, and the global cap can grow proportionally.
+// localStorage is still the runtime cache, so the global limit stays bounded
+// to avoid choking the in-memory mirror, but the new ceilings are 20x higher.
+const ATT_MAX_FILE_BYTES    = 10 * 1024 * 1024;        // 10 MB per file
+const ATT_MAX_ENTITY_BYTES  = 50 * 1024 * 1024;        // 50 MB per entity
+const ATT_WARN_GLOBAL_BYTES = 200 * 1024 * 1024;       // 200 MB global soft warn
+const ATT_HARD_GLOBAL_BYTES = 250 * 1024 * 1024;       // 250 MB global hard block
 
 // attachments = { "prospect_abc123": [ { id, filename, mimeType, sizeBytes, dataUrl, uploadedAt, description } ], ... }
 let attachments = {};
@@ -36789,11 +36795,34 @@ function renderConsultantPayments() {
         const statusBadge = r.status === 'Paid'
             ? '<span class="badge ok">Paid</span>'
             : '<span class="badge pending">Pending</span>';
-        const attCount = (typeof getAttachmentCount === 'function')
-            ? getAttachmentCount('consultant_payment', r.id) : 0;
-        const attBadge = attCount > 0
-            ? `<span style="display:inline-flex; align-items:center; gap:3px; font-size:10.5px; padding:2px 7px; border-radius:999px; background:var(--accent-tint-low); color:var(--accent-cyan); font-weight:600;"><i class="fas fa-paperclip" style="font-size:9px;"></i>${attCount}</span>`
-            : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
+
+        // 8AE — Files cell: pin badge opens the invoice attachment directly
+        // (skips the edit form). Pencil icon next to it opens the edit form.
+        // Row itself remains clickable as a fallback (muscle-memory friendly).
+        // The pin/pencil call event.stopPropagation() to prevent row-click bubbling.
+        const attList = (typeof getAttachmentsFor === 'function')
+            ? getAttachmentsFor('consultant_payment', r.id) : [];
+        const invoiceAtt = attList.find(a => (a.description || '').startsWith('Invoice'));
+        const otherCount = attList.filter(a => !(a.description || '').startsWith('Invoice')).length;
+        const totalAttCount = attList.length;
+        let filesCellHtml;
+        if (totalAttCount === 0) {
+            // No attachments — pin disabled, pencil only
+            filesCellHtml = `<span style="color:var(--text-dim); font-size:11px; margin-right:6px;">—</span>
+                <a href="#" onclick="event.stopPropagation(); openConsultantPaymentForm('${pEsc(r.id)}'); return false;" title="Edit payment" style="color:var(--accent-cyan); padding:2px 6px; text-decoration:none;"><i class="fas fa-pencil-alt" style="font-size:11px;"></i></a>`;
+        } else {
+            const pinTitle = invoiceAtt
+                ? `Open invoice: ${invoiceAtt.filename || 'file'}`
+                : (otherCount > 0 ? `No invoice tagged. ${otherCount} other doc${otherCount === 1 ? '' : 's'} — edit to view.` : 'No files');
+            const pinAction = invoiceAtt
+                ? `event.stopPropagation(); openConsultantInvoiceForPayment('${pEsc(r.id)}'); return false;`
+                : `event.stopPropagation(); openConsultantPaymentForm('${pEsc(r.id)}'); return false;`;
+            const pinStyle = invoiceAtt
+                ? 'background:var(--accent-tint-low); color:var(--accent-cyan);'
+                : 'background:var(--detail-bg); color:var(--text-dim);';
+            filesCellHtml = `<a href="#" onclick="${pinAction}" title="${pEsc(pinTitle)}" style="display:inline-flex; align-items:center; gap:3px; font-size:10.5px; padding:2px 7px; border-radius:999px; ${pinStyle} font-weight:600; text-decoration:none; margin-right:4px;"><i class="fas fa-paperclip" style="font-size:9px;"></i>${totalAttCount}</a><a href="#" onclick="event.stopPropagation(); openConsultantPaymentForm('${pEsc(r.id)}'); return false;" title="Edit payment" style="color:var(--accent-cyan); padding:2px 6px; text-decoration:none;"><i class="fas fa-pencil-alt" style="font-size:11px;"></i></a>`;
+        }
+
         const invDate = r.invoiceDate ? (typeof formatDateReadable === 'function' ? formatDateReadable(r.invoiceDate) : r.invoiceDate) : '—';
         const paidDate = r.paidDate ? (typeof formatDateReadable === 'function' ? formatDateReadable(r.paidDate) : r.paidDate) : '—';
         return `<tr onclick="openConsultantPaymentForm('${pEsc(r.id)}')" style="cursor:pointer;">
@@ -36806,7 +36835,7 @@ function renderConsultantPayments() {
             <td style="text-align:right; font-weight:600; font-variant-numeric: tabular-nums;">${fmtINR(r.totalAmount)}</td>
             <td>${statusBadge}</td>
             <td>${paidDate}</td>
-            <td>${attBadge}</td>
+            <td style="white-space:nowrap;">${filesCellHtml}</td>
         </tr>`;
     }).join('');
 }
@@ -37341,6 +37370,37 @@ function downloadConsultantAttachment(entityType, entityId, attId) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+}
+
+// 8AE — Open the Invoice-tagged attachment for a consultant payment in a new
+// tab/window. Called from the files-pin badge on the payment register row.
+// If no Invoice-tagged attachment exists, falls back to opening the edit form
+// so the user can see what's attached.
+function openConsultantInvoiceForPayment(paymentId) {
+    const key = `consultant_payment_${paymentId}`;
+    const list = attachments[key] || [];
+    const invoiceAtt = list.find(a => (a.description || '').startsWith('Invoice'));
+    if (!invoiceAtt || !invoiceAtt.dataUrl) {
+        // No invoice attached — open edit form instead
+        openConsultantPaymentForm(paymentId);
+        return;
+    }
+    // Open the dataUrl in a new tab. For PDFs the browser renders inline.
+    // For non-PDF mime types (image, etc.) it still opens viewable.
+    try {
+        const w = window.open(invoiceAtt.dataUrl, '_blank');
+        if (!w) {
+            // Popup blocked — fall back to download
+            const a = document.createElement('a');
+            a.href = invoiceAtt.dataUrl;
+            a.download = invoiceAtt.filename || 'invoice';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    } catch (e) {
+        alert('Could not open invoice. Try downloading it from the payment edit page.');
+    }
 }
 
 // ----- XLSX export -----
