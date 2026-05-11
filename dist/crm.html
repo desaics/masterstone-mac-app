@@ -9719,6 +9719,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <option value="">— None —</option>
         </select>
       </div>
+      <!-- 8V item — Client PO Number. Auto-fills from the linked contract's
+           clientPOs[0]/clientPO when a contract is picked AND this field is
+           still empty. Always manually editable. Shown on invoice PDF under
+           "Contract Ref" when non-empty. -->
+      <div>
+        <label>Client PO Number (optional)</label>
+        <input type="text" id="invClientPO" placeholder="Auto-fills from linked contract, or type manually">
+      </div>
     </div>
   </div>
 
@@ -27500,7 +27508,8 @@ function invoiceLineItemBlank() {
         unit: 'Nos',   // Nos / License / Hr / Pc etc.
         unitPrice: 0,
         discountPct: 0,
-        gstPct: (companyProfile && companyProfile.defaultGSTRate !== undefined) ? companyProfile.defaultGSTRate : 18
+        gstPct: (companyProfile && companyProfile.defaultGSTRate !== undefined) ? companyProfile.defaultGSTRate : 18,
+        notes: ''   // 8V item — free-text per-line-item notes (shown on invoice PDF when non-empty)
     };
 }
 
@@ -28062,6 +28071,11 @@ function openInvoiceForm(id) {
         val('invClient', inv.clientName);
         onInvoiceClientChange();
         val('invBillingAddressId', inv.billingAddressId);
+        // 8V item — hydrate Client PO BEFORE onInvoiceContractChange so the
+        // saved value pre-occupies the field. The auto-fill block inside that
+        // handler only fires when the field is empty, so this prevents the
+        // saved value from being overwritten by inheritance.
+        val('invClientPO', inv.clientPO || '');
         val('invLinkedContractIdx', inv.linkedContractIdx);
         onInvoiceContractChange();
         val('invLinkedCycleYearIdx', inv.linkedCycleYearIdx);
@@ -28130,6 +28144,8 @@ function openInvoiceForm(id) {
         val('invLinkedContractIdx', '');
         val('invLinkedCycleYearIdx', '');
         val('invLinkedProposalId', '');
+        // 8V item — clear Client PO on new invoice
+        val('invClientPO', '');
         // Phase 4C.2 — routing defaults
         val('invCommercialModel', 'Direct');
         populateResellerDropdown('invSourcedViaResellerKey', '');
@@ -28345,6 +28361,27 @@ function onInvoiceContractChange() {
     if (isBlankLineItems) {
         autoPopulateInvoiceFromContract(c, null /* cycle not yet selected */);
     }
+
+    // 8V item — auto-fill Client PO Number from the linked contract IF the field
+    // is currently empty (preserves manual edits). Handles both the modern
+    // clientPOs[] array (preferred) and legacy clientPO scalar.
+    try {
+        const poInput = document.getElementById('invClientPO');
+        if (poInput && !poInput.value.trim()) {
+            let inheritedPo = '';
+            if (Array.isArray(c.clientPOs) && c.clientPOs.length > 0) {
+                const firstWithNo = c.clientPOs.find(p => p && p.poNo);
+                if (firstWithNo) inheritedPo = firstWithNo.poNo;
+            }
+            if (!inheritedPo && c.clientPO) inheritedPo = c.clientPO;
+            if (inheritedPo) {
+                poInput.value = inheritedPo;
+                if (typeof showProspectToast === 'function') {
+                    showProspectToast(`<i class="fas fa-magic" style="color:var(--accent-cyan);"></i> Client PO <strong>${pEsc(inheritedPo)}</strong> inherited from contract.`, 4000);
+                }
+            }
+        }
+    } catch (e) { /* non-fatal */ }
 
     // Phase 4C.2 — propagate commercial routing from the contract (only if invoice still at Direct defaults)
     try {
@@ -28594,6 +28631,9 @@ function renderInvoiceLineItems() {
     }
     tbody.innerHTML = invFormLineItems.map((li, idx) => {
         const { net } = computeInvoiceLineItemSubtotal(li);
+        // 8V item — the line item now renders as TWO rows: one for the input fields,
+        // one with a full-width notes textarea below. Mirrors the PO 8L pattern at
+        // line ~25954-25966. The notes row uses colspan=9 to match the 9-column header.
         return `<tr data-inv-li-idx="${idx}">
             <td><input type="text" value="${pEsc(li.product || '')}" onchange="onInvoiceLineItemFieldChange(${idx}, 'product', this.value)" placeholder="Product / service description"></td>
             <td><input type="text" value="${pEsc(li.hsnCode || '')}" onchange="onInvoiceLineItemFieldChange(${idx}, 'hsnCode', this.value)" class="inv-hsn-input" placeholder="998316"></td>
@@ -28604,8 +28644,16 @@ function renderInvoiceLineItems() {
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onInvoiceLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace; font-variant-numeric: tabular-nums;">${(parseFloat(net) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td><button class="prop-line-delete-btn" onclick="removeInvoiceLineItem(${idx})" title="Remove"><i class="fas fa-times"></i></button></td>
-        </tr>`;
+        </tr>
+        <tr data-inv-li-notes-idx="${idx}" class="inv-li-notes-row"><td colspan="9" style="padding:2px 6px 10px 6px; border-top:none;">
+            <textarea class="inv-li-notes-textarea" data-idx="${idx}" rows="2" onchange="onInvoiceLineItemFieldChange(${idx}, 'notes', this.value)" oninput="this.style.height='auto'; this.style.height=this.scrollHeight+'px';" placeholder="Notes for this line item (optional — prints on invoice PDF)" style="width:100%; font-size:11.5px; padding:6px 8px; box-sizing:border-box; resize:vertical; min-height:38px; line-height:1.4; font-family:inherit;">${pEsc(li.notes || '')}</textarea>
+        </td></tr>`;
     }).join('');
+    // 8V item — autosize notes textareas to fit any pre-existing content (same as PO 8L line ~25969)
+    tbody.querySelectorAll('textarea.inv-li-notes-textarea').forEach(ta => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    });
 }
 
 function addInvoiceLineItem() { invFormLineItems.push(invoiceLineItemBlank()); renderInvoiceLineItems(); updateInvoiceTotalsDisplay(); }
@@ -28701,6 +28749,8 @@ function saveInvoiceFromForm() {
     rec.linkedContractIdx = document.getElementById('invLinkedContractIdx').value;
     rec.linkedCycleYearIdx = document.getElementById('invLinkedCycleYearIdx').value;
     rec.linkedProposalId = document.getElementById('invLinkedProposalId').value;
+    // 8V item — Client PO Number (manual or inherited from contract)
+    rec.clientPO = (document.getElementById('invClientPO').value || '').trim();
     // Phase 4C.2 — commercial routing
     rec.commercialModel = document.getElementById('invCommercialModel').value || 'Direct';
     rec.sourcedViaResellerKey = (rec.commercialModel === 'Direct')
@@ -29453,6 +29503,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:center; vertical-align:top; font-size:11px;">${idx + 1}</td>
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); vertical-align:top;">
                 <div style="font-weight:600; font-size:11.5px;">${safe(li.product)}</div>
+                ${li.notes ? `<div style="font-size:10.5px; color:var(--text-dim); margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:center; vertical-align:top; font-family:monospace; font-size:11px;">${safe(li.hsnCode || '—')}</td>
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${qty}</td>
@@ -29562,6 +29613,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
                     <div><strong>Place of Supply:</strong> ${safe(posDisplay)}</div>
                     <div><strong>Reverse Charge:</strong> ${inv.reverseCharge ? 'Yes' : 'No'}</div>
                     ${inv.linkedContractIdx !== '' && inv.linkedContractIdx !== null && inv.linkedContractIdx !== undefined ? `<div><strong>Contract Ref:</strong> Cycle ${parseInt(inv.linkedCycleYearIdx || 0) + 1}</div>` : ''}
+                    ${inv.clientPO ? `<div><strong>Client PO:</strong> ${safe(inv.clientPO)}</div>` : ''}
                 </div>
             </td>
         </tr>
@@ -29742,6 +29794,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:center; vertical-align:top; font-size:11px;">${idx + 1}</td>
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; vertical-align:top;">
                 <div style="font-weight:600; font-size:11.5px;">${safe(li.product)}</div>
+                ${li.notes ? `<div style="font-size:10.5px; color:${COL_MUTED}; margin-top:4px; white-space:pre-wrap; font-style:italic;">${safe(li.notes)}</div>` : ''}
             </td>
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:center; vertical-align:top; font-family:monospace; font-size:11px;">${safe(li.hsnCode || '—')}</td>
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${qty}</td>
@@ -29844,6 +29897,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
                         <div><strong>Due Date:</strong> ${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</div>
                         <div><strong>Place of Supply:</strong> ${safe(posDisplay)}</div>
                         <div><strong>Reverse Charge:</strong> ${inv.reverseCharge ? 'Yes' : 'No'}</div>
+                        ${inv.clientPO ? `<div><strong>Client PO:</strong> ${safe(inv.clientPO)}</div>` : ''}
                     </div>
                 </td>
             </tr>
