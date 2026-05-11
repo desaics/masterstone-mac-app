@@ -4797,7 +4797,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         'ms_purchase_orders_v1':    { cmd: 'storage_save_purchase_orders',   label: 'Purchase Orders' },
         'ms_commissions_v1':        { cmd: 'storage_save_commissions',       label: 'Commissions' },
         'ms_company_profile_v1':    { cmd: 'storage_save_company_profile',   label: 'Company Profile' },
-        'ms_attachments_v1':        { cmd: 'storage_save_attachments',       label: 'Attachments' }
+        'ms_attachments_v1':        { cmd: 'storage_save_attachments',       label: 'Attachments' },
+        // 8YZ — Consultants module: two new data buckets persist to dedicated
+        // SQLite tables via Rust commands added in this phase. Pattern mirrors
+        // every other top-level bucket above.
+        'ms_consultants_v1':         { cmd: 'storage_save_consultants',         label: 'Consultants' },
+        'ms_consultant_payments_v1': { cmd: 'storage_save_consultant_payments', label: 'Consultant Payments' }
     };
     // Settings keys go through a single command with the key as a parameter.
     var SETTING_KEYS = {
@@ -5793,6 +5798,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <div class="nav-section-header">Finance</div>
   <div class="nav-item" title="Invoices" onclick="showTab('invoicesTab')"><i class="fas fa-receipt"></i> Invoices</div>
   <div class="nav-item" title="Payables" onclick="showTab('purchaseInvoicesTab')"><i class="fas fa-building-columns"></i> Payables</div>
+  <!-- 8YZ — Consultants module: tracks payments to consultants/freelancers
+       who serve across clients. Not PO-driven, not client-linked. -->
+  <div class="nav-item" title="Consultants" onclick="showTab('consultantsTab')"><i class="fas fa-user-tie"></i> Consultants</div>
   <!-- Bug fix #27 — Cleanup: removed hidden arApTab nav fallback. Original removal in #13 Batch 3B; transitional stub no longer needed. -->
 
   <div class="nav-section-header">Insights</div>
@@ -9568,6 +9576,346 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
 </div><!-- end #purchaseInvoicesTab -->
 
+<!-- ============================================================================
+     8YZ — CONSULTANTS TAB
+     Two sub-tabs: Payment Register (default), Consultant Master. Manual entry
+     module for tracking consultant/freelancer payments. Distinct from Payables
+     because not PO-driven and not client-linked.
+     ============================================================================ -->
+<div id="consultantsTab" class="hidden">
+
+  <!-- Sub-tab strip (uses existing .arap-subtab pattern for visual consistency) -->
+  <div class="arap-subtab-strip" style="display:flex; gap:6px; border-bottom:1px solid var(--glass-border); margin-bottom:24px; padding-bottom:0;">
+    <div id="conSubtabRegisterBtn" class="arap-subtab active" onclick="showConsultantsSubtab('register')"><i class="fas fa-list-alt" style="color:var(--accent-cyan);"></i> Payment Register</div>
+    <div id="conSubtabMasterBtn" class="arap-subtab" onclick="showConsultantsSubtab('master')"><i class="fas fa-id-badge" style="color:var(--purple);"></i> Consultant Master</div>
+  </div>
+
+  <!-- ===== Sub-tab 1: Payment Register ===== -->
+  <div id="conRegisterSection">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+      <h2 style="margin:0;"><i class="fas fa-user-tie" style="color:var(--accent-cyan); margin-right:8px;"></i> Consultant Payments</h2>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-ghost" onclick="exportConsultantPayments()" title="Export payment register to Excel"><i class="fas fa-file-excel"></i> Export</button>
+        <button class="btn btn-primary" onclick="openConsultantPaymentForm()"><i class="fas fa-plus"></i> New Payment</button>
+      </div>
+    </div>
+
+    <!-- KPI strip (mirrors proposal-kpi-grid pattern from Invoices/Proposals) -->
+    <div class="proposal-kpi-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:24px;">
+      <div class="proposal-kpi-card">
+        <div class="proposal-kpi-lbl"><i class="fas fa-clock"></i> Pending Total</div>
+        <div class="proposal-kpi-val" id="con_pendingTotal" style="color:var(--warning);">₹0</div>
+        <div class="proposal-kpi-sub" id="con_pendingCount">0 payments</div>
+      </div>
+      <div class="proposal-kpi-card">
+        <div class="proposal-kpi-lbl"><i class="fas fa-check-circle"></i> Paid (MTD)</div>
+        <div class="proposal-kpi-val" id="con_paidMtd" style="color:var(--success);">₹0</div>
+        <div class="proposal-kpi-sub" id="con_paidMtdCount">0 payments</div>
+      </div>
+      <div class="proposal-kpi-card">
+        <div class="proposal-kpi-lbl"><i class="fas fa-calendar-check"></i> Paid (YTD)</div>
+        <div class="proposal-kpi-val" id="con_paidYtd" style="color:var(--accent-cyan);">₹0</div>
+        <div class="proposal-kpi-sub" id="con_paidYtdCount">0 payments</div>
+      </div>
+      <div class="proposal-kpi-card">
+        <div class="proposal-kpi-lbl"><i class="fas fa-users"></i> Active Consultants</div>
+        <div class="proposal-kpi-val" id="con_activeCount" style="color:var(--text-main);">0</div>
+        <div class="proposal-kpi-sub">Non-archived</div>
+      </div>
+    </div>
+
+    <!-- Filter row -->
+    <div class="card" style="padding:14px 18px; margin-bottom:14px;">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="conSearch" placeholder="Search payment #, consultant, period, invoice #..." style="flex:1; min-width:220px; max-width:340px;" oninput="renderConsultantPayments()">
+        <select id="conStatusFilter" onchange="renderConsultantPayments()" style="width:160px;">
+          <option value="ALL" selected>All Statuses</option>
+          <option value="Pending">Pending</option>
+          <option value="Paid">Paid</option>
+        </select>
+        <select id="conConsultantFilter" onchange="renderConsultantPayments()" style="width:220px;">
+          <option value="ALL">All Consultants</option>
+        </select>
+        <select id="conPeriodFilter" onchange="renderConsultantPayments()" style="width:170px;">
+          <option value="ALL" selected>All Time</option>
+          <option value="CURRENT_MONTH">Current Month</option>
+          <option value="LAST_MONTH">Last Month</option>
+          <option value="CURRENT_FY">Current FY</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Register table -->
+    <div class="card">
+      <div class="table-scroll-wrap">
+        <table id="conPaymentsTable">
+          <thead><tr>
+            <th>Payment #</th>
+            <th>Consultant</th>
+            <th>Period</th>
+            <th>Invoice Date</th>
+            <th style="text-align:right;">Subtotal</th>
+            <th style="text-align:right;">GST</th>
+            <th style="text-align:right;">Total</th>
+            <th>Status</th>
+            <th>Paid Date</th>
+            <th>Files</th>
+          </tr></thead>
+          <tbody id="conPaymentsBody"><tr><td colspan="10" style="text-align:center; padding:30px; color:var(--text-dim); font-style:italic;">No consultant payments yet. Click <strong>+ New Payment</strong> above to begin.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Sub-tab 2: Consultant Master ===== -->
+  <div id="conMasterSection" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+      <h2 style="margin:0;"><i class="fas fa-id-badge" style="color:var(--purple); margin-right:8px;"></i> Consultant Master</h2>
+      <button class="btn btn-primary" onclick="openConsultantForm()"><i class="fas fa-plus"></i> New Consultant</button>
+    </div>
+    <div id="conMasterGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px;">
+      <!-- populated by renderConsultantMaster() -->
+    </div>
+  </div>
+
+</div><!-- end #consultantsTab -->
+
+<!-- ============================================================================
+     8YZ — CONSULTANT PAYMENT FORM (full-page tab, mirrors Invoice form pattern)
+     ============================================================================ -->
+<div id="conPaymentFormTab" class="hidden">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+    <h2 id="conPayFormTitle" style="margin:0;"><i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan); margin-right:8px;"></i> New Consultant Payment</h2>
+    <button class="btn btn-ghost" onclick="showTab('consultantsTab'); showConsultantsSubtab('register');"><i class="fas fa-arrow-left"></i> Back to Register</button>
+  </div>
+
+  <input type="hidden" id="conPayFormId">
+
+  <!-- Card 1: Consultant & Period -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-user" style="color:var(--accent-cyan);"></i> Consultant &amp; Period</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <label>Consultant *</label>
+        <div style="display:flex; gap:6px; align-items:stretch;">
+          <select id="conPayConsultantId" onchange="onConPayConsultantChange()" style="flex:1;">
+            <option value="">— Select consultant —</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="openConsultantForm()" title="Create new consultant" style="padding:0 10px; font-size:11.5px; flex-shrink:0; white-space:nowrap;"><i class="fas fa-plus"></i> New</button>
+        </div>
+      </div>
+      <div>
+        <label>Period Covered</label>
+        <input type="text" id="conPayPeriod" placeholder="e.g., April 2026 or Project XYZ — March work">
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <label>Notes</label>
+      <textarea id="conPayNotes" rows="2" placeholder="Optional notes for this payment"></textarea>
+    </div>
+  </div>
+
+  <!-- Card 2: Invoice Details -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-file-invoice" style="color:var(--purple);"></i> Their Invoice Details</div>
+    <div class="prospect-form-grid-3">
+      <div>
+        <label>Payment Number</label>
+        <input type="text" id="conPayNumber" readonly style="background:var(--detail-bg); color:var(--text-dim);">
+      </div>
+      <div>
+        <label>Their Invoice Date *</label>
+        <input type="date" id="conPayInvoiceDate" onchange="onConPayInvoiceDateChange()">
+      </div>
+      <div>
+        <label>Their Invoice Number</label>
+        <input type="text" id="conPayInvoiceNumber" placeholder="As shown on consultant's invoice">
+      </div>
+      <div>
+        <label>Due Date</label>
+        <input type="date" id="conPayDueDate">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 3: Money -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-rupee-sign" style="color:var(--success);"></i> Amount</div>
+    <div class="prospect-form-grid-3">
+      <div>
+        <label>Subtotal (₹) *</label>
+        <input type="number" id="conPaySubtotal" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
+      </div>
+      <div>
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" id="conPayGstApplicable" onchange="onConPayGstToggle()" style="width:auto;">
+          GST applicable
+        </label>
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Toggles GST field below.</div>
+      </div>
+      <div id="conPayGstAmountWrap" style="display:none;">
+        <label>GST Amount (₹)</label>
+        <input type="number" id="conPayGstAmount" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Enter directly from invoice. Not computed from %.</div>
+      </div>
+    </div>
+    <div style="margin-top:16px; padding:14px 18px; background:var(--detail-bg); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-size:12px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Total Payable</div>
+      <div id="conPayTotalDisplay" style="font-size:22px; font-weight:650; color:var(--accent-cyan); font-variant-numeric: tabular-nums;">₹0.00</div>
+    </div>
+  </div>
+
+  <!-- Card 4: Payment -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-money-check-alt" style="color:var(--warning);"></i> Payment</div>
+    <div class="prospect-form-grid-3">
+      <div>
+        <label>Status</label>
+        <select id="conPayStatus" onchange="onConPayStatusChange()">
+          <option value="Pending">Pending</option>
+          <option value="Paid">Paid</option>
+        </select>
+      </div>
+      <div id="conPayPaidDateWrap" style="display:none;">
+        <label>Paid Date</label>
+        <input type="date" id="conPayPaidDate">
+      </div>
+      <div>
+        <label>Payment Mode</label>
+        <select id="conPayMode">
+          <option value="">— Select —</option>
+          <option value="Bank Transfer">Bank Transfer</option>
+          <option value="UPI">UPI</option>
+          <option value="Cheque">Cheque</option>
+          <option value="Cash">Cash</option>
+        </select>
+      </div>
+      <div>
+        <label>Payment Reference</label>
+        <input type="text" id="conPayReference" placeholder="UTR / cheque no / UPI ref">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 5: Attachments (two zones) -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Attachments</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <div style="font-size:11.5px; font-weight:600; color:var(--text-main); margin-bottom:8px;">Consultant's Invoice <span style="font-weight:400; color:var(--text-dim); font-size:11px;">(primary)</span></div>
+        <div id="conPayInvoiceAttachZone">
+          <div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the payment first to attach files.</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:11.5px; font-weight:600; color:var(--text-main); margin-bottom:8px;">Other Documents <span style="font-weight:400; color:var(--text-dim); font-size:11px;">(receipts, signed work orders, etc.)</span></div>
+        <div id="conPayOtherAttachZone">
+          <div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the payment first to attach files.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sticky save bar -->
+  <div class="prop-sticky-save-bar">
+    <button class="btn btn-ghost" id="conPayDeleteBtn" onclick="deleteConsultantPayment()" style="display:none; color:var(--danger);"><i class="fas fa-trash"></i> Delete</button>
+    <button class="btn btn-ghost" id="conPayDupBtn" onclick="duplicateLastConsultantPayment()" style="display:none;"><i class="fas fa-clone"></i> Duplicate Last Payment</button>
+    <div style="flex:1;"></div>
+    <button class="btn btn-ghost" onclick="showTab('consultantsTab'); showConsultantsSubtab('register');">Cancel</button>
+    <button class="btn btn-primary" onclick="saveConsultantPaymentFromForm()"><i class="fas fa-save"></i> Save Payment</button>
+  </div>
+</div><!-- end #conPaymentFormTab -->
+
+<!-- ============================================================================
+     8YZ — CONSULTANT MASTER FORM (full-page tab)
+     ============================================================================ -->
+<div id="conMasterFormTab" class="hidden">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+    <h2 id="conMasterFormTitle" style="margin:0;"><i class="fas fa-id-badge" style="color:var(--purple); margin-right:8px;"></i> New Consultant</h2>
+    <button class="btn btn-ghost" onclick="showTab('consultantsTab'); showConsultantsSubtab('master');"><i class="fas fa-arrow-left"></i> Back to Master</button>
+  </div>
+
+  <input type="hidden" id="conMasterFormId">
+
+  <!-- Card 1: Identity -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-user" style="color:var(--accent-cyan);"></i> Identity</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <label>Name *</label>
+        <input type="text" id="conMasterName" placeholder="e.g., Rajesh Sharma">
+      </div>
+      <div>
+        <label>Role / Specialization</label>
+        <input type="text" id="conMasterRole" placeholder="e.g., Network Security Consultant">
+      </div>
+      <div>
+        <label>Contact Email</label>
+        <input type="email" id="conMasterEmail" placeholder="optional">
+      </div>
+      <div>
+        <label>Contact Phone</label>
+        <input type="text" id="conMasterPhone" placeholder="optional">
+      </div>
+      <div>
+        <label>PAN Number</label>
+        <input type="text" id="conMasterPan" placeholder="optional, for reconciliation" style="text-transform:uppercase;">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 2: GST -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-receipt" style="color:var(--success);"></i> GST</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" id="conMasterGstReg" onchange="onConMasterGstToggle()" style="width:auto;">
+          GST Registered
+        </label>
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">When on, consultant's GST number is captured below. Drives default for new payment records.</div>
+      </div>
+      <div id="conMasterGstNumWrap" style="display:none;">
+        <label>GST Number</label>
+        <input type="text" id="conMasterGstNum" placeholder="e.g., 27ABCDE1234F1Z5" style="text-transform:uppercase;">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 3: Defaults -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-sliders-h" style="color:var(--accent-cyan);"></i> Defaults</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <label>Default Payment Terms (days)</label>
+        <input type="number" id="conMasterTerms" min="0" value="30">
+      </div>
+      <div>
+        <label>Notes</label>
+        <textarea id="conMasterNotes" rows="2" placeholder="Any internal notes about this consultant"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 4: Attachments -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Agreements &amp; Documents</div>
+    <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:10px;">NDAs, master service agreements, KYC docs, etc. Persistent across all payments to this consultant.</div>
+    <div id="conMasterAttachZone">
+      <div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the consultant first to attach files.</div>
+    </div>
+  </div>
+
+  <!-- Sticky save bar -->
+  <div class="prop-sticky-save-bar">
+    <button class="btn btn-ghost" id="conMasterArchiveBtn" onclick="archiveConsultant()" style="display:none; color:var(--warning);"><i class="fas fa-archive"></i> Archive</button>
+    <button class="btn btn-ghost" id="conMasterUnarchiveBtn" onclick="unarchiveConsultant()" style="display:none; color:var(--accent-cyan);"><i class="fas fa-undo"></i> Unarchive</button>
+    <div style="flex:1;"></div>
+    <button class="btn btn-ghost" onclick="showTab('consultantsTab'); showConsultantsSubtab('master');">Cancel</button>
+    <button class="btn btn-primary" onclick="saveConsultantFromForm()"><i class="fas fa-save"></i> Save Consultant</button>
+  </div>
+</div><!-- end #conMasterFormTab -->
+
 <!-- Invoice Form Modal -->
 <!-- ===================== INVOICE FORM TAB (Bug fix #36) =====================
      Converted from modal (`invFormModal`) to a full-page tab. All field IDs are
@@ -11432,6 +11780,9 @@ const ALL_MS_STORAGE_KEYS = [
     'ms_invoices_view_v1',       // Invoices view preference
     'ms_attachments_v1',         // All attached files (base64)
     'ms_commissions_v1',         // Phase 4D — Commission accruals + payouts ledger
+    // 8YZ — Consultants module
+    'ms_consultants_v1',         // Consultant master records
+    'ms_consultant_payments_v1', // Consultant payment ledger
     'ms_schema_meta_v1',         // The schema stamp itself
     'ms_theme'                   // Light/dark theme preference
 ];
@@ -11490,7 +11841,9 @@ function getDataSnapshotCounts() {
         invoices: count('ms_invoices_v1'),
         clients: count('ms_client_master_v1'),
         oems: count('ms_oem_master_v1'),
-        attachments: count('ms_attachments_v1')
+        attachments: count('ms_attachments_v1'),
+        consultants: count('ms_consultants_v1'),
+        consultantPayments: count('ms_consultant_payments_v1')
     };
 }
 
@@ -16755,7 +17108,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -16778,6 +17131,15 @@ function showTab(tab) {
 
     if(tab === 'businessSnapshotTab') {
         if (typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot();
+    }
+
+    // 8YZ — Consultants tab: render the register sub-tab on open. Resets to
+    // register view each time the user navigates here from elsewhere.
+    if (tab === 'consultantsTab') {
+        if (typeof renderConsultantPayments === 'function') {
+            // Reset to register sub-tab by default
+            showConsultantsSubtab('register');
+        }
     }
 
     // Bug fix #27 — Cleanup: removed transitional `if(tab === 'arApTab')` handler. AR/AP rendering is now triggered by the invoicesTab and purchaseInvoicesTab handlers below.
@@ -36122,6 +36484,911 @@ function renderBusinessSnapshot() {
    ====================================================================== */
 
 
+/* ======================================================================
+   8YZ — CONSULTANTS MODULE
+   ----------------------------------------------------------------------
+   Tracks payments to consultants/freelancers/contractors who provide
+   labor across clients. Distinct from Payables (PO/OEM driven). Two data
+   lanes:
+     - consultants[]          — master records (name, role, GST, defaults)
+     - consultantPayments[]   — payment ledger (one row per invoice paid)
+   Storage: ms_consultants_v1 + ms_consultant_payments_v1 (Rust commands
+   storage_save_consultants + storage_save_consultant_payments).
+   Attachments: existing system with entity types 'consultant' (for NDAs/
+   agreements on master) and 'consultant_payment' (for invoice + other docs
+   per payment; the description field distinguishes "Invoice" vs "Other").
+   ====================================================================== */
+
+let consultants = [];
+let consultantPayments = [];
+
+function initConsultants() {
+    try {
+        const rawC = localStorage.getItem('ms_consultants_v1');
+        consultants = rawC ? JSON.parse(rawC) : [];
+        if (!Array.isArray(consultants)) consultants = [];
+    } catch (e) {
+        console.warn("Consultants load failed:", e);
+        consultants = [];
+    }
+    try {
+        const rawP = localStorage.getItem('ms_consultant_payments_v1');
+        consultantPayments = rawP ? JSON.parse(rawP) : [];
+        if (!Array.isArray(consultantPayments)) consultantPayments = [];
+    } catch (e) {
+        console.warn("Consultant payments load failed:", e);
+        consultantPayments = [];
+    }
+}
+
+function saveConsultants() {
+    try { localStorage.setItem('ms_consultants_v1', JSON.stringify(consultants)); return true; }
+    catch (e) { console.error("Consultants save failed:", e); return false; }
+}
+
+function saveConsultantPayments() {
+    try { localStorage.setItem('ms_consultant_payments_v1', JSON.stringify(consultantPayments)); return true; }
+    catch (e) { console.error("Consultant payments save failed:", e); return false; }
+}
+
+// ----- ID helpers -----
+function conNewId(prefix) {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function consultantBlank() {
+    return {
+        id: conNewId('cons'),
+        name: '',
+        role: '',
+        contactEmail: '',
+        contactPhone: '',
+        panNumber: '',
+        gstRegistered: false,
+        gstNumber: '',
+        defaultPaymentTermsDays: 30,
+        notes: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        archived: false
+    };
+}
+
+function consultantPaymentBlank() {
+    return {
+        id: conNewId('cpay'),
+        consultantId: '',
+        paymentNumber: '',
+        periodCovered: '',
+        invoiceDate: '',
+        invoiceNumber: '',
+        dueDate: '',
+        paidDate: null,
+        subtotal: 0,
+        gstApplicable: false,
+        gstAmount: 0,
+        totalAmount: 0,
+        paymentMode: '',
+        paymentReference: '',
+        status: 'Pending',
+        notes: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+}
+
+// 8YZ — Numbering. Uses MS-CON- prefix (decided Q1). Follows companyProfile's
+// numberingMode like invoices/POs (sequential or fy_month). Simple sequential
+// fallback if companyProfile not yet set up: scan existing payments for max
+// trailing integer and increment.
+function assignConsultantPaymentNumber() {
+    const prefix = 'MS-CON-';
+    const mode = (companyProfile && companyProfile.numberingMode) || 'sequential';
+    if (mode === 'fy_month' && typeof consumeFyMonthNumber === 'function') {
+        return consumeFyMonthNumber('consultant_payment', prefix);
+    }
+    // Sequential — find highest existing trailing integer
+    let maxN = 1000;
+    consultantPayments.forEach(p => {
+        if (!p.paymentNumber) return;
+        const m = p.paymentNumber.match(/(\d+)$/);
+        if (m) {
+            const n = parseInt(m[1]);
+            if (!isNaN(n) && n > maxN) maxN = n;
+        }
+    });
+    return prefix + (maxN + 1);
+}
+
+function computeConsultantPaymentTotal(rec) {
+    const sub = parseFloat(rec.subtotal) || 0;
+    const gst = (rec.gstApplicable && rec.gstAmount) ? (parseFloat(rec.gstAmount) || 0) : 0;
+    return { subtotal: sub, gstAmount: gst, total: sub + gst };
+}
+
+function getConsultantById(id) {
+    return consultants.find(c => c.id === id) || null;
+}
+
+function getConsultantName(id) {
+    const c = getConsultantById(id);
+    return c ? c.name : '(unknown)';
+}
+
+// ----- Sub-tab toggling -----
+function showConsultantsSubtab(which) {
+    const reg = document.getElementById('conRegisterSection');
+    const mas = document.getElementById('conMasterSection');
+    const regBtn = document.getElementById('conSubtabRegisterBtn');
+    const masBtn = document.getElementById('conSubtabMasterBtn');
+    if (which === 'master') {
+        if (reg) reg.style.display = 'none';
+        if (mas) mas.style.display = '';
+        if (regBtn) regBtn.classList.remove('active');
+        if (masBtn) masBtn.classList.add('active');
+        renderConsultantMaster();
+    } else {
+        if (reg) reg.style.display = '';
+        if (mas) mas.style.display = 'none';
+        if (regBtn) regBtn.classList.add('active');
+        if (masBtn) masBtn.classList.remove('active');
+        renderConsultantPayments();
+    }
+}
+
+// 8YZ — Current FY range helper. Computes inline rather than calling
+// getCurrentFY() (which doesn't exist in crm.html). Indian FY: April 1 to March 31.
+function getCurrentFYRange() {
+    const now = new Date();
+    const y = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return { start: new Date(y, 3, 1), end: new Date(y + 1, 2, 31, 23, 59, 59) };
+}
+
+// ----- KPI computation -----
+function recomputeConsultantKPIs(filteredPayments) {
+    // KPIs are global across ALL payments, not the filtered set (matches the
+    // Invoices KPI behaviour: the strip shows totals, the table below shows the
+    // filtered view).
+    const fmt = (n) => '₹' + (Math.round(n)).toLocaleString('en-IN');
+    let pendingTot = 0, pendingCnt = 0;
+    let paidMtdTot = 0, paidMtdCnt = 0;
+    let paidYtdTot = 0, paidYtdCnt = 0;
+
+    const now = new Date();
+    const curMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const fy = getCurrentFYRange();
+
+    consultantPayments.forEach(p => {
+        const t = parseFloat(p.totalAmount) || 0;
+        if (p.status === 'Pending') {
+            pendingTot += t; pendingCnt++;
+        } else if (p.status === 'Paid' && p.paidDate) {
+            const pd = new Date(p.paidDate);
+            if (!isNaN(pd.getTime())) {
+                if (pd >= curMonthStart) { paidMtdTot += t; paidMtdCnt++; }
+                if (fy && pd >= fy.start && pd <= fy.end) { paidYtdTot += t; paidYtdCnt++; }
+            }
+        }
+    });
+
+    const activeCount = consultants.filter(c => !c.archived).length;
+    const setT = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+    setT('con_pendingTotal', fmt(pendingTot));
+    setT('con_pendingCount', `${pendingCnt} payment${pendingCnt === 1 ? '' : 's'}`);
+    setT('con_paidMtd', fmt(paidMtdTot));
+    setT('con_paidMtdCount', `${paidMtdCnt} payment${paidMtdCnt === 1 ? '' : 's'}`);
+    setT('con_paidYtd', fmt(paidYtdTot));
+    setT('con_paidYtdCount', `${paidYtdCnt} payment${paidYtdCnt === 1 ? '' : 's'}`);
+    setT('con_activeCount', String(activeCount));
+}
+
+// ----- Filter dropdown population -----
+function populateConsultantFilterDropdown() {
+    const sel = document.getElementById('conConsultantFilter');
+    if (!sel) return;
+    const current = sel.value || 'ALL';
+    const opts = ['<option value="ALL">All Consultants</option>'];
+    consultants
+        .filter(c => !c.archived)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        .forEach(c => {
+            opts.push(`<option value="${pEsc(c.id)}"${current === c.id ? ' selected' : ''}>${pEsc(c.name || '(unnamed)')}</option>`);
+        });
+    sel.innerHTML = opts.join('');
+}
+
+function populateConPayConsultantDropdown(selectedId) {
+    const sel = document.getElementById('conPayConsultantId');
+    if (!sel) return;
+    const cur = selectedId || sel.value || '';
+    const opts = ['<option value="">— Select consultant —</option>'];
+    consultants
+        .filter(c => !c.archived || c.id === cur) // show archived if it's the currently-selected one
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        .forEach(c => {
+            const label = c.name + (c.archived ? ' (archived)' : '') + (c.role ? ' — ' + c.role : '');
+            opts.push(`<option value="${pEsc(c.id)}"${cur === c.id ? ' selected' : ''}>${pEsc(label)}</option>`);
+        });
+    sel.innerHTML = opts.join('');
+}
+
+// ----- Date helpers (period filter) -----
+function isPaymentInPeriod(payment, periodKey) {
+    if (periodKey === 'ALL') return true;
+    // Filter by invoiceDate (the date on consultant's invoice — most natural
+    // "when did this expense fall" anchor)
+    if (!payment.invoiceDate) return false;
+    const d = new Date(payment.invoiceDate);
+    if (isNaN(d.getTime())) return false;
+    const now = new Date();
+    if (periodKey === 'CURRENT_MONTH') {
+        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    }
+    if (periodKey === 'LAST_MONTH') {
+        const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lmEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+        return d >= lm && d <= lmEnd;
+    }
+    if (periodKey === 'CURRENT_FY') {
+        const fy = getCurrentFYRange();
+        return fy && d >= fy.start && d <= fy.end;
+    }
+    return true;
+}
+
+// ----- Payment Register render -----
+function renderConsultantPayments() {
+    populateConsultantFilterDropdown();
+    const tbody = document.getElementById('conPaymentsBody');
+    if (!tbody) return;
+
+    const sEl = document.getElementById('conSearch');
+    const stEl = document.getElementById('conStatusFilter');
+    const ccEl = document.getElementById('conConsultantFilter');
+    const ppEl = document.getElementById('conPeriodFilter');
+    const search = ((sEl && sEl.value) || '').toLowerCase().trim();
+    const statusF = (stEl && stEl.value) || 'ALL';
+    const consultantF = (ccEl && ccEl.value) || 'ALL';
+    const periodF = (ppEl && ppEl.value) || 'ALL';
+
+    let rows = consultantPayments.slice();
+    if (statusF !== 'ALL') rows = rows.filter(r => r.status === statusF);
+    if (consultantF !== 'ALL') rows = rows.filter(r => r.consultantId === consultantF);
+    rows = rows.filter(r => isPaymentInPeriod(r, periodF));
+    if (search) {
+        rows = rows.filter(r => {
+            const consName = (getConsultantName(r.consultantId) || '').toLowerCase();
+            return (r.paymentNumber || '').toLowerCase().includes(search)
+                || consName.includes(search)
+                || (r.periodCovered || '').toLowerCase().includes(search)
+                || (r.invoiceNumber || '').toLowerCase().includes(search)
+                || (r.notes || '').toLowerCase().includes(search);
+        });
+    }
+
+    // Sort by invoiceDate descending (newest first)
+    rows.sort((a, b) => {
+        const da = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+        const db = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+        return db - da;
+    });
+
+    recomputeConsultantKPIs(rows);
+
+    if (rows.length === 0) {
+        const msg = consultantPayments.length === 0
+            ? 'No consultant payments yet. Click <strong>+ New Payment</strong> above to begin.'
+            : 'No payments match the current filters.';
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:30px; color:var(--text-dim); font-style:italic;">${msg}</td></tr>`;
+        return;
+    }
+
+    const fmtINR = (n) => '₹' + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    tbody.innerHTML = rows.map(r => {
+        const consName = pEsc(getConsultantName(r.consultantId));
+        const statusBadge = r.status === 'Paid'
+            ? '<span class="badge ok">Paid</span>'
+            : '<span class="badge pending">Pending</span>';
+        const attCount = (typeof getAttachmentCount === 'function')
+            ? getAttachmentCount('consultant_payment', r.id) : 0;
+        const attBadge = attCount > 0
+            ? `<span style="display:inline-flex; align-items:center; gap:3px; font-size:10.5px; padding:2px 7px; border-radius:999px; background:var(--accent-tint-low); color:var(--accent-cyan); font-weight:600;"><i class="fas fa-paperclip" style="font-size:9px;"></i>${attCount}</span>`
+            : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
+        const invDate = r.invoiceDate ? (typeof formatDateReadable === 'function' ? formatDateReadable(r.invoiceDate) : r.invoiceDate) : '—';
+        const paidDate = r.paidDate ? (typeof formatDateReadable === 'function' ? formatDateReadable(r.paidDate) : r.paidDate) : '—';
+        return `<tr onclick="openConsultantPaymentForm('${pEsc(r.id)}')" style="cursor:pointer;">
+            <td style="font-family:monospace; font-size:11.5px;">${pEsc(r.paymentNumber || '—')}</td>
+            <td><strong>${consName}</strong></td>
+            <td>${pEsc(r.periodCovered || '—')}</td>
+            <td>${invDate}</td>
+            <td style="text-align:right; font-variant-numeric: tabular-nums;">${fmtINR(r.subtotal)}</td>
+            <td style="text-align:right; font-variant-numeric: tabular-nums; color:var(--text-dim);">${(r.gstApplicable && r.gstAmount) ? fmtINR(r.gstAmount) : '—'}</td>
+            <td style="text-align:right; font-weight:600; font-variant-numeric: tabular-nums;">${fmtINR(r.totalAmount)}</td>
+            <td>${statusBadge}</td>
+            <td>${paidDate}</td>
+            <td>${attBadge}</td>
+        </tr>`;
+    }).join('');
+}
+
+// ----- Consultant Master grid render -----
+function renderConsultantMaster() {
+    const grid = document.getElementById('conMasterGrid');
+    if (!grid) return;
+    if (consultants.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding:40px; color:var(--text-dim); font-style:italic;">
+            No consultants yet. Click <strong>+ New Consultant</strong> above to add one.
+        </div>`;
+        return;
+    }
+    // Sort: active first (alphabetical), then archived (alphabetical)
+    const sorted = consultants.slice().sort((a, b) => {
+        if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
+        return (a.name || '').localeCompare(b.name || '');
+    });
+    grid.innerHTML = sorted.map(c => {
+        const paymentCount = consultantPayments.filter(p => p.consultantId === c.id).length;
+        const attCount = (typeof getAttachmentCount === 'function')
+            ? getAttachmentCount('consultant', c.id) : 0;
+        const gstBadge = c.gstRegistered
+            ? `<span style="font-size:10px; padding:2px 7px; border-radius:999px; background:var(--success); color:white; font-weight:600;">GST</span>`
+            : `<span style="font-size:10px; padding:2px 7px; border-radius:999px; background:var(--text-dim); color:white; font-weight:600;">No GST</span>`;
+        const archBadge = c.archived
+            ? `<span style="font-size:10px; padding:2px 7px; border-radius:999px; background:var(--warning); color:white; font-weight:600;">Archived</span>` : '';
+        return `<div class="card" style="padding:16px; ${c.archived ? 'opacity:0.65;' : ''}">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:15px; color:var(--text-main); margin-bottom:3px;">${pEsc(c.name || '(unnamed)')}</div>
+                    ${c.role ? `<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">${pEsc(c.role)}</div>` : '<div style="margin-bottom:8px;"></div>'}
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+                    ${gstBadge}
+                    ${archBadge}
+                </div>
+            </div>
+            <div style="display:flex; gap:14px; font-size:11.5px; color:var(--text-dim); margin-top:8px; padding-top:8px; border-top:1px solid var(--glass-border);">
+                <span><i class="fas fa-file-invoice-dollar"></i> ${paymentCount} payment${paymentCount === 1 ? '' : 's'}</span>
+                <span><i class="fas fa-paperclip"></i> ${attCount} doc${attCount === 1 ? '' : 's'}</span>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:6px;">
+                <button class="btn btn-ghost btn-sm" onclick="openConsultantForm('${pEsc(c.id)}')" style="flex:1;"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn btn-ghost btn-sm" onclick="openConsultantPaymentForm(null, '${pEsc(c.id)}')" style="flex:1;"><i class="fas fa-plus"></i> Payment</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ----- Payment Form: open / save / delete -----
+function openConsultantPaymentForm(id, presetConsultantId) {
+    showTab('conPaymentFormTab');
+    const title = document.getElementById('conPayFormTitle');
+    const delBtn = document.getElementById('conPayDeleteBtn');
+    const dupBtn = document.getElementById('conPayDupBtn');
+    const val = (k, v) => { const el = document.getElementById(k); if (el) el.value = (v === null || v === undefined) ? '' : v; };
+
+    populateConPayConsultantDropdown();
+
+    if (id) {
+        const rec = consultantPayments.find(p => p.id === id);
+        if (!rec) { alert('Payment not found.'); return; }
+        if (title) title.innerHTML = `<i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan); margin-right:8px;"></i> Edit Payment <span style="font-family:monospace; font-size:18px; color:var(--text-dim);">${pEsc(rec.paymentNumber || '')}</span>`;
+        val('conPayFormId', rec.id);
+        val('conPayConsultantId', rec.consultantId);
+        val('conPayPeriod', rec.periodCovered);
+        val('conPayNotes', rec.notes);
+        val('conPayNumber', rec.paymentNumber);
+        val('conPayInvoiceDate', rec.invoiceDate);
+        val('conPayInvoiceNumber', rec.invoiceNumber);
+        val('conPayDueDate', rec.dueDate);
+        val('conPaySubtotal', rec.subtotal);
+        const gstCb = document.getElementById('conPayGstApplicable');
+        if (gstCb) gstCb.checked = !!rec.gstApplicable;
+        val('conPayGstAmount', rec.gstAmount);
+        document.getElementById('conPayGstAmountWrap').style.display = rec.gstApplicable ? '' : 'none';
+        val('conPayStatus', rec.status || 'Pending');
+        val('conPayPaidDate', rec.paidDate);
+        document.getElementById('conPayPaidDateWrap').style.display = rec.status === 'Paid' ? '' : 'none';
+        val('conPayMode', rec.paymentMode);
+        val('conPayReference', rec.paymentReference);
+        if (delBtn) delBtn.style.display = '';
+        if (dupBtn) dupBtn.style.display = '';
+        renderConsultantPaymentAttachZones(rec.id);
+    } else {
+        // New payment
+        const blank = consultantPaymentBlank();
+        blank.paymentNumber = assignConsultantPaymentNumber();
+        if (title) title.innerHTML = `<i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan); margin-right:8px;"></i> New Consultant Payment`;
+        val('conPayFormId', blank.id);
+        val('conPayConsultantId', presetConsultantId || '');
+        val('conPayPeriod', '');
+        val('conPayNotes', '');
+        val('conPayNumber', blank.paymentNumber);
+        val('conPayInvoiceDate', '');
+        val('conPayInvoiceNumber', '');
+        val('conPayDueDate', '');
+        val('conPaySubtotal', '0');
+        const gstCb = document.getElementById('conPayGstApplicable');
+        if (gstCb) {
+            // Default GST applicable from consultant's gstRegistered if preset
+            if (presetConsultantId) {
+                const c = getConsultantById(presetConsultantId);
+                gstCb.checked = !!(c && c.gstRegistered);
+            } else {
+                gstCb.checked = false;
+            }
+        }
+        val('conPayGstAmount', '0');
+        document.getElementById('conPayGstAmountWrap').style.display = (gstCb && gstCb.checked) ? '' : 'none';
+        val('conPayStatus', 'Pending');
+        val('conPayPaidDate', '');
+        document.getElementById('conPayPaidDateWrap').style.display = 'none';
+        val('conPayMode', '');
+        val('conPayReference', '');
+        if (delBtn) delBtn.style.display = 'none';
+        if (dupBtn) dupBtn.style.display = (presetConsultantId && consultantPayments.some(p => p.consultantId === presetConsultantId)) ? '' : 'none';
+        // Attach zone shows "save first" placeholder
+        const inv = document.getElementById('conPayInvoiceAttachZone');
+        const oth = document.getElementById('conPayOtherAttachZone');
+        if (inv) inv.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the payment first to attach files.</div>';
+        if (oth) oth.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the payment first to attach files.</div>';
+    }
+    recomputeConPayTotal();
+}
+
+function onConPayConsultantChange() {
+    // When a consultant is picked, default GST applicable from their master
+    // record, AND default due date offset from their defaultPaymentTermsDays
+    // if invoice date is already filled.
+    const consultantId = document.getElementById('conPayConsultantId').value;
+    if (!consultantId) return;
+    const c = getConsultantById(consultantId);
+    if (!c) return;
+    // Only default GST if not already manually set on this open form
+    const gstCb = document.getElementById('conPayGstApplicable');
+    const subEl = document.getElementById('conPaySubtotal');
+    const isBlankSub = !subEl || !subEl.value || parseFloat(subEl.value) === 0;
+    if (gstCb && isBlankSub) {
+        gstCb.checked = !!c.gstRegistered;
+        document.getElementById('conPayGstAmountWrap').style.display = gstCb.checked ? '' : 'none';
+    }
+    // Default due date from invoice date + terms
+    onConPayInvoiceDateChange();
+}
+
+function onConPayInvoiceDateChange() {
+    const invD = document.getElementById('conPayInvoiceDate').value;
+    const dueEl = document.getElementById('conPayDueDate');
+    if (!invD || !dueEl) return;
+    // Only set due date if it's currently blank (don't clobber manual edits)
+    if (dueEl.value) return;
+    const consultantId = document.getElementById('conPayConsultantId').value;
+    const c = consultantId ? getConsultantById(consultantId) : null;
+    const days = (c && Number(c.defaultPaymentTermsDays)) || 30;
+    const d = new Date(invD);
+    if (isNaN(d.getTime())) return;
+    d.setDate(d.getDate() + days);
+    const iso = d.toISOString().split('T')[0];
+    dueEl.value = iso;
+}
+
+function onConPayGstToggle() {
+    const cb = document.getElementById('conPayGstApplicable');
+    const wrap = document.getElementById('conPayGstAmountWrap');
+    if (!cb || !wrap) return;
+    wrap.style.display = cb.checked ? '' : 'none';
+    if (!cb.checked) {
+        document.getElementById('conPayGstAmount').value = '0';
+    }
+    recomputeConPayTotal();
+}
+
+function onConPayStatusChange() {
+    const st = document.getElementById('conPayStatus').value;
+    const wrap = document.getElementById('conPayPaidDateWrap');
+    if (!wrap) return;
+    wrap.style.display = st === 'Paid' ? '' : 'none';
+    if (st === 'Paid') {
+        const pdEl = document.getElementById('conPayPaidDate');
+        if (pdEl && !pdEl.value) {
+            pdEl.value = new Date().toISOString().split('T')[0];
+        }
+    }
+}
+
+function recomputeConPayTotal() {
+    const sub = parseFloat(document.getElementById('conPaySubtotal').value) || 0;
+    const gstApp = document.getElementById('conPayGstApplicable').checked;
+    const gst = gstApp ? (parseFloat(document.getElementById('conPayGstAmount').value) || 0) : 0;
+    const total = sub + gst;
+    const disp = document.getElementById('conPayTotalDisplay');
+    if (disp) disp.innerText = '₹' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function saveConsultantPaymentFromForm() {
+    const consultantId = document.getElementById('conPayConsultantId').value;
+    if (!consultantId) { alert('Please select a consultant.'); return; }
+    const invoiceDate = document.getElementById('conPayInvoiceDate').value;
+    if (!invoiceDate) { alert('Invoice date is required.'); return; }
+
+    const idVal = document.getElementById('conPayFormId').value;
+    const now = new Date().toISOString();
+    let rec, isNew = false;
+    if (idVal && consultantPayments.some(p => p.id === idVal)) {
+        rec = consultantPayments.find(p => p.id === idVal);
+    } else {
+        rec = consultantPaymentBlank();
+        rec.id = idVal || rec.id;
+        rec.paymentNumber = document.getElementById('conPayNumber').value || assignConsultantPaymentNumber();
+        consultantPayments.push(rec);
+        isNew = true;
+    }
+    rec.consultantId = consultantId;
+    rec.periodCovered = (document.getElementById('conPayPeriod').value || '').trim();
+    rec.invoiceDate = invoiceDate;
+    rec.invoiceNumber = (document.getElementById('conPayInvoiceNumber').value || '').trim();
+    rec.dueDate = document.getElementById('conPayDueDate').value || '';
+    rec.subtotal = parseFloat(document.getElementById('conPaySubtotal').value) || 0;
+    rec.gstApplicable = document.getElementById('conPayGstApplicable').checked;
+    rec.gstAmount = rec.gstApplicable ? (parseFloat(document.getElementById('conPayGstAmount').value) || 0) : 0;
+    const totals = computeConsultantPaymentTotal(rec);
+    rec.totalAmount = totals.total;
+    rec.status = document.getElementById('conPayStatus').value || 'Pending';
+    rec.paidDate = (rec.status === 'Paid') ? (document.getElementById('conPayPaidDate').value || null) : null;
+    rec.paymentMode = document.getElementById('conPayMode').value || '';
+    rec.paymentReference = (document.getElementById('conPayReference').value || '').trim();
+    rec.notes = (document.getElementById('conPayNotes').value || '').trim();
+    rec.updatedAt = now;
+
+    saveConsultantPayments();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-check-circle"></i> Payment <strong>${pEsc(rec.paymentNumber)}</strong> ${isNew ? 'created' : 'updated'}.`, 4000);
+    }
+    showTab('consultantsTab');
+    showConsultantsSubtab('register');
+}
+
+function deleteConsultantPayment() {
+    const idVal = document.getElementById('conPayFormId').value;
+    const rec = consultantPayments.find(p => p.id === idVal);
+    if (!rec) return;
+    if (!confirm(`Permanently delete payment ${rec.paymentNumber}? This cannot be undone. Attached files will also be removed.`)) return;
+    consultantPayments = consultantPayments.filter(p => p.id !== idVal);
+    // Clean up attachments for this payment
+    if (typeof attachments === 'object' && attachments) {
+        const key = `consultant_payment_${idVal}`;
+        if (attachments[key]) {
+            delete attachments[key];
+            if (typeof saveAttachments === 'function') saveAttachments();
+        }
+    }
+    saveConsultantPayments();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-trash"></i> Payment deleted.`, 3500);
+    }
+    showTab('consultantsTab');
+    showConsultantsSubtab('register');
+}
+
+function duplicateLastConsultantPayment() {
+    const consultantId = document.getElementById('conPayConsultantId').value;
+    if (!consultantId) { alert('Please select a consultant first.'); return; }
+    // Find most recent payment for this consultant (by invoiceDate desc)
+    const candidates = consultantPayments
+        .filter(p => p.consultantId === consultantId)
+        .sort((a, b) => {
+            const da = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+            const db = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+            return db - da;
+        });
+    if (candidates.length === 0) { alert('No previous payment found for this consultant.'); return; }
+    const last = candidates[0];
+    // Clone: keep amounts + mode, blank dates + status + reference + paymentNumber
+    document.getElementById('conPaySubtotal').value = last.subtotal || 0;
+    const gstCb = document.getElementById('conPayGstApplicable');
+    if (gstCb) gstCb.checked = !!last.gstApplicable;
+    document.getElementById('conPayGstAmount').value = last.gstAmount || 0;
+    document.getElementById('conPayGstAmountWrap').style.display = (gstCb && gstCb.checked) ? '' : 'none';
+    document.getElementById('conPayMode').value = last.paymentMode || '';
+    document.getElementById('conPayPeriod').value = '';  // user types fresh period
+    document.getElementById('conPayNotes').value = last.notes || '';
+    document.getElementById('conPayInvoiceDate').value = '';
+    document.getElementById('conPayInvoiceNumber').value = '';
+    document.getElementById('conPayDueDate').value = '';
+    document.getElementById('conPayStatus').value = 'Pending';
+    document.getElementById('conPayPaidDate').value = '';
+    document.getElementById('conPayPaidDateWrap').style.display = 'none';
+    document.getElementById('conPayReference').value = '';
+    recomputeConPayTotal();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-clone"></i> Cloned amounts from <strong>${pEsc(last.paymentNumber)}</strong>. Update period + dates.`, 4500);
+    }
+}
+
+// ----- Master Form: open / save / archive -----
+function openConsultantForm(id) {
+    showTab('conMasterFormTab');
+    const title = document.getElementById('conMasterFormTitle');
+    const archBtn = document.getElementById('conMasterArchiveBtn');
+    const unarchBtn = document.getElementById('conMasterUnarchiveBtn');
+    const val = (k, v) => { const el = document.getElementById(k); if (el) el.value = (v === null || v === undefined) ? '' : v; };
+
+    if (id) {
+        const c = getConsultantById(id);
+        if (!c) { alert('Consultant not found.'); return; }
+        if (title) title.innerHTML = `<i class="fas fa-id-badge" style="color:var(--purple); margin-right:8px;"></i> Edit Consultant — ${pEsc(c.name || '(unnamed)')}`;
+        val('conMasterFormId', c.id);
+        val('conMasterName', c.name);
+        val('conMasterRole', c.role);
+        val('conMasterEmail', c.contactEmail);
+        val('conMasterPhone', c.contactPhone);
+        val('conMasterPan', c.panNumber);
+        const gstCb = document.getElementById('conMasterGstReg');
+        if (gstCb) gstCb.checked = !!c.gstRegistered;
+        val('conMasterGstNum', c.gstNumber);
+        document.getElementById('conMasterGstNumWrap').style.display = c.gstRegistered ? '' : 'none';
+        val('conMasterTerms', c.defaultPaymentTermsDays || 30);
+        val('conMasterNotes', c.notes);
+        if (archBtn) archBtn.style.display = c.archived ? 'none' : '';
+        if (unarchBtn) unarchBtn.style.display = c.archived ? '' : 'none';
+        renderConsultantMasterAttachZone(c.id);
+    } else {
+        const blank = consultantBlank();
+        if (title) title.innerHTML = `<i class="fas fa-id-badge" style="color:var(--purple); margin-right:8px;"></i> New Consultant`;
+        val('conMasterFormId', blank.id);
+        val('conMasterName', '');
+        val('conMasterRole', '');
+        val('conMasterEmail', '');
+        val('conMasterPhone', '');
+        val('conMasterPan', '');
+        const gstCb = document.getElementById('conMasterGstReg');
+        if (gstCb) gstCb.checked = false;
+        val('conMasterGstNum', '');
+        document.getElementById('conMasterGstNumWrap').style.display = 'none';
+        val('conMasterTerms', 30);
+        val('conMasterNotes', '');
+        if (archBtn) archBtn.style.display = 'none';
+        if (unarchBtn) unarchBtn.style.display = 'none';
+        const zone = document.getElementById('conMasterAttachZone');
+        if (zone) zone.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the consultant first to attach files.</div>';
+    }
+}
+
+function onConMasterGstToggle() {
+    const cb = document.getElementById('conMasterGstReg');
+    const wrap = document.getElementById('conMasterGstNumWrap');
+    if (!cb || !wrap) return;
+    wrap.style.display = cb.checked ? '' : 'none';
+    if (!cb.checked) document.getElementById('conMasterGstNum').value = '';
+}
+
+function saveConsultantFromForm() {
+    const name = (document.getElementById('conMasterName').value || '').trim();
+    if (!name) { alert('Name is required.'); return; }
+    const idVal = document.getElementById('conMasterFormId').value;
+    const now = new Date().toISOString();
+    let c, isNew = false;
+    if (idVal && consultants.some(x => x.id === idVal)) {
+        c = consultants.find(x => x.id === idVal);
+    } else {
+        c = consultantBlank();
+        c.id = idVal || c.id;
+        consultants.push(c);
+        isNew = true;
+    }
+    c.name = name;
+    c.role = (document.getElementById('conMasterRole').value || '').trim();
+    c.contactEmail = (document.getElementById('conMasterEmail').value || '').trim();
+    c.contactPhone = (document.getElementById('conMasterPhone').value || '').trim();
+    c.panNumber = (document.getElementById('conMasterPan').value || '').trim().toUpperCase();
+    c.gstRegistered = document.getElementById('conMasterGstReg').checked;
+    c.gstNumber = c.gstRegistered ? (document.getElementById('conMasterGstNum').value || '').trim().toUpperCase() : '';
+    c.defaultPaymentTermsDays = parseInt(document.getElementById('conMasterTerms').value) || 30;
+    c.notes = (document.getElementById('conMasterNotes').value || '').trim();
+    c.updatedAt = now;
+
+    saveConsultants();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-check-circle"></i> Consultant <strong>${pEsc(c.name)}</strong> ${isNew ? 'created' : 'updated'}.`, 4000);
+    }
+    showTab('consultantsTab');
+    showConsultantsSubtab('master');
+}
+
+function archiveConsultant() {
+    const idVal = document.getElementById('conMasterFormId').value;
+    const c = getConsultantById(idVal);
+    if (!c) return;
+    if (!confirm(`Archive ${c.name}? They won't appear in new-payment dropdowns. Existing payments are preserved. You can unarchive later.`)) return;
+    c.archived = true;
+    c.updatedAt = new Date().toISOString();
+    saveConsultants();
+    showTab('consultantsTab');
+    showConsultantsSubtab('master');
+}
+
+function unarchiveConsultant() {
+    const idVal = document.getElementById('conMasterFormId').value;
+    const c = getConsultantById(idVal);
+    if (!c) return;
+    c.archived = false;
+    c.updatedAt = new Date().toISOString();
+    saveConsultants();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-undo"></i> ${pEsc(c.name)} unarchived.`, 3500);
+    }
+    showTab('consultantsTab');
+    showConsultantsSubtab('master');
+}
+
+// ----- Attachment zone renderers (reuse existing attachment system) -----
+function renderConsultantPaymentAttachZones(paymentId) {
+    const invZone = document.getElementById('conPayInvoiceAttachZone');
+    const othZone = document.getElementById('conPayOtherAttachZone');
+    if (!invZone || !othZone) return;
+    if (typeof getAttachmentsFor !== 'function') {
+        invZone.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Attachment system unavailable.</div>';
+        othZone.innerHTML = '';
+        return;
+    }
+    const all = getAttachmentsFor('consultant_payment', paymentId);
+    const invList = all.filter(a => (a.description || '').startsWith('Invoice'));
+    const othList = all.filter(a => !(a.description || '').startsWith('Invoice'));
+    invZone.innerHTML = buildAttachZoneHtml(invList, 'consultant_payment', paymentId, 'Invoice', 'Upload invoice (PDF)');
+    othZone.innerHTML = buildAttachZoneHtml(othList, 'consultant_payment', paymentId, 'Other', 'Upload receipt / work order / other');
+}
+
+function renderConsultantMasterAttachZone(consultantId) {
+    const zone = document.getElementById('conMasterAttachZone');
+    if (!zone) return;
+    if (typeof getAttachmentsFor !== 'function') {
+        zone.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Attachment system unavailable.</div>';
+        return;
+    }
+    const list = getAttachmentsFor('consultant', consultantId);
+    zone.innerHTML = buildAttachZoneHtml(list, 'consultant', consultantId, 'Agreement', 'Upload NDA / agreement / KYC doc');
+}
+
+function buildAttachZoneHtml(list, entityType, entityId, descTag, uploadLabel) {
+    const inputId = `attUpload_${entityType}_${entityId}_${descTag}`.replace(/[^a-zA-Z0-9_]/g, '_');
+    const fileItems = list.map(a => {
+        const iconInfo = (typeof attGetIconClass === 'function') ? attGetIconClass(a.mimeType, a.filename) : { cls: 'other', icon: 'fa-file' };
+        const sizeStr = (typeof fmtBytes === 'function') ? fmtBytes(a.sizeBytes || 0) : (a.sizeBytes + ' B');
+        return `<div style="display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:4px; margin-bottom:6px;">
+            <i class="fas ${iconInfo.icon}" style="color:var(--accent-cyan); font-size:14px;"></i>
+            <div style="flex:1; min-width:0;">
+                <div style="font-size:11.5px; color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${pEsc(a.filename || '(unnamed)')}</div>
+                <div style="font-size:10px; color:var(--text-dim);">${sizeStr}</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="downloadConsultantAttachment('${pEsc(entityType)}','${pEsc(entityId)}','${pEsc(a.id)}')" title="Download"><i class="fas fa-download"></i></button>
+            <button class="btn btn-ghost btn-sm" onclick="removeConsultantAttachment('${pEsc(entityType)}','${pEsc(entityId)}','${pEsc(a.id)}')" title="Remove" style="color:var(--danger);"><i class="fas fa-times"></i></button>
+        </div>`;
+    }).join('');
+    const empty = list.length === 0 ? '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic; padding:6px 0 10px 0;">No files yet.</div>' : '';
+    return `${fileItems}${empty}
+        <label for="${inputId}" class="btn btn-ghost btn-sm" style="cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+            <i class="fas fa-upload"></i> ${pEsc(uploadLabel)}
+        </label>
+        <input type="file" id="${inputId}" style="display:none;" onchange="uploadConsultantAttachment(this, '${pEsc(entityType)}', '${pEsc(entityId)}', '${pEsc(descTag)}')">`;
+}
+
+function uploadConsultantAttachment(input, entityType, entityId, descTag) {
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    if (typeof addAttachmentFromFile === 'function') {
+        // Use existing helper if available (handles size limits, base64, etc.)
+        addAttachmentFromFile(file, entityType, entityId, descTag, () => {
+            // Re-render the appropriate zone
+            if (entityType === 'consultant_payment') {
+                const idVal = document.getElementById('conPayFormId').value;
+                renderConsultantPaymentAttachZones(idVal);
+            } else if (entityType === 'consultant') {
+                const idVal = document.getElementById('conMasterFormId').value;
+                renderConsultantMasterAttachZone(idVal);
+            }
+        });
+    } else {
+        // Fallback: inline FileReader
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            if (!attachments[`${entityType}_${entityId}`]) attachments[`${entityType}_${entityId}`] = [];
+            attachments[`${entityType}_${entityId}`].push({
+                id: (typeof attNewId === 'function') ? attNewId() : ('att_' + Date.now()),
+                filename: file.name,
+                mimeType: file.type,
+                sizeBytes: file.size,
+                dataUrl: e.target.result,
+                uploadedAt: new Date().toISOString(),
+                description: descTag,
+                relatedEntityType: entityType,
+                relatedEntityId: entityId
+            });
+            if (typeof saveAttachments === 'function') saveAttachments();
+            if (entityType === 'consultant_payment') {
+                const idVal = document.getElementById('conPayFormId').value;
+                renderConsultantPaymentAttachZones(idVal);
+            } else {
+                const idVal = document.getElementById('conMasterFormId').value;
+                renderConsultantMasterAttachZone(idVal);
+            }
+        };
+        reader.readAsDataURL(file);
+    }
+    input.value = '';  // reset so same file can be re-uploaded if needed
+}
+
+function removeConsultantAttachment(entityType, entityId, attId) {
+    if (!confirm('Remove this file?')) return;
+    const key = `${entityType}_${entityId}`;
+    if (attachments[key]) {
+        attachments[key] = attachments[key].filter(a => a.id !== attId);
+        if (typeof saveAttachments === 'function') saveAttachments();
+    }
+    if (entityType === 'consultant_payment') {
+        renderConsultantPaymentAttachZones(entityId);
+    } else if (entityType === 'consultant') {
+        renderConsultantMasterAttachZone(entityId);
+    }
+}
+
+function downloadConsultantAttachment(entityType, entityId, attId) {
+    const key = `${entityType}_${entityId}`;
+    const list = attachments[key] || [];
+    const att = list.find(a => a.id === attId);
+    if (!att || !att.dataUrl) { alert('File not found or no data.'); return; }
+    const a = document.createElement('a');
+    a.href = att.dataUrl;
+    a.download = att.filename || 'download';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+// ----- XLSX export -----
+function exportConsultantPayments() {
+    if (typeof XLSX === 'undefined') {
+        alert('Excel export library not loaded.');
+        return;
+    }
+    if (consultantPayments.length === 0) {
+        alert('No payments to export.');
+        return;
+    }
+    const rows = consultantPayments.map(p => {
+        const c = getConsultantById(p.consultantId);
+        return {
+            'Payment #': p.paymentNumber || '',
+            'Consultant': c ? c.name : '(unknown)',
+            'Role': c ? (c.role || '') : '',
+            'PAN': c ? (c.panNumber || '') : '',
+            'GST Registered': c ? (c.gstRegistered ? 'Yes' : 'No') : '',
+            'GST Number': c ? (c.gstNumber || '') : '',
+            'Period Covered': p.periodCovered || '',
+            'Their Invoice Date': p.invoiceDate || '',
+            'Their Invoice #': p.invoiceNumber || '',
+            'Due Date': p.dueDate || '',
+            'Subtotal (INR)': parseFloat(p.subtotal) || 0,
+            'GST Applicable': p.gstApplicable ? 'Yes' : 'No',
+            'GST Amount (INR)': p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0,
+            'Total (INR)': parseFloat(p.totalAmount) || 0,
+            'Status': p.status || '',
+            'Paid Date': p.paidDate || '',
+            'Payment Mode': p.paymentMode || '',
+            'Payment Reference': p.paymentReference || '',
+            'Notes': p.notes || ''
+        };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Consultant Payments');
+    const fname = `Consultant_Payments_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, fname);
+}
+
+/* ======================================================================
+   End of 8YZ Consultants module
+   ====================================================================== */
+
+
 document.addEventListener('DOMContentLoaded', () => {
     // Load saved FY Basis preference BEFORE any rendering so the first paint
     // uses the user's preferred bucketing mode.
@@ -36190,6 +37457,15 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__attachmentsReady = true;
         }
     } catch (e) { console.warn("Attachments init:", e); }
+    // 8YZ — Initialise Consultants module (consultants + consultantPayments
+    // arrays). Must run AFTER initAttachments because the master/payment forms
+    // call into attachment helpers.
+    try {
+        if (typeof initConsultants === 'function') {
+            initConsultants();
+            window.__consultantsReady = true;
+        }
+    } catch (e) { console.warn("Consultants init:", e); }
     // Sync sidebar logo from Company Profile if user uploaded one (Phase 3 addendum)
     try { if (typeof syncSidebarLogo === 'function') syncSidebarLogo(); } catch (e) { console.warn("Sidebar logo sync:", e); }
     // Stamp schema version — writes lightweight meta record to localStorage

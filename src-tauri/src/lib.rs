@@ -310,6 +310,28 @@ fn load_all_inner(path: &PathBuf) -> Result<LoadAllResult, rusqlite::Error> {
     counts.insert("attachments".into(), attachments.len());
     data.insert("ms_attachments_v1".into(), serde_json::Value::Array(attachments).to_string());
 
+    // 8YZ — Consultants module (consultants master + consultant_payments register).
+    // Both tables are NEW in 8Y, so existing DBs may not have them. table_exists()
+    // gates the SELECT so we return empty arrays instead of fatal DB_READ_ERROR.
+    // The save commands below create the tables on first write, so once any data
+    // is saved, subsequent loads always find the tables.
+    if table_exists(&con, "consultants")? {
+        let consultants = collect_array(&con, "SELECT raw_data FROM consultants ORDER BY created_at, id")?;
+        counts.insert("consultants".into(), consultants.len());
+        data.insert("ms_consultants_v1".into(), serde_json::Value::Array(consultants).to_string());
+    } else {
+        counts.insert("consultants".into(), 0);
+        data.insert("ms_consultants_v1".into(), "[]".to_string());
+    }
+    if table_exists(&con, "consultant_payments")? {
+        let cpayments = collect_array(&con, "SELECT raw_data FROM consultant_payments ORDER BY invoice_date, id")?;
+        counts.insert("consultant_payments".into(), cpayments.len());
+        data.insert("ms_consultant_payments_v1".into(), serde_json::Value::Array(cpayments).to_string());
+    } else {
+        counts.insert("consultant_payments".into(), 0);
+        data.insert("ms_consultant_payments_v1".into(), "[]".to_string());
+    }
+
     {
         let mut stmt = con.prepare("SELECT key, value FROM app_settings")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -351,6 +373,17 @@ fn collect_array(con: &Connection, sql: &str) -> Result<Vec<serde_json::Value>, 
         }
     }
     Ok(out)
+}
+
+// 8YZ — Tolerant table-exists check for newly introduced tables (consultants,
+// consultant_payments). Lets load_all_inner gracefully handle databases created
+// before Phase 8Y where these tables don't exist yet. Returns Ok(true) only if
+// the table is present in sqlite_master; Ok(false) otherwise. Used to avoid
+// fatal DB_READ_ERROR on existing installs that haven't yet been upgraded.
+fn table_exists(con: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
+    let mut stmt = con.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1")?;
+    let mut rows = stmt.query([name])?;
+    Ok(rows.next()?.is_some())
 }
 
 fn collect_dict_by_column(
@@ -913,6 +946,127 @@ fn storage_save_attachments(state: tauri::State<DbState>, payload: String) -> Sa
                     js_str(value, "mimeType"), js_i64(value, "sizeBytes"),
                     js_str(value, "filePath"), js_str(value, "fallbackUrl"),
                     js_str(value, "uploadedAt"), raw, now_iso(),
+                ],
+            )?;
+            count += 1;
+        }
+        tx.commit()?;
+        Ok(count)
+    }) { Ok(n) => SaveResult::ok(n), Err(e) => SaveResult::err(e) }
+}
+
+// 8YZ — Consultants master save. Schema: id (text PK), name, role, gst_registered
+// (0/1), pan_number, raw_data (full JSON blob), modified_at. CREATE TABLE IF NOT
+// EXISTS is the first statement so the table materializes on first write — no
+// schema migration required for existing installs.
+#[tauri::command]
+fn storage_save_consultants(state: tauri::State<DbState>, payload: String) -> SaveResult {
+    let parsed: serde_json::Value = match serde_json::from_str(&payload) {
+        Ok(v) => v, Err(e) => return SaveResult::err(format!("Invalid JSON: {e}")),
+    };
+    let arr = match parsed.as_array() {
+        Some(a) => a, None => return SaveResult::err("Expected array".into()),
+    };
+    match with_writer(&state, |con| {
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS consultants (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                role TEXT,
+                gst_registered INTEGER,
+                pan_number TEXT,
+                archived INTEGER,
+                created_at TEXT,
+                raw_data TEXT NOT NULL,
+                modified_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        let tx = con.transaction()?;
+        tx.execute("DELETE FROM consultants", [])?;
+        let mut count = 0usize;
+        for value in arr {
+            let raw = value.to_string();
+            let id = match js_str(value, "id") {
+                Some(s) if !s.is_empty() => s.to_string(), _ => continue,
+            };
+            tx.execute(
+                "INSERT INTO consultants (
+                    id, name, role, gst_registered, pan_number, archived,
+                    created_at, raw_data, modified_at
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![
+                    id,
+                    js_str(value, "name"),
+                    js_str(value, "role"),
+                    js_bool_int(value, "gstRegistered"),
+                    js_str(value, "panNumber"),
+                    js_bool_int(value, "archived"),
+                    js_str(value, "createdAt"),
+                    raw,
+                    now_iso(),
+                ],
+            )?;
+            count += 1;
+        }
+        tx.commit()?;
+        Ok(count)
+    }) { Ok(n) => SaveResult::ok(n), Err(e) => SaveResult::err(e) }
+}
+
+// 8YZ — Consultant payments save. Mirrors storage_save_consultants pattern.
+// Indexable columns extracted for future reporting: consultant_id, payment_number,
+// invoice_date, total_amount, status. Full record persists as raw_data JSON.
+#[tauri::command]
+fn storage_save_consultant_payments(state: tauri::State<DbState>, payload: String) -> SaveResult {
+    let parsed: serde_json::Value = match serde_json::from_str(&payload) {
+        Ok(v) => v, Err(e) => return SaveResult::err(format!("Invalid JSON: {e}")),
+    };
+    let arr = match parsed.as_array() {
+        Some(a) => a, None => return SaveResult::err("Expected array".into()),
+    };
+    match with_writer(&state, |con| {
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS consultant_payments (
+                id TEXT PRIMARY KEY,
+                consultant_id TEXT,
+                payment_number TEXT,
+                invoice_date TEXT,
+                paid_date TEXT,
+                subtotal REAL,
+                gst_amount REAL,
+                total_amount REAL,
+                status TEXT,
+                raw_data TEXT NOT NULL,
+                modified_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        let tx = con.transaction()?;
+        tx.execute("DELETE FROM consultant_payments", [])?;
+        let mut count = 0usize;
+        for value in arr {
+            let raw = value.to_string();
+            let id = match js_str(value, "id") {
+                Some(s) if !s.is_empty() => s.to_string(), _ => continue,
+            };
+            tx.execute(
+                "INSERT INTO consultant_payments (
+                    id, consultant_id, payment_number, invoice_date, paid_date,
+                    subtotal, gst_amount, total_amount, status, raw_data, modified_at
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![
+                    id,
+                    js_str(value, "consultantId"),
+                    js_str(value, "paymentNumber"),
+                    js_str(value, "invoiceDate"),
+                    js_str(value, "paidDate"),
+                    js_f64(value, "subtotal"),
+                    js_f64(value, "gstAmount"),
+                    js_f64(value, "totalAmount"),
+                    js_str(value, "status"),
+                    raw,
+                    now_iso(),
                 ],
             )?;
             count += 1;
@@ -2495,6 +2649,9 @@ pub fn run() {
             storage_save_company_profile,
             storage_save_attachments,
             storage_save_setting,
+            // 8YZ — Consultants module
+            storage_save_consultants,
+            storage_save_consultant_payments,
             install_db_from_path,
             open_external_url,
             reveal_onedrive_folder,
