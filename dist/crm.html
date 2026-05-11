@@ -28393,7 +28393,7 @@ function renderInvoicesListView(filtered) {
             <td>${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</td>
             <td>${daysCell}</td>
             <td style="text-align:right;">
-                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="Download PDF"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : 'Download PDF'}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceDetail('${inv.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
         </tr>`;
@@ -29542,8 +29542,28 @@ function downloadSignedInvoicePdf(invId) {
     if (!inv) return;
     const att = getInvoiceSignedPdfAttachment(inv);
     if (!att) { alert('No signed PDF on file for this invoice.'); return; }
+    if (!att.dataUrl) {
+        alert('Signed PDF metadata found but file content is missing. Try re-uploading the signed PDF.');
+        return;
+    }
+
+    // 8AF — Primary path: open the dataUrl in a new tab/window so Tauri's
+    // WKWebView renders the PDF inline (Cmd+S to save). The previous
+    // <a download> + click() approach is silently dropped by WKWebView for
+    // base64 data URLs — that's why screenshot 2 in the bug report did nothing.
+    // The consultant invoice pin uses this same approach in 8AE and works.
     try {
-        // Convert data URL → Blob for a more reliable cross-browser download
+        const w = window.open(att.dataUrl, '_blank');
+        if (w) return;
+        // Popup blocked — fall through to legacy blob download below.
+    } catch (e) {
+        console.warn('window.open dataUrl failed:', e);
+        // Fall through to legacy path.
+    }
+
+    // Fallback: legacy blob-based download. Works in regular browsers; may
+    // silently no-op in WKWebView, but kept as a safety net.
+    try {
         const idx = att.dataUrl.indexOf(',');
         const b64 = idx >= 0 ? att.dataUrl.slice(idx + 1) : att.dataUrl;
         const binary = atob(b64);
@@ -30730,6 +30750,20 @@ ${editableScript}
 // Bug #4 Option B — Download is now a thin wrapper around the preview popup
 // with autoPrint=true. Native browser print = vector PDF, identical to manual flow.
 function downloadInvoicePDF(invId) {
+    // 8AF — If a digitally-signed PDF is on file for this invoice, download
+    // THAT directly instead of opening the print-preview of the generated PDF.
+    // The list-row icon is the user's "give me the PDF for this invoice"
+    // shortcut; if a signed copy exists, that's almost always what they want.
+    const inv = invoices.find(x => x.id === invId);
+    if (inv && inv.signedPdfAttachmentId && typeof downloadSignedInvoicePdf === 'function') {
+        const att = (typeof getInvoiceSignedPdfAttachment === 'function')
+            ? getInvoiceSignedPdfAttachment(inv) : null;
+        if (att) {
+            downloadSignedInvoicePdf(invId);
+            return;
+        }
+    }
+    // Fallback: open print preview of the generated PDF (legacy behaviour).
     previewInvoicePDF(invId, { autoPrint: true });
 }
 
