@@ -9252,8 +9252,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
         <input type="text" id="invSearch" placeholder="Search invoice #, client, subject..." style="flex:1; min-width:220px; max-width:340px;" oninput="renderInvoicesPage()">
         <select id="invStatusFilter" onchange="renderInvoicesPage()" style="width:170px;">
-          <option value="ALL">All Statuses</option>
-          <option value="OUTSTANDING" selected>Outstanding Only</option>
+          <option value="ALL" selected>All Statuses</option>
+          <option value="OUTSTANDING">Outstanding Only</option>
           <option value="Draft">Draft</option>
           <option value="Issued">Issued</option>
           <option value="Partially Paid">Partially Paid</option>
@@ -27846,7 +27846,7 @@ function populateInvoicesFilters() {
 
 function getFilteredInvoices() {
     const s = ((document.getElementById('invSearch') || {}).value || '').toLowerCase().trim();
-    const statusF = (document.getElementById('invStatusFilter') || {}).value || 'OUTSTANDING';
+    const statusF = (document.getElementById('invStatusFilter') || {}).value || 'ALL';
     const clientF = (document.getElementById('invClientFilter') || {}).value || 'ALL';
     const fyF = (document.getElementById('invFyFilter') || {}).value || 'ALL';
     return invoices.filter(inv => {
