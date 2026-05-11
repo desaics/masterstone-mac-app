@@ -9727,6 +9727,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <label>Client PO Number (optional)</label>
         <input type="text" id="invClientPO" placeholder="Auto-fills from linked contract, or type manually">
       </div>
+      <!-- 8W item — Vendor Code. Manual input only (no auto-fill). The code a
+           client assigns to Masterstone in their procurement system — typically
+           re-typed once per invoice for the same client. Shown on invoice PDF
+           under "Client PO" when non-empty. -->
+      <div>
+        <label>Vendor Code (optional)</label>
+        <input type="text" id="invVendorCode" placeholder="Client's vendor code for Masterstone">
+      </div>
     </div>
   </div>
 
@@ -28076,6 +28084,8 @@ function openInvoiceForm(id) {
         // handler only fires when the field is empty, so this prevents the
         // saved value from being overwritten by inheritance.
         val('invClientPO', inv.clientPO || '');
+        // 8W item — hydrate Vendor Code (manual-only field, no inheritance concern)
+        val('invVendorCode', inv.vendorCode || '');
         val('invLinkedContractIdx', inv.linkedContractIdx);
         onInvoiceContractChange();
         val('invLinkedCycleYearIdx', inv.linkedCycleYearIdx);
@@ -28146,6 +28156,8 @@ function openInvoiceForm(id) {
         val('invLinkedProposalId', '');
         // 8V item — clear Client PO on new invoice
         val('invClientPO', '');
+        // 8W item — clear Vendor Code on new invoice
+        val('invVendorCode', '');
         // Phase 4C.2 — routing defaults
         val('invCommercialModel', 'Direct');
         populateResellerDropdown('invSourcedViaResellerKey', '');
@@ -28751,6 +28763,8 @@ function saveInvoiceFromForm() {
     rec.linkedProposalId = document.getElementById('invLinkedProposalId').value;
     // 8V item — Client PO Number (manual or inherited from contract)
     rec.clientPO = (document.getElementById('invClientPO').value || '').trim();
+    // 8W item — Vendor Code (manual only — no auto-fill in 8W)
+    rec.vendorCode = (document.getElementById('invVendorCode').value || '').trim();
     // Phase 4C.2 — commercial routing
     rec.commercialModel = document.getElementById('invCommercialModel').value || 'Direct';
     rec.sourcedViaResellerKey = (rec.commercialModel === 'Direct')
@@ -29614,6 +29628,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
                     <div><strong>Reverse Charge:</strong> ${inv.reverseCharge ? 'Yes' : 'No'}</div>
                     ${inv.linkedContractIdx !== '' && inv.linkedContractIdx !== null && inv.linkedContractIdx !== undefined ? `<div><strong>Contract Ref:</strong> Cycle ${parseInt(inv.linkedCycleYearIdx || 0) + 1}</div>` : ''}
                     ${inv.clientPO ? `<div><strong>Client PO:</strong> ${safe(inv.clientPO)}</div>` : ''}
+                    ${inv.vendorCode ? `<div><strong>Vendor Code:</strong> ${safe(inv.vendorCode)}</div>` : ''}
                 </div>
             </td>
         </tr>
@@ -29898,6 +29913,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
                         <div><strong>Place of Supply:</strong> ${safe(posDisplay)}</div>
                         <div><strong>Reverse Charge:</strong> ${inv.reverseCharge ? 'Yes' : 'No'}</div>
                         ${inv.clientPO ? `<div><strong>Client PO:</strong> ${safe(inv.clientPO)}</div>` : ''}
+                        ${inv.vendorCode ? `<div><strong>Vendor Code:</strong> ${safe(inv.vendorCode)}</div>` : ''}
                     </div>
                 </td>
             </tr>
