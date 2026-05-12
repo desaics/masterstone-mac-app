@@ -37445,19 +37445,34 @@ function __irnDecodeQRPayload(qrText) {
 // { payload, imageDataUrl } or null.
 async function __irnFindQRInPage(page, pageNum) {
     try {
-        // Render at 2x for better QR resolution
-        const viewport = page.getViewport({ scale: 2.0 });
+        // 8AP — Render at 3x (was 2x) for better QR detection. Many CA
+        // PDFs use small QR codes (~120px at 1x) which jsQR struggles
+        // with at 2x. 3x is the sweet spot — bigger is slower without
+        // improving detection.
+        const viewport = page.getViewport({ scale: 3.0 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext('2d');
         await page.render({ canvasContext: ctx, viewport: viewport }).promise;
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = window.jsQR(imageData.data, canvas.width, canvas.height, {
-            inversionAttempts: 'attemptBoth'
-        });
+
+        // 8AP — Try multiple inversion strategies explicitly. 'attemptBoth'
+        // can fail on borderline QRs because jsQR tries one and gives up
+        // before trying the other. Manual loop is more reliable.
+        const strategies = ['dontInvert', 'onlyInvert', 'attemptBoth'];
+        let code = null;
+        for (const strategy of strategies) {
+            code = window.jsQR(imageData.data, canvas.width, canvas.height, {
+                inversionAttempts: strategy
+            });
+            if (code && code.data) {
+                diag('INFO', `IRN extract: QR detected on page ${pageNum} with strategy=${strategy}`);
+                break;
+            }
+        }
         if (!code || !code.data) {
-            diag('INFO', `IRN extract: no QR on page ${pageNum}`);
+            diag('INFO', `IRN extract: no QR on page ${pageNum} (tried all inversion strategies at 3x scale)`);
             return null;
         }
         diag('INFO', `IRN extract: QR found on page ${pageNum}`, { dataLength: code.data.length });
@@ -37541,6 +37556,14 @@ async function extractIRNFromPDF(file) {
         }
     }
     diag('INFO', 'extractIRNFromPDF: text extracted', { textLength: fullText.length });
+    // 8AP — Dump a sample of the extracted text so we can see exactly what
+    // the PDF contains and tune regexes for the user's specific CA format.
+    // Capped at 800 chars to keep the diag log readable. The dataUrl/binary
+    // contents of the file are never logged — just plain extracted text.
+    try {
+        const sample = fullText.replace(/\s+/g, ' ').trim().slice(0, 800);
+        diag('INFO', 'extractIRNFromPDF: text sample (first 800 chars)', { sample: sample });
+    } catch (e) { /* ignore */ }
 
     // ---- Phase 2: regex extraction ----
     let textIrn = null, ackNumber = null, ackDate = null;
@@ -37572,13 +37595,52 @@ async function extractIRNFromPDF(file) {
     }
     diag('INFO', 'extractIRNFromPDF: IRN regex result', { found: !!textIrn, matches: irnMatches.length });
 
-    const ackNumRe = /(?:Ack(?:nowledge?ment)?[\s.]*(?:No\.?|Number)?)\s*[:\-]?\s*(\d{10,18})/i;
+    // 8AP — Ack Number: first try a labelled match. Some CAs label it as
+    // "Ack No", "Ack Number", "Acknowledgement No", "Acknowledgement Number"
+    // and so on, with various separators. If no labelled match, fall back
+    // to looking for a 14-15 digit number near the IRN — IRP ack numbers
+    // are typically 15 digits and printed adjacent to the IRN block.
+    const ackNumRe = /(?:Ack(?:nowledge?ment)?[\s.]*(?:No\.?|Number|#)?)\s*[:\-]?\s*(\d{10,18})/i;
     const ackNumM = fullText.match(ackNumRe);
-    if (ackNumM) ackNumber = ackNumM[1];
+    if (ackNumM) {
+        ackNumber = ackNumM[1];
+    } else if (textIrn) {
+        // Proximity fallback: look for a 14-15 digit number within 200 chars of the IRN
+        const irnPos = fullText.toLowerCase().indexOf(textIrn);
+        if (irnPos >= 0) {
+            const window = fullText.slice(Math.max(0, irnPos - 200), irnPos + textIrn.length + 200);
+            const proxRe = /\b(\d{14,16})\b/g;
+            let pm;
+            while ((pm = proxRe.exec(window)) !== null) {
+                // Reject IRN substrings (which are hex but the regex \d only matches digits anyway,
+                // so this is implicit). Accept first match.
+                ackNumber = pm[1];
+                diag('INFO', 'extractIRNFromPDF: ack number found via proximity heuristic', { ackNumber: ackNumber });
+                break;
+            }
+        }
+    }
 
+    // 8AP — Ack Date: try labelled first. Fall back to any date format
+    // (dd-mm-yyyy or dd/mm/yyyy) near the IRN.
     const ackDateRe = /(?:Ack(?:nowledge?ment)?\s*Date)\s*[:\-]?\s*(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/i;
     const ackDateM = fullText.match(ackDateRe);
-    if (ackDateM) ackDate = ackDateM[1];
+    if (ackDateM) {
+        ackDate = ackDateM[1];
+    } else if (textIrn) {
+        // Proximity fallback. We also accept the e-invoice JSON format
+        // "yyyy-mm-dd HH:MM:SS" since some PDFs include the raw IRP timestamp.
+        const irnPos = fullText.toLowerCase().indexOf(textIrn);
+        if (irnPos >= 0) {
+            const window = fullText.slice(Math.max(0, irnPos - 200), irnPos + textIrn.length + 200);
+            const dateRe = /\b(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\b|\b(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}:\d{2})?)\b/;
+            const dm = window.match(dateRe);
+            if (dm) {
+                ackDate = dm[1] || dm[2];
+                diag('INFO', 'extractIRNFromPDF: ack date found via proximity heuristic', { ackDate: ackDate });
+            }
+        }
+    }
 
     diag('INFO', 'extractIRNFromPDF: ack regex results', { ackNumber: ackNumber, ackDate: ackDate });
 
