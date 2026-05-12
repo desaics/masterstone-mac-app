@@ -37677,12 +37677,62 @@ async function __irnTryImageObjects(page, pageNum) {
             diag('INFO', `IRN extract: preprocess failed for ${name}, using raw image`, { error: String(preErr && preErr.message) });
             scanCanvas = imgCanvas;
         }
-        const code = await __irnScanCanvasForQR(scanCanvas, scanCanvas.getContext('2d'), `image ${name}`);
+
+        // 8AT — Sample pixels from a 3x3 grid on the scan canvas to diagnose
+        // whether the image is actually black-and-white or some other color
+        // profile. Logged as a single string to fit safeStr.
+        try {
+            const sctx = scanCanvas.getContext('2d');
+            const w = scanCanvas.width, h = scanCanvas.height;
+            const sx = [Math.floor(w * 0.25), Math.floor(w * 0.5), Math.floor(w * 0.75)];
+            const sy = [Math.floor(h * 0.25), Math.floor(h * 0.5), Math.floor(h * 0.75)];
+            const samples = [];
+            for (const y of sy) {
+                for (const x of sx) {
+                    const d = sctx.getImageData(x, y, 1, 1).data;
+                    samples.push(`(${x},${y})rgba(${d[0]},${d[1]},${d[2]},${d[3]})`);
+                }
+            }
+            diag('INFO', `IRN extract: pixel samples ${name} :: ${samples.join(' ')}`);
+        } catch (e) { /* ignore */ }
+
+        // 8AT — First try scanning the preprocessed canvas as-is
+        let code = await __irnScanCanvasForQR(scanCanvas, scanCanvas.getContext('2d'), `image ${name}`);
+
+        // 8AT — If that didn't decode, try a binary-threshold version.
+        // Many CA-signed PDFs embed the QR as an anti-aliased grayscale or
+        // very-light-gray image. jsQR's internal binarization can fail on
+        // these. Force pure black/white via luminance threshold.
+        let thresholdCanvas = null;
+        if (!code) {
+            try {
+                thresholdCanvas = document.createElement('canvas');
+                thresholdCanvas.width = scanCanvas.width;
+                thresholdCanvas.height = scanCanvas.height;
+                const tctx = thresholdCanvas.getContext('2d');
+                tctx.drawImage(scanCanvas, 0, 0);
+                const tImg = tctx.getImageData(0, 0, thresholdCanvas.width, thresholdCanvas.height);
+                const tData = tImg.data;
+                for (let i = 0; i < tData.length; i += 4) {
+                    const lum = 0.299 * tData[i] + 0.587 * tData[i + 1] + 0.114 * tData[i + 2];
+                    const v = lum >= 128 ? 255 : 0;
+                    tData[i] = v; tData[i + 1] = v; tData[i + 2] = v; tData[i + 3] = 255;
+                }
+                tctx.putImageData(tImg, 0, 0);
+                diag('INFO', `IRN extract: applied threshold to ${name}, retrying`);
+                code = await __irnScanCanvasForQR(thresholdCanvas, tctx, `image ${name} (threshold)`);
+            } catch (thrErr) {
+                diag('INFO', `IRN extract: threshold preprocessing threw for ${name}`, { error: String(thrErr && thrErr.message) });
+            }
+        }
+
+        // Use thresholdCanvas as the "scan canvas" for QR-region crop if it decoded
+        const finalScanCanvas = (thresholdCanvas && code) ? thresholdCanvas : scanCanvas;
         if (code) {
-            diag('INFO', `IRN extract: QR found in image ${name}`, { dataLength: code.data.length });
+            const decodedFrom = (thresholdCanvas && code) ? 'threshold' : 'preprocessed';
+            diag('INFO', `IRN extract: QR found in image ${name} via ${decodedFrom}`, { dataLength: code.data.length });
             let qrImageDataUrl = null;
-            // Crop the QR region from the preprocessed canvas if location available,
-            // otherwise store the (preprocessed) image entire.
+            // Crop the QR region from the canvas that produced the decode
             try {
                 if (code.location) {
                     const loc = code.location;
@@ -37693,12 +37743,12 @@ async function __irnTryImageObjects(page, pageNum) {
                     const cpad = 10;
                     const x = Math.max(0, Math.floor(minX - cpad));
                     const y = Math.max(0, Math.floor(minY - cpad));
-                    const w = Math.min(scanCanvas.width - x, Math.ceil(maxX - minX + 2 * cpad));
-                    const h = Math.min(scanCanvas.height - y, Math.ceil(maxY - minY + 2 * cpad));
+                    const w = Math.min(finalScanCanvas.width - x, Math.ceil(maxX - minX + 2 * cpad));
+                    const h = Math.min(finalScanCanvas.height - y, Math.ceil(maxY - minY + 2 * cpad));
                     const cropCanvas = document.createElement('canvas');
                     cropCanvas.width = w;
                     cropCanvas.height = h;
-                    cropCanvas.getContext('2d').drawImage(scanCanvas, x, y, w, h, 0, 0, w, h);
+                    cropCanvas.getContext('2d').drawImage(finalScanCanvas, x, y, w, h, 0, 0, w, h);
                     qrImageDataUrl = cropCanvas.toDataURL('image/png');
                 } else {
                     qrImageDataUrl = imgCanvas.toDataURL('image/png');
