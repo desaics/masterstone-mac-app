@@ -4770,6 +4770,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             '<button onclick="window.__msReveal()" title="Open OneDrive folder in Finder">📁 OneDrive</button>' +
             '<button onclick="window.__msOpenSettings()" title="Configure folders, retention, conflict guard">⚙️ Settings</button>' +
             '<button onclick="window.__msShowDbInfo()" title="Show database connection details">DB info</button>' +
+            '<button onclick="if(window.__diag) window.__diag.show(); else alert(\'Diagnostic module not loaded\');" title="View diagnostic log (8AH temporary)" style="background:#aa3a3a; color:white;">🐞 Diag</button>' +
             '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
         document.body.appendChild(banner);
     });
@@ -4879,9 +4880,21 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
         if (!tauri || !tauri.invoke) {
             lastErrorByBucket[bucket] = 'Tauri runtime unavailable';
+            // 8AH — diagnostic
+            try { if (window.__diag) window.__diag.log('CRITICAL', 'flushBucket: Tauri runtime unavailable', { bucket: bucket }); } catch (e) {}
             refreshIndicator();
             return;
         }
+
+        // 8AH — diagnostic: log bucket flush start
+        try {
+            if (window.__diag) window.__diag.log('INFO', `flushBucket invoking Rust command`, {
+                bucket: bucket,
+                cmd: spec.cmd,
+                payloadLength: value ? value.length : -1,
+                payloadSizeMB: value ? (value.length / 1024 / 1024).toFixed(2) : 'n/a'
+            });
+        } catch (e) {}
 
         inflightCount++;
         refreshIndicator();
@@ -4889,11 +4902,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             var result = await tauri.invoke(spec.cmd, { payload: value });
             if (result && result.ok) {
                 delete lastErrorByBucket[bucket];
+                // 8AH — diagnostic: success
+                try { if (window.__diag) window.__diag.log('INFO', `flushBucket success`, { bucket: bucket, result: result }); } catch (e) {}
             } else {
                 lastErrorByBucket[bucket] = (result && result.error) || 'Unknown error';
+                // 8AH — diagnostic: Rust returned not-ok
+                try { if (window.__diag) window.__diag.log('CRITICAL', `flushBucket: Rust returned not-ok`, { bucket: bucket, cmd: spec.cmd, result: result }); } catch (e) {}
             }
         } catch (e) {
             lastErrorByBucket[bucket] = String(e);
+            // 8AH — diagnostic: invoke threw
+            try { if (window.__diag) window.__diag.log('CRITICAL', `flushBucket: invoke threw`, { bucket: bucket, cmd: spec.cmd, error: String(e) }); } catch (ie) {}
         } finally {
             inflightCount--;
             refreshIndicator();
@@ -5276,6 +5295,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             '<button onclick="window.__msReveal()" title="Open OneDrive folder in Finder">📁 OneDrive</button>' +
             '<button onclick="window.__msOpenSettings()" title="Configure folders, retention, conflict guard">⚙️ Settings</button>' +
             '<button onclick="window.__msShowDbInfo()" title="Show database connection details">DB info</button>' +
+            '<button onclick="if(window.__diag) window.__diag.show(); else alert(\'Diagnostic module not loaded\');" title="View diagnostic log (8AH temporary)" style="background:#aa3a3a; color:white;">🐞 Diag</button>' +
             '<button class="banner-close" onclick="window.__msDismissBanner()" title="Hide banner (sync indicator stays visible)">×</button>';
         document.body.appendChild(banner);
         refreshIndicator();
@@ -29489,13 +29509,18 @@ function getInvoiceSignedPdfAttachment(inv) {
 // attachments panel separately. If an existing signed PDF is on file, the user
 // is asked to confirm replacement; the prior attachment is removed first.
 function triggerSignedPdfUpload(invId) {
+    diag('INFO', `triggerSignedPdfUpload called`, { invId: invId });
     const inv = invoices.find(x => x.id === invId);
-    if (!inv) return;
+    if (!inv) { diag('ERROR', 'triggerSignedPdfUpload: invoice not found', { invId: invId }); return; }
     const isReplace = !!inv.signedPdfAttachmentId;
+    diag('INFO', `triggerSignedPdfUpload: isReplace=${isReplace}`, { invoiceNumber: inv.invoiceNumber, existingAttId: inv.signedPdfAttachmentId });
     if (isReplace) {
         const cur = getInvoiceSignedPdfAttachment(inv);
         const curName = cur ? cur.filename : '(unknown)';
-        if (!confirm(`Replace existing signed PDF for ${inv.invoiceNumber}?\n\nCurrent file: ${curName}\nThis cannot be undone (the previous file will be deleted from this invoice).`)) return;
+        if (!confirm(`Replace existing signed PDF for ${inv.invoiceNumber}?\n\nCurrent file: ${curName}\nThis cannot be undone (the previous file will be deleted from this invoice).`)) {
+            diag('INFO', 'triggerSignedPdfUpload: user declined replace confirmation');
+            return;
+        }
     }
 
     const fi = document.createElement('input');
@@ -29504,11 +29529,18 @@ function triggerSignedPdfUpload(invId) {
     fi.style.display = 'none';
     fi.onchange = function() {
         const file = fi.files && fi.files[0];
+        diag('INFO', `triggerSignedPdfUpload: file picker onchange fired`, { hasFile: !!file, fileName: file ? file.name : '(none)', fileType: file ? file.type : '(none)' });
         if (!file) return;
-        if (file.type !== 'application/pdf') { alert('Please upload a PDF file.'); return; }
+        if (file.type !== 'application/pdf') {
+            diag('ERROR', 'triggerSignedPdfUpload: wrong MIME type', { fileType: file.type });
+            alert('Please upload a PDF file.');
+            return;
+        }
 
         const proceed = () => {
+            diag('INFO', 'triggerSignedPdfUpload: calling addAttachment');
             addAttachment('invoice', inv.id, file, 'Digitally Signed Invoice (DSC)', function(att) {
+                diag('INFO', 'triggerSignedPdfUpload: addAttachment onSuccess fired', { attId: att.id });
                 inv.signedPdfAttachmentId = att.id;
                 inv.signedPdfUploadedAt = att.uploadedAt;
                 inv.updatedAt = new Date().toISOString();
@@ -29533,6 +29565,7 @@ function triggerSignedPdfUpload(invId) {
         fi.remove();
     };
     document.body.appendChild(fi);
+    diag('INFO', 'triggerSignedPdfUpload: clicking hidden file input');
     fi.click();
 }
 
@@ -31930,9 +31963,23 @@ function initAttachments() {
 
 function saveAttachments() {
     try {
-        localStorage.setItem(ATTACHMENTS_KEY, JSON.stringify(attachments));
+        const payload = JSON.stringify(attachments);
+        // 8AH — Diagnostic: log payload size before write
+        diag('INFO', `saveAttachments writing to localStorage`, {
+            keyCount: Object.keys(attachments).length,
+            payloadLength: payload.length,
+            payloadSizeMB: (payload.length / 1024 / 1024).toFixed(2)
+        });
+        localStorage.setItem(ATTACHMENTS_KEY, payload);
+        diag('INFO', 'saveAttachments: localStorage.setItem succeeded');
         return true;
     } catch (e) {
+        // 8AH — Capture detailed error for diagnostic
+        diag('CRITICAL', 'saveAttachments: localStorage write threw', {
+            errorName: e && e.name,
+            errorMessage: e && e.message ? String(e.message) : String(e),
+            attachmentKeyCount: Object.keys(attachments).length
+        });
         console.error("Attachments save failed:", e);
         alert("Unable to save attachment. Browser storage is full. Please delete older attachments via System Controls → Attachments Storage → Manage All Attachments.");
         return false;
@@ -32001,33 +32048,55 @@ function attGetIconClass(mimeType, filename) {
 
 // ===== Add (upload) =====
 function addAttachment(entityType, entityId, file, description, onSuccess) {
-    if (!file) { alert("No file selected."); return; }
+    // 8AH — Diagnostic instrumentation
+    diag('INFO', `addAttachment called`, {
+        entityType: entityType,
+        entityId: entityId,
+        description: description,
+        fileName: file ? file.name : '(null)',
+        fileSize: file ? file.size : -1,
+        fileType: file ? file.type : '(null)'
+    });
+    if (!file) {
+        diag('ERROR', 'addAttachment: file is null/undefined');
+        alert("No file selected.");
+        return;
+    }
 
     // Pre-validation
     if (file.size > ATT_MAX_FILE_BYTES) {
+        diag('ERROR', `addAttachment: file too large`, { sizeBytes: file.size, limit: ATT_MAX_FILE_BYTES });
         alert(`File "${file.name}" is ${fmtBytes(file.size)}. Per-file limit is ${fmtBytes(ATT_MAX_FILE_BYTES)}. Please compress the file (e.g. lower-resolution image, PDF printed at 72dpi) and try again.`);
         return;
     }
 
     const entitySize = getAttachmentSizeFor(entityType, entityId);
     if (entitySize + file.size > ATT_MAX_ENTITY_BYTES) {
+        diag('ERROR', `addAttachment: entity size limit exceeded`, { currentEntitySize: entitySize, addingSize: file.size, limit: ATT_MAX_ENTITY_BYTES });
         alert(`Adding this file would exceed the ${fmtBytes(ATT_MAX_ENTITY_BYTES)} per-entity limit. Currently used: ${fmtBytes(entitySize)}. Delete older attachments on this entity first.`);
         return;
     }
 
     const globalSize = getTotalAttachmentsSize();
     if (globalSize + file.size > ATT_HARD_GLOBAL_BYTES) {
+        diag('ERROR', `addAttachment: global hard limit exceeded`, { globalSize: globalSize, addingSize: file.size, limit: ATT_HARD_GLOBAL_BYTES });
         alert(`Adding this file would exceed the ${fmtBytes(ATT_HARD_GLOBAL_BYTES)} hard global limit (currently: ${fmtBytes(globalSize)}). To preserve CRM operation, please delete other attachments via System Controls → Manage All Attachments.`);
         return;
     }
     if (globalSize + file.size > ATT_WARN_GLOBAL_BYTES) {
-        if (!confirm(`Warning: global attachment storage will exceed ${fmtBytes(ATT_WARN_GLOBAL_BYTES)} (soft limit). Current: ${fmtBytes(globalSize)}. Adding this ${fmtBytes(file.size)} file will bring you close to the hard cap. Continue?`)) return;
+        diag('INFO', `addAttachment: soft warning threshold crossed`, { globalSize: globalSize, addingSize: file.size, warnLimit: ATT_WARN_GLOBAL_BYTES });
+        if (!confirm(`Warning: global attachment storage will exceed ${fmtBytes(ATT_WARN_GLOBAL_BYTES)} (soft limit). Current: ${fmtBytes(globalSize)}. Adding this ${fmtBytes(file.size)} file will bring you close to the hard cap. Continue?`)) {
+            diag('INFO', 'addAttachment: user declined soft-limit confirmation');
+            return;
+        }
     }
+    diag('INFO', 'addAttachment: all pre-validation passed, starting FileReader');
 
     // Read file as data URL
     const reader = new FileReader();
     reader.onload = function (e) {
         const dataUrl = e.target.result;
+        diag('INFO', `FileReader onload`, { dataUrlLength: dataUrl ? dataUrl.length : -1, dataUrlType: typeof dataUrl });
         const rec = {
             id: attNewId(),
             filename: file.name,
@@ -32040,16 +32109,20 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
         const key = attEntityKey(entityType, entityId);
         if (!attachments[key]) attachments[key] = [];
         attachments[key].push(rec);
+        diag('INFO', `Attachment record pushed to map`, { key: key, attId: rec.id, listLengthAfter: attachments[key].length });
         const ok = saveAttachments();
+        diag('INFO', `saveAttachments returned`, { ok: ok });
         if (ok) {
             if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-paperclip" style="color:var(--success);"></i> <strong>${pEsc(file.name)}</strong> attached (${fmtBytes(file.size)}).`);
             if (typeof onSuccess === 'function') onSuccess(rec);
         } else {
             // Rollback if save failed
+            diag('CRITICAL', 'saveAttachments returned false — rolling back attachment from in-memory map', { key: key, attId: rec.id });
             attachments[key].pop();
         }
     };
     reader.onerror = function () {
+        diag('CRITICAL', 'FileReader onerror fired', { error: reader.error ? String(reader.error) : '(no error object)' });
         alert("Failed to read file. Please try again.");
     };
     reader.readAsDataURL(file);
@@ -36525,6 +36598,273 @@ function renderBusinessSnapshot() {
 
 
 /* ======================================================================
+   8AH — DIAGNOSTIC INSTRUMENTATION (TEMPORARY DEBUG MODULE)
+   ----------------------------------------------------------------------
+   Purpose: capture detailed traces of attachment/invoice save operations
+   so user-reported "Save failed / file disappeared" bugs can be investigated
+   without browser devtools (Tauri 2 WKWebView in release builds doesn't
+   expose them).
+
+   Surface area:
+     - __diag.log(category, message, data)  — main entry point
+     - __diag.show()                         — opens viewer modal
+     - __diag.clear()                        — empties the ring buffer
+     - __diag.dump()                         — returns array of recent events
+     - Visible banner flashes on CRITICAL events
+     - Optional sticky banner if anything important fires within last 30s
+
+   This module makes NO behavior changes. It only observes.
+   Remove (or gate behind a flag) once root causes are known.
+   ====================================================================== */
+
+window.__diag = (function() {
+    const BUF_SIZE = 200;
+    let buffer = [];
+    let bannerEl = null;
+    let stickyEl = null;
+
+    function ts() {
+        const d = new Date();
+        return d.toTimeString().slice(0,8) + '.' + String(d.getMilliseconds()).padStart(3,'0');
+    }
+
+    function safeStr(v) {
+        try {
+            if (v === undefined) return 'undefined';
+            if (v === null) return 'null';
+            if (typeof v === 'string') {
+                // Truncate long strings (dataUrls etc) to keep log readable
+                return v.length > 200 ? `<string len=${v.length} starts="${v.slice(0,80)}…">` : `"${v}"`;
+            }
+            if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+            if (typeof v === 'function') return '<function>';
+            // For objects: JSON-stringify, but cap depth + length
+            const json = JSON.stringify(v, function(k, val) {
+                if (typeof val === 'string' && val.length > 200) {
+                    return `<string len=${val.length}>`;
+                }
+                return val;
+            });
+            return json.length > 400 ? json.slice(0,400) + '…' : json;
+        } catch (e) {
+            return '<unserializable>';
+        }
+    }
+
+    function log(category, message, data) {
+        const entry = {
+            ts: ts(),
+            cat: category || 'INFO',
+            msg: message || '',
+            data: data !== undefined ? safeStr(data) : ''
+        };
+        buffer.push(entry);
+        if (buffer.length > BUF_SIZE) buffer.shift();
+        // Also write to console for if-by-chance devtools work
+        try {
+            console.log(`[${entry.cat}] ${entry.ts} ${entry.msg}`, data !== undefined ? data : '');
+        } catch (e) { /* nope */ }
+        // Flash banner on CRITICAL
+        if (category === 'CRITICAL' || category === 'ERROR') {
+            flashBanner(`${entry.cat}: ${entry.msg}`, 8000);
+        }
+    }
+
+    function flashBanner(msg, durationMs) {
+        try {
+            if (bannerEl && bannerEl.parentNode) bannerEl.parentNode.removeChild(bannerEl);
+            bannerEl = document.createElement('div');
+            bannerEl.style.cssText = 'position:fixed; top:60px; right:20px; z-index:99999; background:#b32d2d; color:white; padding:12px 18px; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.3); font-size:12.5px; font-family:-apple-system,sans-serif; max-width:420px; line-height:1.4; cursor:pointer;';
+            bannerEl.innerHTML = `<div style="font-weight:700; margin-bottom:4px;"><i class="fas fa-exclamation-triangle"></i> DIAGNOSTIC</div><div>${msg}</div><div style="margin-top:6px; font-size:10.5px; opacity:0.85;">Click to view full log · auto-dismiss in ${Math.round(durationMs/1000)}s</div>`;
+            bannerEl.onclick = function() { show(); };
+            document.body.appendChild(bannerEl);
+            setTimeout(function() {
+                if (bannerEl && bannerEl.parentNode) bannerEl.parentNode.removeChild(bannerEl);
+                bannerEl = null;
+            }, durationMs);
+        } catch (e) { /* fail silently */ }
+    }
+
+    function dump() {
+        return buffer.slice();
+    }
+
+    function clear() {
+        buffer = [];
+        if (stickyEl) updateSticky();
+    }
+
+    function show() {
+        let modal = document.getElementById('__diagModal');
+        if (modal) modal.remove();
+        modal = document.createElement('div');
+        modal.id = '__diagModal';
+        modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:99998; display:flex; align-items:center; justify-content:center;';
+        const inner = document.createElement('div');
+        inner.style.cssText = 'background:#fff; color:#222; width:min(900px,92vw); height:min(85vh,820px); border-radius:8px; padding:20px; display:flex; flex-direction:column; font-family:-apple-system,sans-serif;';
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid #ddd;';
+        header.innerHTML = `<div><strong style="font-size:16px;">Diagnostic Log</strong> <span style="color:#666; font-size:11.5px;">· ${buffer.length} events captured</span></div>`;
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex; gap:8px;';
+        const copyBtn = document.createElement('button');
+        copyBtn.innerText = '📋 Copy All';
+        copyBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #ccc; background:#f5f5f5; border-radius:4px; cursor:pointer;';
+        copyBtn.onclick = function() {
+            const text = buffer.map(e => `[${e.cat}] ${e.ts} ${e.msg}${e.data ? ' · ' + e.data : ''}`).join('\n');
+            try {
+                navigator.clipboard.writeText(text);
+                copyBtn.innerText = '✓ Copied';
+                setTimeout(function() { copyBtn.innerText = '📋 Copy All'; }, 1500);
+            } catch (e) {
+                // Fallback: select-all on a textarea
+                alert('Copy failed. Use the textarea below — select all (Cmd+A), Cmd+C to copy.');
+            }
+        };
+        const clearBtn = document.createElement('button');
+        clearBtn.innerText = '🗑 Clear';
+        clearBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #ccc; background:#f5f5f5; border-radius:4px; cursor:pointer;';
+        clearBtn.onclick = function() {
+            if (confirm('Clear the diagnostic log?')) { clear(); modal.remove(); show(); }
+        };
+        const closeBtn = document.createElement('button');
+        closeBtn.innerText = '✕ Close';
+        closeBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #ccc; background:#f5f5f5; border-radius:4px; cursor:pointer;';
+        closeBtn.onclick = function() { modal.remove(); };
+        btnRow.appendChild(copyBtn);
+        btnRow.appendChild(clearBtn);
+        btnRow.appendChild(closeBtn);
+        header.appendChild(btnRow);
+        inner.appendChild(header);
+
+        const body = document.createElement('textarea');
+        body.style.cssText = 'flex:1; width:100%; font-family:Menlo,monospace; font-size:11px; padding:10px; border:1px solid #ddd; border-radius:4px; resize:none; line-height:1.5; background:#fafafa; color:#222;';
+        body.readOnly = true;
+        body.value = buffer.length === 0
+            ? '(no events captured yet — perform the action you want to diagnose, then re-open this viewer)'
+            : buffer.map(function(e) {
+                const cat = e.cat.padEnd(9);
+                return `[${cat}] ${e.ts}  ${e.msg}${e.data ? '\n               · ' + e.data : ''}`;
+            }).join('\n');
+        inner.appendChild(body);
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'margin-top:10px; font-size:11px; color:#666;';
+        footer.innerHTML = 'Newest events at bottom. Use <strong>Copy All</strong> and paste the result in the chat so I can analyze the trace.';
+        inner.appendChild(footer);
+
+        modal.appendChild(inner);
+        document.body.appendChild(modal);
+        // Auto-scroll textarea to bottom
+        setTimeout(function() { body.scrollTop = body.scrollHeight; }, 50);
+    }
+
+    function updateSticky() {
+        if (!stickyEl) return;
+        const errs = buffer.filter(e => e.cat === 'CRITICAL' || e.cat === 'ERROR');
+        stickyEl.style.display = errs.length > 0 ? 'flex' : 'none';
+        const countEl = stickyEl.querySelector('#__diagStickyCount');
+        if (countEl) countEl.innerText = String(errs.length);
+    }
+
+    function installSticky() {
+        if (stickyEl) return;
+        stickyEl = document.createElement('div');
+        stickyEl.id = '__diagSticky';
+        stickyEl.style.cssText = 'position:fixed; bottom:18px; right:18px; z-index:99997; display:none; align-items:center; gap:8px; background:#d93b3b; color:white; padding:8px 14px; border-radius:999px; box-shadow:0 3px 12px rgba(0,0,0,0.25); cursor:pointer; font-size:11.5px; font-weight:600; font-family:-apple-system,sans-serif;';
+        stickyEl.innerHTML = '<i class="fas fa-bug" style="font-size:13px;"></i> <span id="__diagStickyCount">0</span> diagnostic issue(s) · click for log';
+        stickyEl.onclick = function() { show(); };
+        document.body.appendChild(stickyEl);
+        // Poll for updates every 2s
+        setInterval(updateSticky, 2000);
+    }
+
+    return {
+        log: log,
+        show: show,
+        clear: clear,
+        dump: dump,
+        installSticky: installSticky
+    };
+})();
+
+// Convenience global aliases so existing code can call diag() without prefix
+function diag(category, message, data) {
+    if (window.__diag) window.__diag.log(category, message, data);
+}
+
+/* ======================================================================
+   8AH — Boot-time integrity scan
+   ----------------------------------------------------------------------
+   After all modules init, scan invoices[] for any with signedPdfAttachmentId
+   set but no matching attachment record. This catches the "signed PDF
+   disappeared" symptom: invoice still claims to have a signed PDF, but the
+   actual file is gone from the attachments map.
+   ====================================================================== */
+function __diagRunBootScan() {
+    try {
+        diag('INFO', 'Boot integrity scan starting');
+        const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
+        diag('INFO', `Invoices loaded: ${invList.length}`);
+        diag('INFO', `Attachments keys: ${typeof attachments === 'object' && attachments ? Object.keys(attachments).length : 'attachments map missing'}`);
+        let signedRefs = 0;
+        let signedFound = 0;
+        let signedMissing = [];
+        invList.forEach(function(inv) {
+            if (!inv.signedPdfAttachmentId) return;
+            signedRefs++;
+            const key = `invoice_${inv.id}`;
+            const list = (attachments && attachments[key]) || [];
+            const found = list.find(function(a) { return a.id === inv.signedPdfAttachmentId; });
+            if (found) {
+                signedFound++;
+                if (!found.dataUrl) {
+                    diag('CRITICAL', `Signed PDF metadata exists but dataUrl is missing for invoice ${inv.invoiceNumber || inv.id}`, { attId: inv.signedPdfAttachmentId, filename: found.filename, sizeBytes: found.sizeBytes });
+                }
+            } else {
+                signedMissing.push({ invoiceNumber: inv.invoiceNumber || inv.id, attId: inv.signedPdfAttachmentId, expectedKey: key, attachmentsForThisInvoice: list.length });
+            }
+        });
+        diag('INFO', `Boot scan: ${signedRefs} invoices reference a signed PDF, ${signedFound} match an attachment record`);
+        if (signedMissing.length > 0) {
+            diag('CRITICAL', `${signedMissing.length} invoice(s) have signedPdfAttachmentId but NO matching attachment record`, signedMissing);
+        }
+        // Also report total attachment payload size — useful if hitting size limits
+        if (attachments && typeof attachments === 'object') {
+            let totalBytes = 0;
+            let totalCount = 0;
+            Object.keys(attachments).forEach(function(k) {
+                const list = attachments[k] || [];
+                list.forEach(function(a) {
+                    totalCount++;
+                    totalBytes += (a.sizeBytes || 0);
+                });
+            });
+            diag('INFO', `Total attachments: ${totalCount} files, ${(totalBytes/1024/1024).toFixed(2)} MB declared`);
+        }
+        // Check localStorage size
+        try {
+            const raw = localStorage.getItem('ms_attachments_v1');
+            if (raw) {
+                diag('INFO', `localStorage ms_attachments_v1 string length: ${raw.length} chars (~${(raw.length/1024/1024).toFixed(2)} MB)`);
+            } else {
+                diag('INFO', 'localStorage ms_attachments_v1 is null/empty');
+            }
+        } catch (e) {
+            diag('ERROR', 'Could not read localStorage for diagnostics', String(e));
+        }
+        diag('INFO', 'Boot integrity scan complete');
+    } catch (e) {
+        diag('ERROR', 'Boot scan crashed', String(e && e.message));
+    }
+}
+
+/* ======================================================================
+   End of 8AH diagnostic module
+   ====================================================================== */
+
+
+/* ======================================================================
    8YZ — CONSULTANTS MODULE
    ----------------------------------------------------------------------
    Tracks payments to consultants/freelancers/contractors who provide
@@ -37560,6 +37900,16 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__consultantsReady = true;
         }
     } catch (e) { console.warn("Consultants init:", e); }
+    // 8AH — Diagnostic: install the persistent bug indicator (red circle bottom-right)
+    // and run boot-time integrity scan. The sticky indicator appears only when
+    // CRITICAL/ERROR events have been captured; click it to view the log.
+    try {
+        if (window.__diag) {
+            window.__diag.installSticky();
+            // Defer the boot scan slightly so all modules have populated their data
+            setTimeout(__diagRunBootScan, 1000);
+        }
+    } catch (e) { console.warn("Diagnostic init:", e); }
     // Sync sidebar logo from Company Profile if user uploaded one (Phase 3 addendum)
     try { if (typeof syncSidebarLogo === 'function') syncSidebarLogo(); } catch (e) { console.warn("Sidebar logo sync:", e); }
     // Stamp schema version — writes lightweight meta record to localStorage
