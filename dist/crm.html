@@ -37443,70 +37443,221 @@ function __irnDecodeQRPayload(qrText) {
 
 // Render a pdf.js page to canvas and try to find a QR. Returns
 // { payload, imageDataUrl } or null.
-async function __irnFindQRInPage(page, pageNum) {
-    try {
-        // 8AQ — Reverted from 3x back to 2x. 3x triggered a pdf.js internal
-        // error ("undefined is not an object (evaluating 'matrix.height')")
-        // on at least one CA's PDF, likely an interaction between high-scale
-        // viewports and certain embedded vector content. 2x is the proven-
-        // working scale from 8AG/8AO. The QR detection improvement instead
-        // comes from the multi-strategy inversion loop kept from 8AP.
-        const viewport = page.getViewport({ scale: 2.0 });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+// 8AR — QR extraction now has two paths:
+//   Path 1: render whole page to canvas, scan with jsQR (the 8AO-stable approach)
+//   Path 2: walk pdf.js operator list, extract each image object,
+//           render each individually, scan with jsQR
+// Path 2 handles cases where the QR is embedded as a separate image stream
+// (typical of CA-signed PDFs from emSigner and similar signing tools) that
+// doesn't render to the page canvas in a jsQR-scannable form.
 
-        // 8AP — Try multiple inversion strategies explicitly. 'attemptBoth'
-        // can fail on borderline QRs because jsQR tries one and gives up
-        // before trying the other. Manual loop is more reliable.
-        const strategies = ['dontInvert', 'onlyInvert', 'attemptBoth'];
-        let code = null;
-        for (const strategy of strategies) {
-            code = window.jsQR(imageData.data, canvas.width, canvas.height, {
-                inversionAttempts: strategy
-            });
-            if (code && code.data) {
-                diag('INFO', `IRN extract: QR detected on page ${pageNum} with strategy=${strategy}`);
-                break;
-            }
-        }
-        if (!code || !code.data) {
-            diag('INFO', `IRN extract: no QR on page ${pageNum} (tried all inversion strategies at 2x scale)`);
-            return null;
-        }
-        diag('INFO', `IRN extract: QR found on page ${pageNum}`, { dataLength: code.data.length });
-        // Re-render just the QR region as a PNG dataUrl for storage
-        let qrImageDataUrl = null;
-        try {
-            if (code.location) {
-                const loc = code.location;
-                const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
-                const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
-                const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
-                const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
-                const pad = 10;
-                const x = Math.max(0, Math.floor(minX - pad));
-                const y = Math.max(0, Math.floor(minY - pad));
-                const w = Math.min(canvas.width - x, Math.ceil(maxX - minX + 2*pad));
-                const h = Math.min(canvas.height - y, Math.ceil(maxY - minY + 2*pad));
-                const cropCanvas = document.createElement('canvas');
-                cropCanvas.width = w;
-                cropCanvas.height = h;
-                cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
-                qrImageDataUrl = cropCanvas.toDataURL('image/png');
-            }
-        } catch (cropErr) {
-            diag('INFO', 'IRN extract: QR crop failed, will store full page', { error: String(cropErr && cropErr.message) });
-            qrImageDataUrl = canvas.toDataURL('image/png');
-        }
-        return { payload: code.data, imageDataUrl: qrImageDataUrl };
+async function __irnScanCanvasForQR(canvas, ctx, label) {
+    // Helper: pull RGBA from canvas + run jsQR with attemptBoth.
+    // Wrapped so any throw is logged and returns null instead of bubbling.
+    let imageData;
+    try {
+        imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     } catch (e) {
-        diag('INFO', `IRN extract: page ${pageNum} render/scan threw`, { error: String(e && e.message) });
+        diag('INFO', `IRN extract: getImageData threw (${label})`, { error: String(e && e.message) });
         return null;
     }
+    let code = null;
+    try {
+        code = window.jsQR(imageData.data, canvas.width, canvas.height, {
+            inversionAttempts: 'attemptBoth'
+        });
+    } catch (e) {
+        diag('INFO', `IRN extract: jsQR threw (${label})`, { error: String(e && e.message) });
+        return null;
+    }
+    return (code && code.data) ? code : null;
+}
+
+async function __irnTryPageRender(page, pageNum) {
+    // Path 1: render entire page to a 2x canvas and scan.
+    let canvas, ctx;
+    try {
+        const viewport = page.getViewport({ scale: 2.0 });
+        canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    } catch (e) {
+        diag('INFO', `IRN extract: page ${pageNum} canvas render threw`, { error: String(e && e.message) });
+        return null;
+    }
+    const code = await __irnScanCanvasForQR(canvas, ctx, `page ${pageNum} full-render`);
+    if (!code) {
+        diag('INFO', `IRN extract: full-page scan found no QR on page ${pageNum}`);
+        return null;
+    }
+    diag('INFO', `IRN extract: QR found on page ${pageNum} via full-page render`, { dataLength: code.data.length });
+    // Build crop dataUrl from the QR region
+    let qrImageDataUrl = null;
+    try {
+        if (code.location) {
+            const loc = code.location;
+            const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
+            const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
+            const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
+            const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
+            const pad = 10;
+            const x = Math.max(0, Math.floor(minX - pad));
+            const y = Math.max(0, Math.floor(minY - pad));
+            const w = Math.min(canvas.width - x, Math.ceil(maxX - minX + 2*pad));
+            const h = Math.min(canvas.height - y, Math.ceil(maxY - minY + 2*pad));
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = w;
+            cropCanvas.height = h;
+            cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
+            qrImageDataUrl = cropCanvas.toDataURL('image/png');
+        }
+    } catch (cropErr) {
+        diag('INFO', 'IRN extract: QR crop failed, using full page', { error: String(cropErr && cropErr.message) });
+        qrImageDataUrl = canvas.toDataURL('image/png');
+    }
+    return { payload: code.data, imageDataUrl: qrImageDataUrl };
+}
+
+async function __irnTryImageObjects(page, pageNum) {
+    // Path 2: walk the operator list, find image XObjects, scan each.
+    // We need to ensure objects are resolved, which the canvas render above
+    // would have done. If render failed, the objects may not be resolved
+    // and page.objs.get() can throw — we handle that gracefully.
+    const OPS = (window.pdfjsLib && window.pdfjsLib.OPS) ? window.pdfjsLib.OPS : null;
+    if (!OPS) {
+        diag('INFO', 'IRN extract: pdfjsLib.OPS unavailable, skipping image-object scan');
+        return null;
+    }
+    let opList;
+    try {
+        opList = await page.getOperatorList();
+    } catch (e) {
+        diag('INFO', `IRN extract: getOperatorList threw on page ${pageNum}`, { error: String(e && e.message) });
+        return null;
+    }
+    const imageOps = [];
+    for (let i = 0; i < opList.fnArray.length; i++) {
+        const op = opList.fnArray[i];
+        if (op === OPS.paintJpegXObject || op === OPS.paintImageXObject) {
+            const name = (opList.argsArray[i] && opList.argsArray[i][0]) || null;
+            if (name) imageOps.push({ name: name, op: op });
+        }
+    }
+    diag('INFO', `IRN extract: page ${pageNum} has ${imageOps.length} image XObjects`);
+    if (imageOps.length === 0) return null;
+
+    for (let idx = 0; idx < imageOps.length; idx++) {
+        const { name, op } = imageOps[idx];
+        let imgObj = null;
+        try {
+            // page.objs.get(name) may throw if unresolved, or accept a callback.
+            // Try direct/sync first; if it throws, try callback form.
+            try {
+                imgObj = page.objs.get(name);
+            } catch (syncErr) {
+                imgObj = await new Promise(function(resolve) {
+                    try {
+                        page.objs.get(name, function(o) { resolve(o); });
+                    } catch (cbErr) {
+                        diag('INFO', `IRN extract: page.objs.get threw for ${name}`, { error: String(cbErr && cbErr.message) });
+                        resolve(null);
+                    }
+                });
+            }
+        } catch (e) {
+            diag('INFO', `IRN extract: page.objs.get outer error for ${name}`, { error: String(e && e.message) });
+        }
+        if (!imgObj) {
+            diag('INFO', `IRN extract: image ${name} unresolved/missing`);
+            continue;
+        }
+        // imgObj shape varies:
+        //   - { src: 'data:image/...' } for native-JPEG-decoded
+        //   - { data: Uint8Array, width, height, kind } for raw bitmaps
+        //   - { bitmap: ImageBitmap, width, height } for newer builds
+        let imgCanvas = null;
+        try {
+            if (imgObj.src && typeof imgObj.src === 'string') {
+                // Native decode: load via <img> element
+                const img = await new Promise(function(resolve, reject) {
+                    const el = new Image();
+                    el.onload = function() { resolve(el); };
+                    el.onerror = function() { reject(new Error('img load failed')); };
+                    el.src = imgObj.src;
+                });
+                imgCanvas = document.createElement('canvas');
+                imgCanvas.width = img.naturalWidth || img.width;
+                imgCanvas.height = img.naturalHeight || img.height;
+                imgCanvas.getContext('2d').drawImage(img, 0, 0);
+            } else if (imgObj.bitmap) {
+                imgCanvas = document.createElement('canvas');
+                imgCanvas.width = imgObj.width || imgObj.bitmap.width;
+                imgCanvas.height = imgObj.height || imgObj.bitmap.height;
+                imgCanvas.getContext('2d').drawImage(imgObj.bitmap, 0, 0);
+            } else if (imgObj.data && imgObj.width && imgObj.height) {
+                // Raw bitmap. kind: 1=grayscale,1bpp; 2=RGB,8bpp; 3=RGBA,8bpp
+                imgCanvas = document.createElement('canvas');
+                imgCanvas.width = imgObj.width;
+                imgCanvas.height = imgObj.height;
+                const ictx = imgCanvas.getContext('2d');
+                const ridata = ictx.createImageData(imgObj.width, imgObj.height);
+                const src = imgObj.data;
+                const dst = ridata.data;
+                if (imgObj.kind === 3) {
+                    // RGBA passthrough
+                    for (let p = 0; p < dst.length; p++) dst[p] = src[p];
+                } else if (imgObj.kind === 2 || (!imgObj.kind && src.length === imgObj.width * imgObj.height * 3)) {
+                    // RGB → RGBA
+                    let si = 0, di = 0;
+                    while (di < dst.length) {
+                        dst[di++] = src[si++];
+                        dst[di++] = src[si++];
+                        dst[di++] = src[si++];
+                        dst[di++] = 255;
+                    }
+                } else {
+                    // Grayscale fallback
+                    let si = 0, di = 0;
+                    while (di < dst.length && si < src.length) {
+                        const v = src[si++];
+                        dst[di++] = v; dst[di++] = v; dst[di++] = v; dst[di++] = 255;
+                    }
+                }
+                ictx.putImageData(ridata, 0, 0);
+            } else {
+                diag('INFO', `IRN extract: image ${name} unknown shape`, { keys: Object.keys(imgObj).slice(0, 6).join(',') });
+                continue;
+            }
+        } catch (decodeErr) {
+            diag('INFO', `IRN extract: image ${name} decode threw`, { error: String(decodeErr && decodeErr.message) });
+            continue;
+        }
+        if (!imgCanvas || imgCanvas.width < 30 || imgCanvas.height < 30) {
+            // Too small to be a QR
+            continue;
+        }
+        diag('INFO', `IRN extract: scanning image ${name}`, { width: imgCanvas.width, height: imgCanvas.height });
+        const code = await __irnScanCanvasForQR(imgCanvas, imgCanvas.getContext('2d'), `image ${name}`);
+        if (code) {
+            diag('INFO', `IRN extract: QR found in image ${name}`, { dataLength: code.data.length });
+            let qrImageDataUrl = null;
+            try { qrImageDataUrl = imgCanvas.toDataURL('image/png'); } catch (e) { /* ignore */ }
+            return { payload: code.data, imageDataUrl: qrImageDataUrl };
+        }
+    }
+    diag('INFO', `IRN extract: no QR found in any image XObject on page ${pageNum}`);
+    return null;
+}
+
+async function __irnFindQRInPage(page, pageNum) {
+    // Try Path 1 first (page render). If it returns a QR, great.
+    // If it returns null (no QR found OR crashed), fall through to Path 2.
+    const pathResult = await __irnTryPageRender(page, pageNum);
+    if (pathResult) return pathResult;
+    // Path 2: image XObject extraction
+    return await __irnTryImageObjects(page, pageNum);
 }
 
 // Main extraction function. Returns:
