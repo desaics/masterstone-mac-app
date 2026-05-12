@@ -29512,8 +29512,31 @@ function triggerSignedPdfUpload(invId) {
     diag('INFO', `triggerSignedPdfUpload called`, { invId: invId });
     const inv = invoices.find(x => x.id === invId);
     if (!inv) { diag('ERROR', 'triggerSignedPdfUpload: invoice not found', { invId: invId }); return; }
-    const isReplace = !!inv.signedPdfAttachmentId;
+
+    // 8AJ — Resilience: an invoice can hold a stale signedPdfAttachmentId
+    // pointing at an attachment that no longer exists in the attachments map
+    // (this is exactly the scenario the boot scan flags as orphan). If we let
+    // the old code path interpret that as "replace", it'd then call
+    // removeAttachment which (pre-8AJ) silently bailed and broke the chain.
+    // Now we detect the orphan, clear the ref inline, and treat this as a
+    // fresh upload — the user shouldn't have to manually clean up first.
+    let isReplace = !!inv.signedPdfAttachmentId;
+    if (isReplace) {
+        const existingAtt = getInvoiceSignedPdfAttachment(inv);
+        if (!existingAtt) {
+            diag('INFO', 'triggerSignedPdfUpload: orphan signedPdfAttachmentId detected — clearing it and treating as fresh upload', {
+                invoiceNumber: inv.invoiceNumber,
+                orphanAttId: inv.signedPdfAttachmentId
+            });
+            inv.signedPdfAttachmentId = null;
+            inv.signedPdfUploadedAt = null;
+            inv.updatedAt = new Date().toISOString();
+            saveInvoices();
+            isReplace = false;
+        }
+    }
     diag('INFO', `triggerSignedPdfUpload: isReplace=${isReplace}`, { invoiceNumber: inv.invoiceNumber, existingAttId: inv.signedPdfAttachmentId });
+
     if (isReplace) {
         const cur = getInvoiceSignedPdfAttachment(inv);
         const curName = cur ? cur.filename : '(unknown)';
@@ -29528,41 +29551,50 @@ function triggerSignedPdfUpload(invId) {
     fi.accept = 'application/pdf';
     fi.style.display = 'none';
     fi.onchange = function() {
-        const file = fi.files && fi.files[0];
-        diag('INFO', `triggerSignedPdfUpload: file picker onchange fired`, { hasFile: !!file, fileName: file ? file.name : '(none)', fileType: file ? file.type : '(none)' });
-        if (!file) return;
-        if (file.type !== 'application/pdf') {
-            diag('ERROR', 'triggerSignedPdfUpload: wrong MIME type', { fileType: file.type });
-            alert('Please upload a PDF file.');
-            return;
-        }
+        // 8AJ — Wrap the entire onchange handler in try/catch so any silent
+        // throw becomes a visible diagnostic rather than a frozen UI.
+        try {
+            const file = fi.files && fi.files[0];
+            diag('INFO', `triggerSignedPdfUpload: file picker onchange fired`, { hasFile: !!file, fileName: file ? file.name : '(none)', fileType: file ? file.type : '(none)' });
+            if (!file) { fi.remove(); return; }
+            if (file.type !== 'application/pdf') {
+                diag('ERROR', 'triggerSignedPdfUpload: wrong MIME type', { fileType: file.type });
+                alert('Please upload a PDF file.');
+                fi.remove();
+                return;
+            }
 
-        const proceed = () => {
-            diag('INFO', 'triggerSignedPdfUpload: calling addAttachment');
-            addAttachment('invoice', inv.id, file, 'Digitally Signed Invoice (DSC)', function(att) {
-                diag('INFO', 'triggerSignedPdfUpload: addAttachment onSuccess fired', { attId: att.id });
-                inv.signedPdfAttachmentId = att.id;
-                inv.signedPdfUploadedAt = att.uploadedAt;
-                inv.updatedAt = new Date().toISOString();
-                saveInvoices();
-                renderInvoiceDetail(inv);
-                renderInvoicesPage();
-                if (typeof showProspectToast === 'function') {
-                    showProspectToast(`<i class="fas fa-file-signature" style="color:var(--success);"></i> Signed PDF saved for <strong>${pEsc(inv.invoiceNumber)}</strong>.`);
-                }
-            });
-        };
+            const proceed = () => {
+                diag('INFO', 'triggerSignedPdfUpload: calling addAttachment');
+                addAttachment('invoice', inv.id, file, 'Digitally Signed Invoice (DSC)', function(att) {
+                    diag('INFO', 'triggerSignedPdfUpload: addAttachment onSuccess fired', { attId: att.id });
+                    inv.signedPdfAttachmentId = att.id;
+                    inv.signedPdfUploadedAt = att.uploadedAt;
+                    inv.updatedAt = new Date().toISOString();
+                    saveInvoices();
+                    renderInvoiceDetail(inv);
+                    renderInvoicesPage();
+                    if (typeof showProspectToast === 'function') {
+                        showProspectToast(`<i class="fas fa-file-signature" style="color:var(--success);"></i> Signed PDF saved for <strong>${pEsc(inv.invoiceNumber)}</strong>.`);
+                    }
+                });
+            };
 
-        if (isReplace && inv.signedPdfAttachmentId) {
-            const prevId = inv.signedPdfAttachmentId;
-            removeAttachment('invoice', inv.id, prevId, function() {
-                inv.signedPdfAttachmentId = null;
+            if (isReplace && inv.signedPdfAttachmentId) {
+                const prevId = inv.signedPdfAttachmentId;
+                removeAttachment('invoice', inv.id, prevId, function() {
+                    inv.signedPdfAttachmentId = null;
+                    proceed();
+                });
+            } else {
                 proceed();
-            });
-        } else {
-            proceed();
+            }
+            fi.remove();
+        } catch (err) {
+            diag('CRITICAL', 'triggerSignedPdfUpload onchange threw', { error: String(err && err.message), stack: String(err && err.stack).slice(0, 500) });
+            alert('Upload failed: ' + (err && err.message ? err.message : err) + '. The diagnostic log has details (click 🐞 Diag in the top bar).');
+            try { fi.remove(); } catch (e) {}
         }
-        fi.remove();
     };
     document.body.appendChild(fi);
     diag('INFO', 'triggerSignedPdfUpload: clicking hidden file input');
@@ -32048,6 +32080,10 @@ function attGetIconClass(mimeType, filename) {
 
 // ===== Add (upload) =====
 function addAttachment(entityType, entityId, file, description, onSuccess) {
+    // 8AJ — Wrap entire body in try/catch as a safety net. If any unexpected
+    // throw happens (e.g., during size math or FileReader setup), it becomes
+    // a visible diagnostic instead of a silent UI freeze.
+    try {
     // 8AH — Diagnostic instrumentation
     diag('INFO', `addAttachment called`, {
         entityType: entityType,
@@ -32095,30 +32131,35 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
     // Read file as data URL
     const reader = new FileReader();
     reader.onload = function (e) {
-        const dataUrl = e.target.result;
-        diag('INFO', `FileReader onload`, { dataUrlLength: dataUrl ? dataUrl.length : -1, dataUrlType: typeof dataUrl });
-        const rec = {
-            id: attNewId(),
-            filename: file.name,
-            mimeType: file.type || 'application/octet-stream',
-            sizeBytes: file.size,
-            dataUrl: dataUrl,
-            uploadedAt: new Date().toISOString(),
-            description: description || ''
-        };
-        const key = attEntityKey(entityType, entityId);
-        if (!attachments[key]) attachments[key] = [];
-        attachments[key].push(rec);
-        diag('INFO', `Attachment record pushed to map`, { key: key, attId: rec.id, listLengthAfter: attachments[key].length });
-        const ok = saveAttachments();
-        diag('INFO', `saveAttachments returned`, { ok: ok });
-        if (ok) {
-            if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-paperclip" style="color:var(--success);"></i> <strong>${pEsc(file.name)}</strong> attached (${fmtBytes(file.size)}).`);
-            if (typeof onSuccess === 'function') onSuccess(rec);
-        } else {
-            // Rollback if save failed
-            diag('CRITICAL', 'saveAttachments returned false — rolling back attachment from in-memory map', { key: key, attId: rec.id });
-            attachments[key].pop();
+        try {
+            const dataUrl = e.target.result;
+            diag('INFO', `FileReader onload`, { dataUrlLength: dataUrl ? dataUrl.length : -1, dataUrlType: typeof dataUrl });
+            const rec = {
+                id: attNewId(),
+                filename: file.name,
+                mimeType: file.type || 'application/octet-stream',
+                sizeBytes: file.size,
+                dataUrl: dataUrl,
+                uploadedAt: new Date().toISOString(),
+                description: description || ''
+            };
+            const key = attEntityKey(entityType, entityId);
+            if (!attachments[key]) attachments[key] = [];
+            attachments[key].push(rec);
+            diag('INFO', `Attachment record pushed to map`, { key: key, attId: rec.id, listLengthAfter: attachments[key].length });
+            const ok = saveAttachments();
+            diag('INFO', `saveAttachments returned`, { ok: ok });
+            if (ok) {
+                if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-paperclip" style="color:var(--success);"></i> <strong>${pEsc(file.name)}</strong> attached (${fmtBytes(file.size)}).`);
+                if (typeof onSuccess === 'function') onSuccess(rec);
+            } else {
+                // Rollback if save failed
+                diag('CRITICAL', 'saveAttachments returned false — rolling back attachment from in-memory map', { key: key, attId: rec.id });
+                attachments[key].pop();
+            }
+        } catch (innerErr) {
+            diag('CRITICAL', 'addAttachment onload handler threw', { error: String(innerErr && innerErr.message), stack: String(innerErr && innerErr.stack).slice(0, 500) });
+            alert('Attachment save failed unexpectedly: ' + (innerErr && innerErr.message ? innerErr.message : innerErr) + '. Check the diagnostic log (🐞 Diag in top bar).');
         }
     };
     reader.onerror = function () {
@@ -32126,14 +32167,31 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
         alert("Failed to read file. Please try again.");
     };
     reader.readAsDataURL(file);
+    } catch (outerErr) {
+        // 8AJ — outer safety net
+        diag('CRITICAL', 'addAttachment outer handler threw', { error: String(outerErr && outerErr.message), stack: String(outerErr && outerErr.stack).slice(0, 500) });
+        alert('Attachment upload failed: ' + (outerErr && outerErr.message ? outerErr.message : outerErr) + '. Check the diagnostic log (🐞 Diag in top bar).');
+    }
 }
 
 // ===== Remove =====
 function removeAttachment(entityType, entityId, attId, onSuccess) {
     const key = attEntityKey(entityType, entityId);
-    if (!attachments[key]) return;
+    // 8AJ — Always-call-callback fix. The previous code returned early on a
+    // missing key/record, which left calling code (e.g. triggerSignedPdfUpload's
+    // "replace" flow) waiting forever. That's the root cause of the "select
+    // file → nothing happens" symptom. Now we log the missing case via diag(),
+    // fire the callback so chains can proceed, and exit cleanly.
+    if (!attachments[key] || !attachments[key].find(a => a.id === attId)) {
+        diag('INFO', 'removeAttachment: no matching attachment, firing callback anyway', {
+            key: key, attId: attId,
+            keyExists: !!attachments[key],
+            keyListLen: attachments[key] ? attachments[key].length : 0
+        });
+        if (typeof onSuccess === 'function') onSuccess();
+        return;
+    }
     const att = attachments[key].find(a => a.id === attId);
-    if (!att) return;
     if (!confirm(`Delete attachment "${att.filename}" (${fmtBytes(att.sizeBytes)})? This cannot be undone.`)) return;
     attachments[key] = attachments[key].filter(a => a.id !== attId);
     if (attachments[key].length === 0) delete attachments[key];
@@ -36706,7 +36764,19 @@ window.__diag = (function() {
         header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid #ddd;';
         header.innerHTML = `<div><strong style="font-size:16px;">Diagnostic Log</strong> <span style="color:#666; font-size:11.5px;">· ${buffer.length} events captured</span></div>`;
         const btnRow = document.createElement('div');
-        btnRow.style.cssText = 'display:flex; gap:8px;';
+        btnRow.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap;';
+        // 8AJ — Repair Orphans button (only enabled when orphans exist)
+        const repairBtn = document.createElement('button');
+        repairBtn.innerText = '🔧 Repair Orphans';
+        repairBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #c4923a; background:#fff4dc; color:#8b5e0e; border-radius:4px; cursor:pointer;';
+        repairBtn.onclick = function() { window.__diagRepairOrphans(); };
+        btnRow.appendChild(repairBtn);
+        // 8AJ — DB Sanity Check button
+        const sanityBtn = document.createElement('button');
+        sanityBtn.innerText = '🩺 DB Sanity Check';
+        sanityBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #2d7a4a; background:#e6f4ec; color:#1e5a36; border-radius:4px; cursor:pointer;';
+        sanityBtn.onclick = function() { window.__diagDbSanityCheck(); };
+        btnRow.appendChild(sanityBtn);
         const copyBtn = document.createElement('button');
         copyBtn.innerText = '📋 Copy All';
         copyBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #ccc; background:#f5f5f5; border-radius:4px; cursor:pointer;';
@@ -36828,6 +36898,8 @@ function __diagRunBootScan() {
         diag('INFO', `Boot scan: ${signedRefs} invoices reference a signed PDF, ${signedFound} match an attachment record`);
         if (signedMissing.length > 0) {
             diag('CRITICAL', `${signedMissing.length} invoice(s) have signedPdfAttachmentId but NO matching attachment record`, signedMissing);
+            // 8AJ — Auto-prompt for repair via a non-modal banner
+            setTimeout(function() { __diagShowOrphanRepairBanner(signedMissing.length); }, 500);
         }
         // Also report total attachment payload size — useful if hitting size limits
         if (attachments && typeof attachments === 'object') {
@@ -36856,6 +36928,161 @@ function __diagRunBootScan() {
         diag('INFO', 'Boot integrity scan complete');
     } catch (e) {
         diag('ERROR', 'Boot scan crashed', String(e && e.message));
+    }
+}
+
+/* ======================================================================
+   8AJ — Orphan repair utility
+   ----------------------------------------------------------------------
+   Scans invoices for signedPdfAttachmentId references that have no matching
+   attachment record, presents the user with a confirmation dialog listing
+   the affected invoices, and clears the dead references on confirm.
+   ====================================================================== */
+window.__diagRepairOrphans = function() {
+    try {
+        const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
+        const orphans = [];
+        invList.forEach(function(inv) {
+            if (!inv.signedPdfAttachmentId) return;
+            const key = `invoice_${inv.id}`;
+            const list = (attachments && attachments[key]) || [];
+            const found = list.find(function(a) { return a.id === inv.signedPdfAttachmentId; });
+            if (!found) {
+                orphans.push(inv);
+            }
+        });
+        if (orphans.length === 0) {
+            alert('No orphaned signed-PDF references found. Nothing to clean up.');
+            diag('INFO', 'Orphan repair: scan found 0 orphans');
+            return;
+        }
+        const list = orphans.map(function(inv) { return `  • ${inv.invoiceNumber || inv.id} (orphan ref: ${inv.signedPdfAttachmentId})`; }).join('\n');
+        const message = `Found ${orphans.length} invoice(s) with orphaned "signed PDF" references — the metadata says a signed PDF exists, but no actual file is in the database.\n\n${list}\n\nClear these dead references? This will:\n  • Remove the DSC-Signed badge from these invoices\n  • Restore the regular "Upload Signed PDF" workflow\n  • NOT recover any lost PDF files (those are already gone from storage)\n\nProceed?`;
+        if (!confirm(message)) {
+            diag('INFO', 'Orphan repair: user declined');
+            return;
+        }
+        const now = new Date().toISOString();
+        orphans.forEach(function(inv) {
+            diag('INFO', 'Orphan repair: clearing signedPdfAttachmentId', { invoiceNumber: inv.invoiceNumber, orphanAttId: inv.signedPdfAttachmentId });
+            inv.signedPdfAttachmentId = null;
+            inv.signedPdfUploadedAt = null;
+            inv.updatedAt = now;
+        });
+        if (typeof saveInvoices === 'function') saveInvoices();
+        // Refresh any currently-rendered invoice views
+        try { if (typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {}
+        // Hide the repair-prompt banner if visible
+        const banner = document.getElementById('__diagOrphanBanner');
+        if (banner) banner.remove();
+        alert(`Cleared ${orphans.length} orphaned reference(s). You can now upload a fresh signed PDF for these invoices.`);
+        diag('INFO', `Orphan repair: ${orphans.length} references cleared`);
+    } catch (e) {
+        diag('CRITICAL', 'Orphan repair crashed', { error: String(e && e.message) });
+        alert('Orphan repair encountered an error: ' + (e && e.message ? e.message : e));
+    }
+};
+
+/* ======================================================================
+   8AJ — DB Sanity Check
+   ----------------------------------------------------------------------
+   Compares the in-memory state with what's in localStorage AND with what
+   Rust's storage_load_all reports from SQLite. Surfaces any divergences.
+   ====================================================================== */
+window.__diagDbSanityCheck = async function() {
+    diag('INFO', '=== DB Sanity Check starting ===');
+    try {
+        const tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!tauri || !tauri.invoke) {
+            diag('CRITICAL', 'DB Sanity Check: Tauri runtime not available — this is the browser shell, not the desktop app');
+            alert('Tauri runtime not available. Sanity check only works in the desktop app.');
+            return;
+        }
+
+        const checkKeys = [
+            { ls: 'ms_attachments_v1', label: 'Attachments' },
+            { ls: 'ms_invoices_v1', label: 'Invoices' },
+            { ls: 'ms_consultants_v1', label: 'Consultants' },
+            { ls: 'ms_consultant_payments_v1', label: 'Consultant Payments' },
+            { ls: 'ms_pro_v210', label: 'Contracts' },
+            { ls: 'ms_purchase_orders_v1', label: 'Purchase Orders' },
+            { ls: 'ms_client_master_v1', label: 'Clients' },
+            { ls: 'ms_resellers_v1', label: 'Resellers' }
+        ];
+
+        diag('INFO', 'DB Sanity Check: requesting storage_load_all from Rust');
+        let loadResult;
+        try {
+            loadResult = await tauri.invoke('storage_load_all');
+        } catch (e) {
+            diag('CRITICAL', 'DB Sanity Check: storage_load_all threw', { error: String(e) });
+            alert('Could not load from SQLite: ' + e + '\n\nCheck the diagnostic log.');
+            return;
+        }
+        if (!loadResult || !loadResult.data) {
+            diag('CRITICAL', 'DB Sanity Check: storage_load_all returned no data', { result: loadResult });
+            alert('storage_load_all returned no data. Check the diagnostic log.');
+            return;
+        }
+
+        const sqliteData = loadResult.data || {};
+        const findings = [];
+        const summary = [];
+
+        checkKeys.forEach(function(item) {
+            const lsRaw = localStorage.getItem(item.ls);
+            const sqlRaw = sqliteData[item.ls];
+            const lsLen = lsRaw ? lsRaw.length : 0;
+            const sqlLen = sqlRaw ? sqlRaw.length : 0;
+            let lsCount = 0, sqlCount = 0;
+            try { lsCount = lsRaw ? (JSON.parse(lsRaw) || []).length : 0; } catch (e) {}
+            try { sqlCount = sqlRaw ? (JSON.parse(sqlRaw) || []).length : 0; } catch (e) {}
+            const matches = lsCount === sqlCount && lsLen === sqlLen;
+            summary.push(`${item.label}: LS=${lsCount} (${(lsLen/1024).toFixed(1)} KB), SQLite=${sqlCount} (${(sqlLen/1024).toFixed(1)} KB) ${matches ? '✓' : '✗ MISMATCH'}`);
+            if (!matches) {
+                findings.push({ key: item.ls, label: item.label, lsCount: lsCount, sqlCount: sqlCount, lsLen: lsLen, sqlLen: sqlLen });
+            }
+        });
+
+        diag('INFO', 'DB Sanity Check: comparison complete', { findings: findings, summaryLines: summary.length });
+
+        const message = `DB Sanity Check Results\n\n` + summary.join('\n') +
+            `\n\n` +
+            (findings.length === 0
+                ? '✓ All buckets match between localStorage and SQLite.'
+                : `✗ ${findings.length} bucket(s) show a mismatch. See diagnostic log for details.\n\nA mismatch means the in-memory state has drifted from what's persisted in SQLite. This is the kind of state that can cause data loss on next reload.`);
+        alert(message);
+    } catch (e) {
+        diag('CRITICAL', 'DB Sanity Check crashed', { error: String(e && e.message) });
+        alert('Sanity check encountered an error: ' + (e && e.message ? e.message : e));
+    }
+};
+
+/* ======================================================================
+   8AJ — Auto-prompt for orphan repair on boot
+   ----------------------------------------------------------------------
+   When the boot scan finds orphan references, show a non-modal banner in
+   the top-right that invites the user to repair. They can dismiss it or
+   click it to launch the repair dialog. Never auto-clears data without
+   explicit confirmation.
+   ====================================================================== */
+function __diagShowOrphanRepairBanner(orphanCount) {
+    try {
+        let banner = document.getElementById('__diagOrphanBanner');
+        if (banner) banner.remove();
+        banner = document.createElement('div');
+        banner.id = '__diagOrphanBanner';
+        banner.style.cssText = 'position:fixed; top:60px; right:20px; z-index:99996; background:#fff4dc; color:#8b5e0e; padding:14px 18px; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.2); border-left:4px solid #c4923a; font-size:12.5px; font-family:-apple-system,sans-serif; max-width:380px; line-height:1.5; cursor:pointer;';
+        banner.innerHTML = `<div style="font-weight:700; margin-bottom:4px;"><i class="fas fa-tools"></i> ${orphanCount} orphaned signed-PDF reference(s)</div>
+            <div style="margin-bottom:8px;">Some invoices claim to have a signed PDF, but no actual file is in storage. Click to review and clean up.</div>
+            <div style="display:flex; gap:8px;">
+              <button onclick="event.stopPropagation(); window.__diagRepairOrphans();" style="background:#c4923a; color:white; border:none; padding:5px 11px; border-radius:4px; font-size:11.5px; font-weight:600; cursor:pointer;">Review &amp; clean up</button>
+              <button onclick="event.stopPropagation(); document.getElementById('__diagOrphanBanner').remove();" style="background:transparent; color:#8b5e0e; border:1px solid #8b5e0e; padding:5px 11px; border-radius:4px; font-size:11.5px; cursor:pointer;">Dismiss</button>
+            </div>`;
+        banner.onclick = function() { window.__diagRepairOrphans(); };
+        document.body.appendChild(banner);
+    } catch (e) {
+        diag('ERROR', 'Failed to show orphan repair banner', { error: String(e && e.message) });
     }
 }
 
