@@ -13,11 +13,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<!-- 8AG — IRN/QR auto-extraction libs. Loaded async; extraction silently
-     no-ops if these haven't finished loading or if user is offline on first
-     boot. The libs are then cached for offline use. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js" async></script>
+<!-- 8AG/8AN — IRN/QR auto-extraction libs. The 8AG attempt used cdnjs's
+     "modern" build with async, which didn't expose pdfjsLib reliably in
+     Tauri's WKWebView. 8AN switches to the legacy/UMD build (designed for
+     direct browser inclusion without worker dependencies) and removes the
+     async attribute so loading is guaranteed before runIRNExtraction needs
+     them. The libs are cached after first fetch. -->
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 
 <style>
 /* --- CORE VARIABLES --- */
@@ -28157,6 +28160,36 @@ function _propagateInvoiceToContractCycle(inv) {
             paymentDate = dates[dates.length - 1] || null;
         }
         set('paymentDate', paymentDate);
+        // 8AN — Also populate arInvoices[] so the Subscription Portfolio's
+        // Invoicing Lifecycle table shows the active invoice. The lifecycle
+        // table prefers arInvoices[] over the legacy single-invoice fields
+        // when arInvoices has entries; pre-8AN, propagation only updated the
+        // legacy fields, so the lifecycle UI silently ignored Mark-Issued
+        // updates for any cycle whose arInvoices array already existed.
+        //
+        // Per the 8AN scope decision: CRM invoice is the source of truth.
+        // Any manual entries that previously existed in arInvoices[] for this
+        // cycle are overwritten. The unified billing modal can still be used
+        // to override post hoc.
+        const newArEntry = {
+            invNo: active.invoiceNumber || '',
+            date: active.invoiceDate || '',
+            amount: parseFloat(active.grandTotal) || 0,
+            paidDate: paymentDate || '',
+            link: '',
+            localPath: ''
+        };
+        // Compare to detect change
+        const oldAr = Array.isArray(cycle.arInvoices) ? cycle.arInvoices : [];
+        const arChanged = oldAr.length !== 1
+            || oldAr[0].invNo !== newArEntry.invNo
+            || oldAr[0].date !== newArEntry.date
+            || oldAr[0].amount !== newArEntry.amount
+            || oldAr[0].paidDate !== newArEntry.paidDate;
+        if (arChanged) {
+            cycle.arInvoices = [newArEntry];
+            changed = true;
+        }
     } else {
         // No active invoice — clear cycle fields (e.g., the only invoice was cancelled or deleted)
         set('invoiceRaised', false);
@@ -28164,6 +28197,11 @@ function _propagateInvoiceToContractCycle(inv) {
         set('clientInvoiceNo', '');
         set('paid', false);
         set('paymentDate', null);
+        // 8AN — also clear arInvoices since no active invoice exists
+        if (Array.isArray(cycle.arInvoices) && cycle.arInvoices.length > 0) {
+            cycle.arInvoices = [];
+            changed = true;
+        }
     }
 
     if (changed) {
@@ -36955,6 +36993,12 @@ window.__diag = (function() {
         repairBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #c4923a; background:#fff4dc; color:#8b5e0e; border-radius:4px; cursor:pointer;';
         repairBtn.onclick = function() { window.__diagRepairOrphans(); };
         btnRow.appendChild(repairBtn);
+        // 8AN — Resync invoice→cycle links button
+        const resyncBtn = document.createElement('button');
+        resyncBtn.innerText = '🔄 Resync Cycle Links';
+        resyncBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #4a73b8; background:#e3edfa; color:#2a4d80; border-radius:4px; cursor:pointer;';
+        resyncBtn.onclick = function() { window.__diagResyncInvoiceLinks(); };
+        btnRow.appendChild(resyncBtn);
         // 8AJ — DB Sanity Check button
         const sanityBtn = document.createElement('button');
         sanityBtn.innerText = '🩺 DB Sanity Check';
@@ -37110,6 +37154,22 @@ function __diagRunBootScan() {
             diag('ERROR', 'Could not read localStorage for diagnostics', String(e));
         }
         diag('INFO', 'Boot integrity scan complete');
+        // 8AN — IRN library presence diagnostic. At boot time (~1s in), the
+        // libs MAY still be loading. Schedule three follow-up checks so we
+        // can see whether they ever arrive.
+        const irnCheck = function(label) {
+            try {
+                diag('INFO', `IRN libs check (${label})`, {
+                    pdfjsLib: typeof window.pdfjsLib,
+                    pdfjs: typeof window.pdfjs,
+                    jsQR: typeof window.jsQR,
+                    ready: (typeof __irnLibsReady === 'function') ? __irnLibsReady() : 'fn missing'
+                });
+            } catch (e) { /* ignore */ }
+        };
+        irnCheck('boot');
+        setTimeout(function() { irnCheck('+2s'); }, 2000);
+        setTimeout(function() { irnCheck('+10s'); }, 10000);
     } catch (e) {
         diag('ERROR', 'Boot scan crashed', String(e && e.message));
     }
@@ -37122,6 +37182,51 @@ function __diagRunBootScan() {
    attachment record, presents the user with a confirmation dialog listing
    the affected invoices, and clears the dead references on confirm.
    ====================================================================== */
+/* ======================================================================
+   8AN — Manual resync of Invoice → Contract Cycle propagation
+   ----------------------------------------------------------------------
+   Re-runs _propagateInvoiceToContractCycle against every linked invoice in
+   the system. Use after upgrading from a pre-8AN build, where propagation
+   was writing only the legacy single-invoice fields. This backfills the
+   arInvoices[] array on each linked contract cycle.
+   ====================================================================== */
+window.__diagResyncInvoiceLinks = function() {
+    try {
+        const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
+        if (typeof _propagateInvoiceToContractCycle !== 'function') {
+            alert('Propagation function not available. Cannot resync.');
+            return;
+        }
+        let linked = 0, propagated = 0, errors = 0;
+        invList.forEach(function(inv) {
+            const hasLink = inv.linkedContractIdx !== '' && inv.linkedContractIdx !== null && inv.linkedContractIdx !== undefined
+                && inv.linkedCycleYearIdx !== '' && inv.linkedCycleYearIdx !== null && inv.linkedCycleYearIdx !== undefined;
+            if (!hasLink) return;
+            linked++;
+            try {
+                _propagateInvoiceToContractCycle(inv);
+                propagated++;
+            } catch (e) {
+                errors++;
+                diag('ERROR', 'Resync: propagation threw for invoice', {
+                    invoiceNumber: inv.invoiceNumber,
+                    error: String(e && e.message)
+                });
+            }
+        });
+        diag('INFO', 'Resync complete', { totalInvoices: invList.length, linked: linked, propagated: propagated, errors: errors });
+        alert(`Resync complete.\n\n` +
+            `Total invoices: ${invList.length}\n` +
+            `Linked to a contract cycle: ${linked}\n` +
+            `Successfully propagated: ${propagated}\n` +
+            `Errors: ${errors}\n\n` +
+            `Open the Subscription Portfolio → expand a contract → check the Invoicing Lifecycle Details table to verify.`);
+    } catch (e) {
+        diag('CRITICAL', 'Resync crashed', { error: String(e && e.message) });
+        alert('Resync encountered an error: ' + (e && e.message ? e.message : e));
+    }
+};
+
 window.__diagRepairOrphans = function() {
     try {
         const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
@@ -37296,9 +37401,16 @@ function __diagShowOrphanRepairBanner(orphanCount) {
    ====================================================================== */
 
 function __irnLibsReady() {
-    return typeof window !== 'undefined'
-        && typeof window.pdfjsLib !== 'undefined'
-        && typeof window.jsQR === 'function';
+    if (typeof window === 'undefined') return false;
+    // 8AN — Some pdf.js builds expose pdfjsLib as window.pdfjsLib;
+    // others as window.pdfjs or globalThis.pdfjsLib. Check all three.
+    const pdfLib = window.pdfjsLib || window.pdfjs || (typeof globalThis !== 'undefined' ? globalThis.pdfjsLib : null);
+    const hasQR = typeof window.jsQR === 'function';
+    if (pdfLib && pdfLib.getDocument && !window.pdfjsLib) {
+        // Normalize for downstream code that uses window.pdfjsLib
+        window.pdfjsLib = pdfLib;
+    }
+    return !!(window.pdfjsLib && window.pdfjsLib.getDocument && hasQR);
 }
 
 // Read a file as ArrayBuffer (used by pdf.js)
@@ -37546,16 +37658,39 @@ async function extractIRNFromPDF(file) {
 async function runIRNExtraction(inv, file) {
     if (!inv || !file) return;
     diag('INFO', 'runIRNExtraction: starting', { invoiceNumber: inv.invoiceNumber });
-    // Wait briefly for libs if they're still loading
+    // 8AN — Wait up to 10 seconds for libs to be ready, log progress every 2s
     if (!__irnLibsReady()) {
-        diag('INFO', 'runIRNExtraction: libs not yet ready, waiting up to 4s');
-        const deadline = Date.now() + 4000;
+        diag('INFO', 'runIRNExtraction: libs not yet ready, waiting up to 10s', {
+            pdfjsLib: typeof window.pdfjsLib,
+            pdfjs: typeof window.pdfjs,
+            jsQR: typeof window.jsQR
+        });
+        const deadline = Date.now() + 10000;
+        let lastLogTime = Date.now();
         while (Date.now() < deadline && !__irnLibsReady()) {
-            await new Promise(function(r) { setTimeout(r, 200); });
+            await new Promise(function(r) { setTimeout(r, 250); });
+            // Log every 2 seconds during wait
+            if (Date.now() - lastLogTime >= 2000) {
+                diag('INFO', 'runIRNExtraction: still waiting for libs', {
+                    elapsedMs: Date.now() - (deadline - 10000),
+                    pdfjsLib: typeof window.pdfjsLib,
+                    pdfjs: typeof window.pdfjs,
+                    jsQR: typeof window.jsQR
+                });
+                lastLogTime = Date.now();
+            }
         }
     }
     if (!__irnLibsReady()) {
-        diag('INFO', 'runIRNExtraction: libs never loaded (offline?), silent no-op');
+        diag('CRITICAL', 'runIRNExtraction: libs never loaded after 10s wait', {
+            pdfjsLib: typeof window.pdfjsLib,
+            pdfjs: typeof window.pdfjs,
+            jsQR: typeof window.jsQR,
+            note: 'Likely Tauri WKWebView blocked CDN. If reproduces, may need to inline libs (Phase 8AO).'
+        });
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-info-circle" style="color:var(--text-dim);"></i> IRN auto-extraction unavailable (libraries didn't load). Use <strong>Record IRN</strong> to enter manually.`, 6000);
+        }
         return;
     }
 
