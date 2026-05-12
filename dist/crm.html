@@ -37638,12 +37638,74 @@ async function __irnTryImageObjects(page, pageNum) {
             // Too small to be a QR
             continue;
         }
-        diag('INFO', `IRN extract: scanning image ${name}`, { width: imgCanvas.width, height: imgCanvas.height });
-        const code = await __irnScanCanvasForQR(imgCanvas, imgCanvas.getContext('2d'), `image ${name}`);
+        // 8AS — log source decode path so we know which branch produced the canvas
+        const srcType = imgObj.src ? 'src(dataUrl)' : (imgObj.bitmap ? 'bitmap' : (imgObj.data ? `data(kind=${imgObj.kind})` : 'unknown'));
+        diag('INFO', `IRN extract: scanning image ${name}`, { width: imgCanvas.width, height: imgCanvas.height, srcType: srcType });
+
+        // 8AS — Build a preprocessed scan canvas:
+        //   1. White background (composites away any alpha; QRs need black-on-white)
+        //   2. Quiet-zone padding around the image (~10% on each side)
+        //   3. Nearest-neighbor upscale for small images (jsQR is more reliable
+        //      when each QR module is 10+ pixels; a 165×168 QR has ~7px modules)
+        let scanCanvas = imgCanvas;
+        try {
+            const w0 = imgCanvas.width, h0 = imgCanvas.height;
+            // Decide upscale factor: target the smaller dimension to be at least 600px
+            const targetMin = 600;
+            const minDim = Math.min(w0, h0);
+            const upscale = minDim < targetMin ? Math.min(4, Math.ceil(targetMin / minDim)) : 1;
+            // Padding: 10% of upscaled side, capped at 40px
+            const pad = Math.min(40, Math.round(Math.max(w0, h0) * upscale * 0.1));
+            const newW = w0 * upscale + 2 * pad;
+            const newH = h0 * upscale + 2 * pad;
+            const pre = document.createElement('canvas');
+            pre.width = newW;
+            pre.height = newH;
+            const pctx = pre.getContext('2d');
+            // Fill white background
+            pctx.fillStyle = '#ffffff';
+            pctx.fillRect(0, 0, newW, newH);
+            // Disable image smoothing so upscale stays crisp (preserves QR edges)
+            pctx.imageSmoothingEnabled = false;
+            // For consistency across browsers
+            if ('webkitImageSmoothingEnabled' in pctx) pctx.webkitImageSmoothingEnabled = false;
+            // Draw original image centred with padding
+            pctx.drawImage(imgCanvas, 0, 0, w0, h0, pad, pad, w0 * upscale, h0 * upscale);
+            scanCanvas = pre;
+            diag('INFO', `IRN extract: preprocessed image ${name}`, { upscale: upscale, pad: pad, scanW: newW, scanH: newH });
+        } catch (preErr) {
+            diag('INFO', `IRN extract: preprocess failed for ${name}, using raw image`, { error: String(preErr && preErr.message) });
+            scanCanvas = imgCanvas;
+        }
+        const code = await __irnScanCanvasForQR(scanCanvas, scanCanvas.getContext('2d'), `image ${name}`);
         if (code) {
             diag('INFO', `IRN extract: QR found in image ${name}`, { dataLength: code.data.length });
             let qrImageDataUrl = null;
-            try { qrImageDataUrl = imgCanvas.toDataURL('image/png'); } catch (e) { /* ignore */ }
+            // Crop the QR region from the preprocessed canvas if location available,
+            // otherwise store the (preprocessed) image entire.
+            try {
+                if (code.location) {
+                    const loc = code.location;
+                    const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
+                    const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
+                    const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
+                    const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
+                    const cpad = 10;
+                    const x = Math.max(0, Math.floor(minX - cpad));
+                    const y = Math.max(0, Math.floor(minY - cpad));
+                    const w = Math.min(scanCanvas.width - x, Math.ceil(maxX - minX + 2 * cpad));
+                    const h = Math.min(scanCanvas.height - y, Math.ceil(maxY - minY + 2 * cpad));
+                    const cropCanvas = document.createElement('canvas');
+                    cropCanvas.width = w;
+                    cropCanvas.height = h;
+                    cropCanvas.getContext('2d').drawImage(scanCanvas, x, y, w, h, 0, 0, w, h);
+                    qrImageDataUrl = cropCanvas.toDataURL('image/png');
+                } else {
+                    qrImageDataUrl = imgCanvas.toDataURL('image/png');
+                }
+            } catch (e) {
+                try { qrImageDataUrl = imgCanvas.toDataURL('image/png'); } catch (e2) { /* ignore */ }
+            }
             return { payload: code.data, imageDataUrl: qrImageDataUrl };
         }
     }
