@@ -13,6 +13,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<!-- 8AG — IRN/QR auto-extraction libs. Loaded async; extraction silently
+     no-ops if these haven't finished loading or if user is offline on first
+     boot. The libs are then cached for offline use. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js" async></script>
 
 <style>
 /* --- CORE VARIABLES --- */
@@ -29495,6 +29500,16 @@ function submitMarkIssued(withFile) {
             inv.signedPdfAttachmentId = att.id;
             inv.signedPdfUploadedAt = att.uploadedAt;
             finishMarkIssued();
+            // 8AG — Fire-and-forget IRN auto-extraction (same as
+            // triggerSignedPdfUpload path). Runs in background after the
+            // mark-issued transition completes so the user sees Issued first.
+            try {
+                if (typeof runIRNExtraction === 'function') {
+                    runIRNExtraction(inv, file);
+                }
+            } catch (e) {
+                diag('INFO', 'submitMarkIssued: runIRNExtraction kick-off threw', { error: String(e && e.message) });
+            }
         });
     } else {
         finishMarkIssued();
@@ -29582,6 +29597,16 @@ function triggerSignedPdfUpload(invId) {
                     renderInvoicesPage();
                     if (typeof showProspectToast === 'function') {
                         showProspectToast(`<i class="fas fa-file-signature" style="color:var(--success);"></i> Signed PDF saved for <strong>${pEsc(inv.invoiceNumber)}</strong>.`);
+                    }
+                    // 8AG — Fire-and-forget IRN auto-extraction. Runs in
+                    // background; never blocks the upload UI. The function
+                    // handles its own toasts and errors.
+                    try {
+                        if (typeof runIRNExtraction === 'function') {
+                            runIRNExtraction(inv, file);
+                        }
+                    } catch (e) {
+                        diag('INFO', 'triggerSignedPdfUpload: runIRNExtraction kick-off threw', { error: String(e && e.message) });
                     }
                 });
             };
@@ -37247,6 +37272,369 @@ function __diagShowOrphanRepairBanner(orphanCount) {
 
 /* ======================================================================
    End of 8AH diagnostic module
+   ====================================================================== */
+
+
+/* ======================================================================
+   8AG — IRN / QR AUTO-EXTRACTION FROM SIGNED PDF
+   ----------------------------------------------------------------------
+   Purpose: when the user uploads a digitally-signed PDF returned by the CA
+   (post-IRP), automatically extract the IRN, acknowledgment number,
+   acknowledgment date, and the signed QR. Saves the user from having to
+   re-type these via the Record IRN modal.
+
+   Approach: pdf.js parses the PDF, gives us text per page (for IRN regex)
+   and rendered page canvases (for QR decode via jsQR). The QR decode
+   yields a JWT whose payload contains the authoritative IRN.
+
+   Failure modes are silent — manual IRN modal remains the editor and the
+   fallback. We never block the upload UI; extraction runs fire-and-forget
+   after the file is saved.
+
+   Libraries loaded from CDN at <head>; extraction silently no-ops if libs
+   aren't ready (offline first boot).
+   ====================================================================== */
+
+function __irnLibsReady() {
+    return typeof window !== 'undefined'
+        && typeof window.pdfjsLib !== 'undefined'
+        && typeof window.jsQR === 'function';
+}
+
+// Read a file as ArrayBuffer (used by pdf.js)
+function __irnReadFileAsArrayBuffer(file) {
+    return new Promise(function(resolve, reject) {
+        const r = new FileReader();
+        r.onload = function() { resolve(r.result); };
+        r.onerror = function() { reject(new Error('FileReader failed: ' + (r.error || 'unknown'))); };
+        r.readAsArrayBuffer(file);
+    });
+}
+
+// Try base64url-decode the JWT-style QR payload and parse JSON.
+// Returns the parsed object or null.
+function __irnDecodeQRPayload(qrText) {
+    if (!qrText || typeof qrText !== 'string') return null;
+    // GST e-invoice QR is a JWT: header.payload.signature
+    const parts = qrText.split('.');
+    if (parts.length < 2) return null;
+    try {
+        // Base64URL → base64
+        let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        const json = atob(b64);
+        return JSON.parse(json);
+    } catch (e) {
+        diag('INFO', 'IRN extract: QR JWT decode failed', { error: String(e && e.message) });
+        return null;
+    }
+}
+
+// Render a pdf.js page to canvas and try to find a QR. Returns
+// { payload, imageDataUrl } or null.
+async function __irnFindQRInPage(page, pageNum) {
+    try {
+        // Render at 2x for better QR resolution
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(imageData.data, canvas.width, canvas.height, {
+            inversionAttempts: 'attemptBoth'
+        });
+        if (!code || !code.data) {
+            diag('INFO', `IRN extract: no QR on page ${pageNum}`);
+            return null;
+        }
+        diag('INFO', `IRN extract: QR found on page ${pageNum}`, { dataLength: code.data.length });
+        // Re-render just the QR region as a PNG dataUrl for storage
+        let qrImageDataUrl = null;
+        try {
+            if (code.location) {
+                const loc = code.location;
+                const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
+                const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
+                const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
+                const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
+                const pad = 10;
+                const x = Math.max(0, Math.floor(minX - pad));
+                const y = Math.max(0, Math.floor(minY - pad));
+                const w = Math.min(canvas.width - x, Math.ceil(maxX - minX + 2*pad));
+                const h = Math.min(canvas.height - y, Math.ceil(maxY - minY + 2*pad));
+                const cropCanvas = document.createElement('canvas');
+                cropCanvas.width = w;
+                cropCanvas.height = h;
+                cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
+                qrImageDataUrl = cropCanvas.toDataURL('image/png');
+            }
+        } catch (cropErr) {
+            diag('INFO', 'IRN extract: QR crop failed, will store full page', { error: String(cropErr && cropErr.message) });
+            qrImageDataUrl = canvas.toDataURL('image/png');
+        }
+        return { payload: code.data, imageDataUrl: qrImageDataUrl };
+    } catch (e) {
+        diag('INFO', `IRN extract: page ${pageNum} render/scan threw`, { error: String(e && e.message) });
+        return null;
+    }
+}
+
+// Main extraction function. Returns:
+//   { irn, ackNumber, ackDate, signedQR, qrImageDataUrl, source }
+// where source is 'text' | 'qr' | 'both'. Returns null if no IRN found.
+async function extractIRNFromPDF(file) {
+    if (!__irnLibsReady()) {
+        diag('INFO', 'extractIRNFromPDF: libs not ready, skipping');
+        return null;
+    }
+    diag('INFO', 'extractIRNFromPDF starting', { fileName: file && file.name, fileSize: file && file.size });
+
+    // Configure pdf.js worker. Without this, pdf.js falls back to a
+    // synchronous main-thread parser (slower but works).
+    try {
+        if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    } catch (e) { /* keep going — worker is optional */ }
+
+    let arrayBuffer;
+    try {
+        arrayBuffer = await __irnReadFileAsArrayBuffer(file);
+    } catch (e) {
+        diag('ERROR', 'extractIRNFromPDF: file read failed', { error: String(e && e.message) });
+        return null;
+    }
+
+    let pdf;
+    try {
+        pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    } catch (e) {
+        diag('ERROR', 'extractIRNFromPDF: pdf.js getDocument failed', { error: String(e && e.message) });
+        return null;
+    }
+    diag('INFO', 'extractIRNFromPDF: pdf loaded', { numPages: pdf.numPages });
+
+    // ---- Phase 1: extract text from all pages ----
+    let fullText = '';
+    for (let p = 1; p <= pdf.numPages; p++) {
+        try {
+            const page = await pdf.getPage(p);
+            const content = await page.getTextContent();
+            const pageText = content.items.map(function(i) { return i.str; }).join(' ');
+            fullText += pageText + ' ';
+        } catch (e) {
+            diag('INFO', `extractIRNFromPDF: text extraction failed on page ${p}`, { error: String(e && e.message) });
+        }
+    }
+    diag('INFO', 'extractIRNFromPDF: text extracted', { textLength: fullText.length });
+
+    // ---- Phase 2: regex extraction ----
+    let textIrn = null, ackNumber = null, ackDate = null;
+
+    // IRN: 64-char hex string. The IRN appears multiple times in some PDFs;
+    // we pick the first valid one. Filter false positives (e.g., 64-char
+    // hashes that happen to appear elsewhere) by checking it's near an
+    // "IRN" label if possible.
+    const irnRegex = /\b([0-9a-f]{64})\b/gi;
+    const irnMatches = [];
+    let m;
+    while ((m = irnRegex.exec(fullText)) !== null) {
+        irnMatches.push({ value: m[1].toLowerCase(), index: m.index });
+    }
+    if (irnMatches.length > 0) {
+        // Prefer one that's close to the literal "IRN" in the text
+        const irnLabelIdx = fullText.toLowerCase().indexOf('irn');
+        if (irnLabelIdx >= 0) {
+            let best = irnMatches[0];
+            let bestDist = Math.abs(best.index - irnLabelIdx);
+            for (let i = 1; i < irnMatches.length; i++) {
+                const d = Math.abs(irnMatches[i].index - irnLabelIdx);
+                if (d < bestDist) { best = irnMatches[i]; bestDist = d; }
+            }
+            textIrn = best.value;
+        } else {
+            textIrn = irnMatches[0].value;
+        }
+    }
+    diag('INFO', 'extractIRNFromPDF: IRN regex result', { found: !!textIrn, matches: irnMatches.length });
+
+    const ackNumRe = /(?:Ack(?:nowledge?ment)?[\s.]*(?:No\.?|Number)?)\s*[:\-]?\s*(\d{10,18})/i;
+    const ackNumM = fullText.match(ackNumRe);
+    if (ackNumM) ackNumber = ackNumM[1];
+
+    const ackDateRe = /(?:Ack(?:nowledge?ment)?\s*Date)\s*[:\-]?\s*(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/i;
+    const ackDateM = fullText.match(ackDateRe);
+    if (ackDateM) ackDate = ackDateM[1];
+
+    diag('INFO', 'extractIRNFromPDF: ack regex results', { ackNumber: ackNumber, ackDate: ackDate });
+
+    // ---- Phase 3: QR extraction ----
+    let qrIrn = null, signedQR = null, qrImageDataUrl = null;
+    for (let p = 1; p <= pdf.numPages; p++) {
+        try {
+            const page = await pdf.getPage(p);
+            const qrResult = await __irnFindQRInPage(page, p);
+            if (qrResult && qrResult.payload) {
+                signedQR = qrResult.payload;
+                qrImageDataUrl = qrResult.imageDataUrl;
+                const jwt = __irnDecodeQRPayload(qrResult.payload);
+                if (jwt && jwt.data) {
+                    // The IRP JWT has the structure { data: { Irn, AckNo, AckDt, ... } }
+                    // Sometimes wrapped, sometimes direct. Handle both.
+                    let inner = jwt.data;
+                    if (typeof inner === 'string') {
+                        try { inner = JSON.parse(inner); } catch (e) {}
+                    }
+                    if (inner && typeof inner === 'object' && inner.Irn) {
+                        qrIrn = String(inner.Irn).toLowerCase();
+                        if (inner.AckNo && !ackNumber) ackNumber = String(inner.AckNo);
+                        if (inner.AckDt && !ackDate) ackDate = String(inner.AckDt);
+                    }
+                } else if (jwt && jwt.Irn) {
+                    // Some PDFs put data fields at the top level
+                    qrIrn = String(jwt.Irn).toLowerCase();
+                    if (jwt.AckNo && !ackNumber) ackNumber = String(jwt.AckNo);
+                    if (jwt.AckDt && !ackDate) ackDate = String(jwt.AckDt);
+                }
+                break; // Stop after first QR found
+            }
+        } catch (e) {
+            diag('INFO', `extractIRNFromPDF: page ${p} QR scan threw`, { error: String(e && e.message) });
+        }
+    }
+    diag('INFO', 'extractIRNFromPDF: QR phase complete', { qrIrnFound: !!qrIrn, signedQRLen: signedQR ? signedQR.length : 0 });
+
+    // ---- Resolve final IRN: prefer QR (authoritative) when present ----
+    let finalIrn = null, source = null;
+    if (qrIrn && textIrn) {
+        if (qrIrn === textIrn) {
+            finalIrn = qrIrn;
+            source = 'both';
+        } else {
+            diag('INFO', 'extractIRNFromPDF: QR and text disagree, preferring QR', { qrIrn: qrIrn.slice(0,12)+'…', textIrn: textIrn.slice(0,12)+'…' });
+            finalIrn = qrIrn;
+            source = 'qr';
+        }
+    } else if (qrIrn) {
+        finalIrn = qrIrn;
+        source = 'qr';
+    } else if (textIrn) {
+        finalIrn = textIrn;
+        source = 'text';
+    }
+
+    if (!finalIrn) {
+        diag('INFO', 'extractIRNFromPDF: no IRN found via text or QR');
+        return null;
+    }
+
+    return {
+        irn: finalIrn,
+        ackNumber: ackNumber,
+        ackDate: ackDate,
+        signedQR: signedQR,
+        qrImageDataUrl: qrImageDataUrl,
+        source: source
+    };
+}
+
+// Orchestrator — called after every signed-PDF upload. Fire-and-forget;
+// never throws to caller, never blocks UI.
+async function runIRNExtraction(inv, file) {
+    if (!inv || !file) return;
+    diag('INFO', 'runIRNExtraction: starting', { invoiceNumber: inv.invoiceNumber });
+    // Wait briefly for libs if they're still loading
+    if (!__irnLibsReady()) {
+        diag('INFO', 'runIRNExtraction: libs not yet ready, waiting up to 4s');
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline && !__irnLibsReady()) {
+            await new Promise(function(r) { setTimeout(r, 200); });
+        }
+    }
+    if (!__irnLibsReady()) {
+        diag('INFO', 'runIRNExtraction: libs never loaded (offline?), silent no-op');
+        return;
+    }
+
+    let result;
+    try {
+        result = await extractIRNFromPDF(file);
+    } catch (e) {
+        diag('CRITICAL', 'runIRNExtraction: extractIRNFromPDF threw', {
+            error: String(e && e.message),
+            stack: String(e && e.stack || '').slice(0, 500)
+        });
+        return;
+    }
+
+    if (!result || !result.irn) {
+        diag('INFO', 'runIRNExtraction: no IRN extracted — informing user');
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-info-circle" style="color:var(--text-dim);"></i> IRN not detected in this PDF — use <strong>Record IRN</strong> to enter manually.`, 6000);
+        }
+        return;
+    }
+
+    // ---- Conflict detection: invoice already has an IRN ----
+    if (inv.irn) {
+        const existingLower = String(inv.irn).toLowerCase();
+        if (existingLower === result.irn) {
+            diag('INFO', 'runIRNExtraction: extracted IRN matches existing — no action needed');
+            // No toast — quiet success path
+            return;
+        }
+        // Mismatch — warn, do NOT overwrite
+        diag('CRITICAL', 'runIRNExtraction: extracted IRN does not match manually-entered IRN', {
+            existing: inv.irn,
+            extracted: result.irn,
+            source: result.source
+        });
+        if (typeof showProspectToast === 'function') {
+            const existingShort = inv.irn.slice(0, 12);
+            const extractedShort = result.irn.slice(0, 12);
+            showProspectToast(`<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> Signed PDF's IRN (<code>${pEsc(extractedShort)}…</code>) doesn't match the existing IRN (<code>${pEsc(existingShort)}…</code>) on this invoice. Open <strong>Record IRN</strong> to review.`, 10000);
+        }
+        return;
+    }
+
+    // ---- Apply extracted values ----
+    inv.irn = result.irn;
+    if (result.ackNumber) inv.irnAckNumber = result.ackNumber;
+    if (result.ackDate) inv.irnAckDate = result.ackDate;
+    if (result.signedQR) inv.irnSignedQR = result.signedQR;
+    if (result.qrImageDataUrl) inv.qrCodeImageDataUrl = result.qrImageDataUrl;
+    inv.irnSource = 'auto-extracted';
+    inv.irnExtractedAt = new Date().toISOString();
+    inv.updatedAt = new Date().toISOString();
+    if (typeof saveInvoices === 'function') saveInvoices();
+    diag('INFO', 'runIRNExtraction: applied to invoice', {
+        invoiceNumber: inv.invoiceNumber,
+        irnShort: result.irn.slice(0, 12) + '…',
+        ackNumber: result.ackNumber,
+        ackDate: result.ackDate,
+        hasQRImage: !!result.qrImageDataUrl,
+        source: result.source
+    });
+
+    // Re-render so user sees the IRN section update
+    try {
+        if (typeof renderInvoiceDetail === 'function') renderInvoiceDetail(inv);
+    } catch (e) {
+        diag('INFO', 'runIRNExtraction: post-extract re-render threw', { error: String(e && e.message) });
+    }
+
+    // Toast — clickable to open the IRN modal for review
+    if (typeof showProspectToast === 'function') {
+        const irnShort = result.irn.slice(0, 12);
+        showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> IRN auto-extracted: <code>${pEsc(irnShort)}…</code> <a href="#" onclick="openIRNModal('${pEsc(inv.id)}'); return false;" style="margin-left:6px; color:var(--accent-cyan); text-decoration:underline;">Review</a>`, 8000);
+    }
+}
+
+/* ======================================================================
+   End of 8AG IRN auto-extraction module
    ====================================================================== */
 
 
