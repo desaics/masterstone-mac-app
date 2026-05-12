@@ -28360,7 +28360,7 @@ function renderInvoiceCard(inv) {
         ? `<div style="font-size:10px; color:var(--warning); font-style:italic; margin-top:3px;"><i class="fas fa-handshake" style="font-size:9px;"></i> bill: ${pEsc(inv.sourcedViaResellerKey)}</div>`
         : '';
     return `<div class="inv-card status-${statusSlug}${overdue ? ' overdue' : ''}" onclick="openInvoiceDetail('${inv.id}')">
-        <div class="ic-num">${pEsc(inv.invoiceNumber || '(no number)')}${inv.signedPdfAttachmentId ? ` <i class="fas fa-file-signature" style="color:var(--success); font-size:10px; margin-left:4px;" title="Digitally-signed PDF on file"></i>` : ''}${overdue ? `<span class="inv-overdue-flag"><i class="fas fa-exclamation-circle"></i> Overdue ${invDaysOverdue(inv)}d</span>` : ''}</div>
+        <div class="ic-num">${pEsc(inv.invoiceNumber || '(no number)')}${inv.signedPdfAttachmentId ? ` <a href="#" onclick="event.stopPropagation(); downloadInvoicePDF('${pEsc(inv.id)}'); return false;" title="Download signed PDF" style="color:var(--success); font-size:10px; margin-left:4px; text-decoration:none;"><i class="fas fa-file-signature"></i></a>` : ''}${overdue ? `<span class="inv-overdue-flag"><i class="fas fa-exclamation-circle"></i> Overdue ${invDaysOverdue(inv)}d</span>` : ''}</div>
         <div class="ic-client">${pEsc(inv.clientName || '(no client)')}${typeof getAttachmentCountBadgeHtml === 'function' ? getAttachmentCountBadgeHtml('invoice', inv.id) : ''}</div>
         ${resalePill}
         <div class="ic-subject">${pEsc(inv.subject || '')}</div>
@@ -28398,9 +28398,15 @@ function renderInvoicesListView(filtered) {
         const resalePill = (inv.commercialModel === 'Resale' && inv.sourcedViaResellerKey)
             ? `<div style="font-size:10px; font-weight:500; color:var(--warning); margin-top:2px; font-style:italic;"><i class="fas fa-handshake" style="font-size:9px;"></i> bill: ${pEsc(inv.sourcedViaResellerKey)}</div>`
             : '';
-        // Bug fix #25 — show small DSC-Signed icon next to invoice number when a signed PDF is on file
+        // 8AM — The inline green signed-PDF marker is now CLICKABLE. Previously
+        // it was just a static <i>, so clicking it bubbled up to the row-click
+        // handler and opened the detail page. Making it a real clickable
+        // affordance (an <a> with stopPropagation) gives users a direct
+        // "download signed PDF" path from the list, which is the dominant
+        // usage pattern. The red fa-file-pdf button at the far right still
+        // works for users who scroll to it.
         const signedIcon = inv.signedPdfAttachmentId
-            ? ` <i class="fas fa-file-signature" style="color:var(--success); font-size:10px; margin-left:4px;" title="Digitally-signed PDF on file"></i>`
+            ? ` <a href="#" onclick="event.stopPropagation(); downloadInvoicePDF('${pEsc(inv.id)}'); return false;" title="Download signed PDF" style="color:var(--success); font-size:10px; margin-left:4px; text-decoration:none;"><i class="fas fa-file-signature"></i></a>`
             : '';
         return `<tr class="clickable-row" onclick="openInvoiceDetail('${inv.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(inv.invoiceNumber || '—')}${signedIcon}</td>
@@ -38166,19 +38172,29 @@ function openConsultantInvoiceForPayment(paymentId) {
         openConsultantPaymentForm(paymentId);
         return;
     }
+    // 8AM — Toast helper shared with the two download branches
+    const filename = invoiceAtt.filename || 'invoice';
+    const successToast = function(method) {
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Opened: <strong>${pEsc(filename)}</strong> · ${method === 'window' ? 'Cmd+S to save' : 'check your Downloads folder'}`, 5000);
+        }
+    };
     // Open the dataUrl in a new tab. For PDFs the browser renders inline.
     // For non-PDF mime types (image, etc.) it still opens viewable.
     try {
         const w = window.open(invoiceAtt.dataUrl, '_blank');
-        if (!w) {
-            // Popup blocked — fall back to download
-            const a = document.createElement('a');
-            a.href = invoiceAtt.dataUrl;
-            a.download = invoiceAtt.filename || 'invoice';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+        if (w) {
+            successToast('window');
+            return;
         }
+        // Popup blocked — fall back to download
+        const a = document.createElement('a');
+        a.href = invoiceAtt.dataUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        successToast('download');
     } catch (e) {
         alert('Could not open invoice. Try downloading it from the payment edit page.');
     }
