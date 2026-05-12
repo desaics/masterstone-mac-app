@@ -31985,22 +31985,107 @@ let attachments = {};
 function initAttachments() {
     try {
         const raw = localStorage.getItem(ATTACHMENTS_KEY);
-        attachments = raw ? JSON.parse(raw) : {};
-        if (typeof attachments !== 'object' || Array.isArray(attachments) || attachments === null) attachments = {};
+        const parsed = raw ? JSON.parse(raw) : {};
+        // 8AK — Critical fix for attachment persistence.
+        //
+        // The Rust side stores attachments as a flat array, with each record
+        // carrying its own relatedEntityType + relatedEntityId. The frontend
+        // has always worked with a map keyed by `${entityType}_${entityId}`.
+        // Pre-8AK, saveAttachments wrote the map as-is; Rust rejected the
+        // payload ("Expected array"); every attachment save silently failed
+        // and was wiped on next boot. THIS is the original root cause of
+        // "signed PDFs disappear after restart."
+        //
+        // The boot path hydrates localStorage from Rust = always an array.
+        // Mid-session saves (pre-8AK) wrote an object, which then got
+        // overwritten on next boot. So:
+        //   - array from localStorage = freshly hydrated by Rust, regroup
+        //   - object from localStorage = legacy mid-session state, accept
+        if (Array.isArray(parsed)) {
+            // Regroup flat array into the in-memory map shape
+            attachments = {};
+            parsed.forEach(function(rec) {
+                if (!rec || !rec.relatedEntityType || !rec.relatedEntityId) {
+                    // Record is missing the key info — skip it; can't be addressed
+                    try { if (window.__diag) window.__diag.log('ERROR', 'initAttachments: dropping record with no entity refs', { rec: rec }); } catch (e) {}
+                    return;
+                }
+                const key = `${rec.relatedEntityType}_${rec.relatedEntityId}`;
+                if (!attachments[key]) attachments[key] = [];
+                attachments[key].push(rec);
+            });
+            try { if (window.__diag) window.__diag.log('INFO', 'initAttachments: regrouped flat array into map', { records: parsed.length, keys: Object.keys(attachments).length }); } catch (e) {}
+        } else if (parsed && typeof parsed === 'object') {
+            // Legacy object shape (mid-session save before 8AK)
+            attachments = parsed;
+            try { if (window.__diag) window.__diag.log('INFO', 'initAttachments: loaded object-shape attachments', { keys: Object.keys(attachments).length }); } catch (e) {}
+        } else {
+            attachments = {};
+        }
     } catch (e) {
         console.warn("Attachments load failed:", e);
+        try { if (window.__diag) window.__diag.log('ERROR', 'initAttachments: parse failed', { error: String(e && e.message) }); } catch (ie) {}
         attachments = {};
     }
 }
 
+// 8AK — Known entity types, longest-first for greedy matching. Needed because
+// some types have underscores in them (e.g. "consultant_payment") and a naive
+// split-on-first-underscore would mis-parse "consultant_payment_cpay_xxx" as
+// type="consultant", id="payment_cpay_xxx". List order matters: more specific
+// (longer) types come first. Add new types here when introduced.
+const ATT_KNOWN_ENTITY_TYPES = [
+    'consultant_payment',
+    'consultant',
+    'invoice'
+];
+
+function splitAttachmentKey(key) {
+    for (let i = 0; i < ATT_KNOWN_ENTITY_TYPES.length; i++) {
+        const t = ATT_KNOWN_ENTITY_TYPES[i];
+        if (key.startsWith(t + '_')) {
+            return { entityType: t, entityId: key.slice(t.length + 1) };
+        }
+    }
+    return null; // Unknown type — caller should skip
+}
+
+// 8AK — Flatten the in-memory map into a flat array for Rust persistence.
+// Each output record carries relatedEntityType + relatedEntityId so it can
+// be inserted into the SQLite attachments table (which has those columns).
+function flattenAttachmentsForSave() {
+    const out = [];
+    Object.keys(attachments).forEach(function(key) {
+        const split = splitAttachmentKey(key);
+        if (!split) {
+            try { if (window.__diag) window.__diag.log('ERROR', 'flattenAttachmentsForSave: unknown entity type prefix, skipping key', { key: key }); } catch (e) {}
+            return;
+        }
+        const list = attachments[key] || [];
+        list.forEach(function(rec) {
+            if (!rec || !rec.id) return;
+            // Enrich record with entity refs (preserve any existing values)
+            out.push(Object.assign({}, rec, {
+                relatedEntityType: rec.relatedEntityType || split.entityType,
+                relatedEntityId: rec.relatedEntityId || split.entityId
+            }));
+        });
+    });
+    return out;
+}
+
 function saveAttachments() {
     try {
-        const payload = JSON.stringify(attachments);
+        // 8AK — Serialize as a flat array (Rust expects this shape).
+        const flat = flattenAttachmentsForSave();
+        const payload = JSON.stringify(flat);
         // 8AH — Diagnostic: log payload size before write
         diag('INFO', `saveAttachments writing to localStorage`, {
-            keyCount: Object.keys(attachments).length,
+            entityKeyCount: Object.keys(attachments).length,
+            recordCount: flat.length,
             payloadLength: payload.length,
-            payloadSizeMB: (payload.length / 1024 / 1024).toFixed(2)
+            payloadSizeMB: (payload.length / 1024 / 1024).toFixed(2),
+            shape: 'flat array (8AK)'
         });
         localStorage.setItem(ATTACHMENTS_KEY, payload);
         diag('INFO', 'saveAttachments: localStorage.setItem succeeded');
