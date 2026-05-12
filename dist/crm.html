@@ -13,14 +13,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<!-- 8AG/8AN — IRN/QR auto-extraction libs. The 8AG attempt used cdnjs's
-     "modern" build with async, which didn't expose pdfjsLib reliably in
-     Tauri's WKWebView. 8AN switches to the legacy/UMD build (designed for
-     direct browser inclusion without worker dependencies) and removes the
-     async attribute so loading is guaranteed before runIRNExtraction needs
-     them. The libs are cached after first fetch. -->
+<!-- 8AG/8AN/8AO — IRN/QR auto-extraction libs.
+     8AO: jsQR also moves from cdnjs to unpkg. Diag confirmed pdf.js loaded
+     fine from unpkg but jsQR from cdnjs never appeared on window.jsQR —
+     looks like cdnjs.cloudflare.com is blocked or restricted in this
+     Tauri/WKWebView setup, while unpkg.com works. -->
 <script src="https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 
 <style>
 /* --- CORE VARIABLES --- */
