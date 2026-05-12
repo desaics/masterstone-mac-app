@@ -29612,6 +29612,14 @@ function downloadSignedInvoicePdf(invId) {
         return;
     }
 
+    // 8AL — Toast helper, fires after successful open/download
+    const filename = att.filename || `Invoice_${(inv.invoiceNumber || inv.id).replace(/[^A-Za-z0-9_-]/g, '_')}_signed.pdf`;
+    const successToast = function(method) {
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Signed PDF opened: <strong>${pEsc(filename)}</strong> · ${method === 'window' ? 'Cmd+S to save' : 'check your Downloads folder'}`, 5000);
+        }
+    };
+
     // 8AF — Primary path: open the dataUrl in a new tab/window so Tauri's
     // WKWebView renders the PDF inline (Cmd+S to save). The previous
     // <a download> + click() approach is silently dropped by WKWebView for
@@ -29619,7 +29627,10 @@ function downloadSignedInvoicePdf(invId) {
     // The consultant invoice pin uses this same approach in 8AE and works.
     try {
         const w = window.open(att.dataUrl, '_blank');
-        if (w) return;
+        if (w) {
+            successToast('window');
+            return;
+        }
         // Popup blocked — fall through to legacy blob download below.
     } catch (e) {
         console.warn('window.open dataUrl failed:', e);
@@ -29638,10 +29649,11 @@ function downloadSignedInvoicePdf(invId) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = att.filename || `Invoice_${(inv.invoiceNumber || inv.id).replace(/[^A-Za-z0-9_-]/g, '_')}_signed.pdf`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 100);
+        successToast('download');
     } catch (e) {
         console.error('Signed PDF download failed:', e);
         alert('Could not download signed PDF. Try opening the attachments panel below the invoice and downloading from there.');
@@ -30820,15 +30832,29 @@ function downloadInvoicePDF(invId) {
     // The list-row icon is the user's "give me the PDF for this invoice"
     // shortcut; if a signed copy exists, that's almost always what they want.
     const inv = invoices.find(x => x.id === invId);
+    diag('INFO', 'downloadInvoicePDF clicked', {
+        invId: invId,
+        invoiceNumber: inv ? inv.invoiceNumber : '(not found)',
+        hasSignedRef: inv ? !!inv.signedPdfAttachmentId : false
+    });
     if (inv && inv.signedPdfAttachmentId && typeof downloadSignedInvoicePdf === 'function') {
         const att = (typeof getInvoiceSignedPdfAttachment === 'function')
             ? getInvoiceSignedPdfAttachment(inv) : null;
         if (att) {
+            diag('INFO', 'downloadInvoicePDF: routing to signed PDF download', { attId: att.id, filename: att.filename });
             downloadSignedInvoicePdf(invId);
             return;
         }
+        // 8AL — Orphan ref detected at click time. Be honest with the user
+        // rather than silently falling through to the generated-PDF preview
+        // (which would confuse them — "I clicked the icon expecting my signed
+        // PDF, why am I seeing the unsigned generated one?").
+        diag('CRITICAL', 'downloadInvoicePDF: orphan signed-PDF ref detected at click time', { invoiceNumber: inv.invoiceNumber, orphanAttId: inv.signedPdfAttachmentId });
+        alert(`The signed PDF for ${inv.invoiceNumber} is referenced but not in storage. Open the invoice and use "Upload Signed PDF" to re-upload, or click 🐞 Diag → 🔧 Repair Orphans to clean up.`);
+        return;
     }
     // Fallback: open print preview of the generated PDF (legacy behaviour).
+    diag('INFO', 'downloadInvoicePDF: no signed PDF, opening print preview');
     previewInvoicePDF(invId, { autoPrint: true });
 }
 
@@ -32289,6 +32315,13 @@ function findAttachmentById(attId) {
     for (const key of Object.keys(attachments)) {
         const found = (attachments[key] || []).find(a => a.id === attId);
         if (found) {
+            // 8AL — Use the 8AK key splitter (handles compound types like
+            // "consultant_payment") instead of split-on-first-underscore.
+            const split = (typeof splitAttachmentKey === 'function') ? splitAttachmentKey(key) : null;
+            if (split) {
+                return { att: found, entityType: split.entityType, entityId: split.entityId, entityKey: key };
+            }
+            // Fallback to legacy split if splitter unavailable
             const [entityType, ...rest] = key.split('_');
             return { att: found, entityType, entityId: rest.join('_'), entityKey: key };
         }
@@ -32300,12 +32333,47 @@ function findAttachmentById(attId) {
 function downloadAttachment(attId) {
     const info = findAttachmentById(attId);
     if (!info) { alert("Attachment not found."); return; }
-    const a = document.createElement('a');
-    a.href = info.att.dataUrl;
-    a.download = info.att.filename || 'attachment';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const att = info.att;
+    if (!att.dataUrl) {
+        alert('File content is missing. Try re-uploading this attachment.');
+        return;
+    }
+
+    // 8AL — Tauri-compatible download path (same approach as 8AF for signed
+    // PDF). The plain <a download>.click() trick is silently dropped by
+    // WKWebView for base64 data URLs.
+    const successToast = function(method) {
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Opened: <strong>${pEsc(att.filename || 'file')}</strong> · ${method === 'window' ? 'Cmd+S to save' : 'check your Downloads folder'}`, 5000);
+        }
+    };
+
+    try {
+        const w = window.open(att.dataUrl, '_blank');
+        if (w) { successToast('window'); return; }
+    } catch (e) {
+        console.warn('window.open dataUrl failed:', e);
+    }
+    // Fallback: blob/<a> path
+    try {
+        const idx = att.dataUrl.indexOf(',');
+        const b64 = idx >= 0 ? att.dataUrl.slice(idx + 1) : att.dataUrl;
+        const binary = atob(b64);
+        const arr = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+        const blob = new Blob([arr], { type: att.mimeType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = att.filename || 'attachment';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 100);
+        successToast('download');
+    } catch (e) {
+        console.error('downloadAttachment failed:', e);
+        alert('Could not download attachment: ' + (e && e.message ? e.message : e));
+    }
 }
 
 // ===== Preview =====
@@ -38050,12 +38118,39 @@ function downloadConsultantAttachment(entityType, entityId, attId) {
     const list = attachments[key] || [];
     const att = list.find(a => a.id === attId);
     if (!att || !att.dataUrl) { alert('File not found or no data.'); return; }
-    const a = document.createElement('a');
-    a.href = att.dataUrl;
-    a.download = att.filename || 'download';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    // 8AL — Tauri WKWebView compatibility: window.open(dataUrl) is reliable;
+    // <a download>.click() with base64 isn't. Plus user-visible toast.
+    const successToast = function(method) {
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Opened: <strong>${pEsc(att.filename || 'file')}</strong> · ${method === 'window' ? 'Cmd+S to save' : 'check your Downloads folder'}`, 5000);
+        }
+    };
+    try {
+        const w = window.open(att.dataUrl, '_blank');
+        if (w) { successToast('window'); return; }
+    } catch (e) {
+        console.warn('window.open dataUrl failed:', e);
+    }
+    // Blob fallback
+    try {
+        const idx = att.dataUrl.indexOf(',');
+        const b64 = idx >= 0 ? att.dataUrl.slice(idx + 1) : att.dataUrl;
+        const binary = atob(b64);
+        const arr = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+        const blob = new Blob([arr], { type: att.mimeType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = att.filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 100);
+        successToast('download');
+    } catch (e) {
+        console.error('downloadConsultantAttachment failed:', e);
+        alert('Could not download: ' + (e && e.message ? e.message : e));
+    }
 }
 
 // 8AE — Open the Invoice-tagged attachment for a consultant payment in a new
