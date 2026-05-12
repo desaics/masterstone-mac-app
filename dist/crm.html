@@ -37445,11 +37445,13 @@ function __irnDecodeQRPayload(qrText) {
 // { payload, imageDataUrl } or null.
 async function __irnFindQRInPage(page, pageNum) {
     try {
-        // 8AP — Render at 3x (was 2x) for better QR detection. Many CA
-        // PDFs use small QR codes (~120px at 1x) which jsQR struggles
-        // with at 2x. 3x is the sweet spot — bigger is slower without
-        // improving detection.
-        const viewport = page.getViewport({ scale: 3.0 });
+        // 8AQ — Reverted from 3x back to 2x. 3x triggered a pdf.js internal
+        // error ("undefined is not an object (evaluating 'matrix.height')")
+        // on at least one CA's PDF, likely an interaction between high-scale
+        // viewports and certain embedded vector content. 2x is the proven-
+        // working scale from 8AG/8AO. The QR detection improvement instead
+        // comes from the multi-strategy inversion loop kept from 8AP.
+        const viewport = page.getViewport({ scale: 2.0 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
@@ -37472,7 +37474,7 @@ async function __irnFindQRInPage(page, pageNum) {
             }
         }
         if (!code || !code.data) {
-            diag('INFO', `IRN extract: no QR on page ${pageNum} (tried all inversion strategies at 3x scale)`);
+            diag('INFO', `IRN extract: no QR on page ${pageNum} (tried all inversion strategies at 2x scale)`);
             return null;
         }
         diag('INFO', `IRN extract: QR found on page ${pageNum}`, { dataLength: code.data.length });
@@ -37556,13 +37558,20 @@ async function extractIRNFromPDF(file) {
         }
     }
     diag('INFO', 'extractIRNFromPDF: text extracted', { textLength: fullText.length });
-    // 8AP — Dump a sample of the extracted text so we can see exactly what
-    // the PDF contains and tune regexes for the user's specific CA format.
-    // Capped at 800 chars to keep the diag log readable. The dataUrl/binary
-    // contents of the file are never logged — just plain extracted text.
+    // 8AQ — Dump extracted text in chunks. The diag's safeStr helper
+    // truncates string values >200 chars when they appear in objects, so
+    // 8AP's single 800-char dump was rendered as "<string len=800>". Now
+    // we emit 4 separate log lines with 180-char chunks each. Plain
+    // extracted text only — never the file's binary content.
     try {
-        const sample = fullText.replace(/\s+/g, ' ').trim().slice(0, 800);
-        diag('INFO', 'extractIRNFromPDF: text sample (first 800 chars)', { sample: sample });
+        const sample = fullText.replace(/\s+/g, ' ').trim();
+        for (let i = 0; i < 4; i++) {
+            const start = i * 180;
+            const chunk = sample.slice(start, start + 180);
+            if (chunk.length === 0) break;
+            // Pass as message string (not in data) so safeStr doesn't truncate
+            diag('INFO', `extractIRNFromPDF: text chunk ${i + 1}/4 [${start}-${start + chunk.length}] :: ${chunk}`);
+        }
     } catch (e) { /* ignore */ }
 
     // ---- Phase 2: regex extraction ----
