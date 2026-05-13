@@ -5635,6 +5635,61 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // 8AV — Open a signed invoice PDF (stored as base64 dataUrl in SQLite)
+    // in the macOS default PDF viewer. Mirrors __msOpenLocalFile's behavior:
+    // silent on success, error toast on failure. Used by the invoice
+    // paperclip pin so it behaves the same as the PO paperclip pin.
+    //
+    // The Rust side (open_pdf_dataurl) writes the bytes to a temp file under
+    // a stable filename derived from the attachment ID, then routes to
+    // app.opener().open_path() — exactly the same final step as open_local_file.
+    // So macOS dispatches the file to whatever the user's default PDF app is
+    // (Preview, Acrobat, etc.).
+    window.__msOpenSignedInvoicePdf = async function (invId) {
+        if (typeof invoices !== 'object' || !Array.isArray(invoices)) {
+            showActionToast('Invoice list unavailable', 'error');
+            return;
+        }
+        var inv = invoices.find(function (x) { return x && x.id === invId; });
+        if (!inv) {
+            showActionToast('Invoice not found', 'error');
+            return;
+        }
+        if (!inv.signedPdfAttachmentId) {
+            showActionToast('No signed PDF on file for this invoice', 'info');
+            return;
+        }
+        var att = (typeof getInvoiceSignedPdfAttachment === 'function')
+            ? getInvoiceSignedPdfAttachment(inv) : null;
+        if (!att) {
+            showActionToast('Signed PDF attachment record missing', 'error');
+            return;
+        }
+        if (!att.dataUrl) {
+            showActionToast('Signed PDF metadata found but file content is missing. Try re-uploading.', 'error');
+            return;
+        }
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                showActionToast('Tauri runtime unavailable', 'error');
+                return;
+            }
+            var filename = att.filename || ('Invoice_' + String(inv.invoiceNumber || inv.id).replace(/[^A-Za-z0-9_-]/g, '_') + '_signed.pdf');
+            var r = await t.invoke('open_pdf_dataurl', {
+                dataUrl: att.dataUrl,
+                suggestedFilename: filename,
+                stableKey: att.id || inv.id
+            });
+            if (!r || !r.ok) {
+                showActionToast('Could not open signed PDF: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+            // Success is silent — same as __msOpenLocalFile.
+        } catch (e) {
+            showActionToast('Open signed PDF error: ' + e, 'error');
+        }
+    };
+
     // Toggles the visibility of the local-file panel for a given trigger button.
     // Looks up the panel as a sibling element inside the same .with-local-file wrapper.
     window.__msToggleLocalPanel = function (toggleBtn) {
@@ -5700,11 +5755,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // 8AU — Pin icon for invoices that have a signed PDF attachment.
-    // Mirrors the PO paperclip-pin affordance (Screenshot 2). Click opens the
-    // signed PDF via downloadInvoicePDF, which checks signedPdfAttachmentId
-    // first and falls back to PDF generation. Only renders when there's
-    // actually a signed PDF to open — consistent with the PO pattern where
-    // the paperclip appears only on rows that have an attachment.
+    // Mirrors the PO paperclip-pin affordance (Screenshot 2).
+    //
+    // 8AV — Click now routes to __msOpenSignedInvoicePdf, which writes the
+    // PDF to a temp file and opens it in the user's default PDF viewer
+    // (Acrobat / Preview). Previously routed to downloadInvoicePDF which
+    // downloaded the PDF to ~/Downloads — not what the PO pin does. The
+    // PO pin and the invoice pin now have identical native open behavior.
     //
     // Accepts either:
     //   - a full invoice object (preferred, no lookup needed)
@@ -5724,7 +5781,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 .replace(/&/g, '&amp;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
-            return ' <a href="#" class="signed-inv-pin" onclick="event.stopPropagation(); downloadInvoicePDF(\''
+            return ' <a href="#" class="signed-inv-pin" onclick="event.stopPropagation(); window.__msOpenSignedInvoicePdf(\''
                 + safeId + '\'); return false;" title="Open signed PDF" '
                 + 'style="color:var(--success); text-decoration:none; margin-left:4px;">'
                 + '<i class="fas fa-paperclip" style="font-size:11px;"></i></a>';

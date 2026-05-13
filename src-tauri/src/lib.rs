@@ -1209,6 +1209,134 @@ fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) ->
 }
 
 // ============================================================================
+// Phase 8AV — open_pdf_dataurl: open an in-memory PDF in the OS default viewer.
+//
+// Signed invoice PDFs are stored as base64 data URLs inside SQLite (no file
+// path exists on disk — the bytes live in the database). The PO list's
+// "paperclip pin" affordance works because PO PDFs ARE on disk (OneDrive
+// path) and we can just call open_local_file on them. For signed invoices
+// we need to materialise the bytes onto disk first, then hand the path off
+// to the same `app.opener().open_path` flow so macOS routes the file to the
+// user's default PDF viewer (Preview / Acrobat / etc.).
+//
+// Inputs:
+//   data_url            — full "data:application/pdf;base64,..." string from
+//                         the attachment record's dataUrl field
+//   suggested_filename  — original upload filename, used for the temp file
+//                         name so Acrobat's titlebar / Recent Files makes
+//                         sense to the user
+//   stable_key          — a short identifier (e.g. attachment ID) used to
+//                         keep the temp filename stable across clicks. This
+//                         way repeated clicks reuse the same temp file rather
+//                         than proliferating "_1", "_2" copies in /tmp.
+//
+// The temp file is written to std::env::temp_dir() (on macOS this is
+// $TMPDIR, typically /var/folders/.../T/). macOS cleans this directory
+// periodically; we don't try to delete proactively because the user may
+// still have the PDF open in their viewer.
+//
+// Base64 decoder is inlined (no new Cargo dependency). The standard alphabet
+// is supported plus URL-safe; only padding-stripped variants are not.
+// ============================================================================
+
+fn b64_char_to_val(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' | b'-' => Some(62),  // - is URL-safe variant
+        b'/' | b'_' => Some(63),  // _ is URL-safe variant
+        _ => None,
+    }
+}
+
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    // Strip whitespace (some JSON encoders add line breaks)
+    let cleaned: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    // Strip padding
+    let mut payload: &[u8] = &cleaned;
+    while payload.last() == Some(&b'=') {
+        payload = &payload[..payload.len() - 1];
+    }
+    let mut out = Vec::with_capacity(payload.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u8 = 0;
+    for &c in payload {
+        let v = match b64_char_to_val(c) {
+            Some(v) => v as u32,
+            None => return Err(format!("Invalid base64 character: {}", c as char)),
+        };
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1u32 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ' ' { c } else { '_' })
+        .collect();
+    // Avoid empty or pathological names
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "document.pdf".to_string()
+    } else if trimmed.len() > 120 {
+        trimmed.chars().take(120).collect()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[tauri::command]
+fn open_pdf_dataurl<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    data_url: String,
+    suggested_filename: String,
+    stable_key: String,
+) -> serde_json::Value {
+    // Find the base64 portion of the data URL
+    let comma = match data_url.find(',') {
+        Some(i) => i,
+        None => return serde_json::json!({"ok": false, "error": "Invalid data URL: no comma separator"}),
+    };
+    let b64_part = &data_url[comma + 1..];
+    let bytes = match b64_decode(b64_part) {
+        Ok(b) => b,
+        Err(e) => return serde_json::json!({"ok": false, "error": format!("Base64 decode failed: {e}")}),
+    };
+    if bytes.is_empty() {
+        return serde_json::json!({"ok": false, "error": "Decoded PDF is empty"});
+    }
+    // Quick sanity: PDF magic bytes are "%PDF" at offset 0
+    if bytes.len() < 4 || &bytes[0..4] != b"%PDF" {
+        return serde_json::json!({"ok": false, "error": "Decoded bytes are not a PDF (missing %PDF header)"});
+    }
+
+    // Build a stable temp filename. Stable means repeat clicks reuse the
+    // same file rather than littering /tmp. We namespace with the stable_key
+    // (typically the attachment ID) so different attachments don't collide.
+    let safe_name = sanitize_filename(&suggested_filename);
+    let safe_key = sanitize_filename(&stable_key);
+    let final_name = format!("masterstone_{}_{}", safe_key, safe_name);
+
+    let tmp_path = std::env::temp_dir().join(&final_name);
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        return serde_json::json!({"ok": false, "error": format!("Failed to write temp file: {e}")});
+    }
+
+    let path_str = tmp_path.to_string_lossy().into_owned();
+    match app.opener().open_path(path_str.clone(), None::<&str>) {
+        Ok(_) => serde_json::json!({"ok": true, "path": path_str, "bytes": bytes.len()}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("Open failed: {e}"), "path": path_str}),
+    }
+}
+
+// ============================================================================
 // Phase 8P — native print dialog.
 //
 // JS window.print() and iframe.contentWindow.print() are both no-ops in
@@ -2669,6 +2797,12 @@ pub fn run() {
             // Phase 8C: local file attachments (companion to OneDrive URLs)
             pick_file,
             open_local_file,
+            // Phase 8AV: open in-memory PDF (base64 dataUrl) in OS default
+            // viewer. Used by signed-invoice paperclip pins — invoice
+            // attachments live in SQLite as base64, not on disk, so the
+            // bytes have to be materialised to a temp file first before
+            // app.opener() can route to Preview/Acrobat.
+            open_pdf_dataurl,
             // Phase 8P: native print dialog (macOS workaround for broken
             // window.print() in Tauri 2 WKWebView). Used for Client Summary.
             native_print,
