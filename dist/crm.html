@@ -7608,6 +7608,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <div class="oem-meta-panel" id="oemMetaPanel" style="display:none;">
                     <h4 style="margin:0 0 10px 0; font-size:13px; color:var(--text-main);"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> OEM Details <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(used on Purchase Orders)</span></h4>
 
+                    <!-- 8BB.1 — Short name (display alias). Mac-app display surfaces
+                         (lists, tables, chips, detail headers) show this when set;
+                         the canonical name is always used in PDFs and structured
+                         stored fields. Leave blank to display the canonical name
+                         everywhere. -->
+                    <div class="oem-meta-grid-2" style="margin-bottom:10px;">
+                        <div>
+                            <label>Short name <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(used on screen only — never on PDFs)</span></label>
+                            <input type="text" id="oemMeta_shortName" placeholder="e.g. Darktrace" onchange="saveActiveOemMetadata()">
+                        </div>
+                        <div></div>
+                    </div>
+
                     <!-- Origin toggle: Domestic vs Foreign -->
                     <div class="oem-meta-origin-toggle">
                         <span style="color:var(--text-dim); font-weight:500;">OEM origin:</span>
@@ -12444,6 +12457,10 @@ function getOemMetadata(oemName) {
     if (!oemName) return null;
     if (!oemMetadata[oemName]) {
         oemMetadata[oemName] = {
+            // 8BB.1 — Compact display alias. Mac-app display surfaces (lists,
+            // tables, chips, detail headers) prefer this when set; PDFs and
+            // structured stored fields ALWAYS use the canonical OEM name.
+            shortName: '',
             // Origin
             origin: 'domestic',         // 'domestic' or 'foreign'
             country: '',                // 'India' for domestic, free text for foreign
@@ -12745,6 +12762,31 @@ function getClientDisplayHtml(fullName) {
     if (!fullName) return '';
     if (display === fullName) return pEsc(fullName);
     // Show short name with full name as hover title
+    return `<span title="${pEsc(fullName)}">${pEsc(display)}</span>`;
+}
+
+// Phase 8BB.1 — OEM short-name lookup for in-app display. Mirrors
+// getClientDisplayName above. Reads from oemMetadata[oem].shortName, falls
+// back to the canonical OEM name unchanged.
+//
+// CRITICAL: never use these in document generation paths (PDFs, signed
+// exports). They're for Mac-app display surfaces only. Structured stored
+// fields (po.oem, c.oem, p.oems[], li.oem) must always hold the canonical
+// name — these helpers don't write data, they only transform for display.
+function getOemDisplayName(fullName) {
+    if (!fullName) return '';
+    try {
+        if (typeof oemMetadata === 'object' && oemMetadata) {
+            const meta = oemMetadata[fullName];
+            if (meta && meta.shortName && meta.shortName.trim()) return meta.shortName.trim();
+        }
+    } catch (_) {}
+    return fullName;
+}
+function getOemDisplayHtml(fullName) {
+    const display = getOemDisplayName(fullName);
+    if (!fullName) return '';
+    if (display === fullName) return pEsc(fullName);
     return `<span title="${pEsc(fullName)}">${pEsc(display)}</span>`;
 }
 
@@ -15921,9 +15963,12 @@ function renderOemMasterList() {
     } else {
         oems.forEach(oem => {
             const isActive = activeMasterOem === oem ? 'active' : '';
+            // 8BB.1 — Display short name when set; full canonical name in title tooltip.
+            const _dispName = getOemDisplayName(oem);
+            const _hasShort = _dispName !== oem;
             container.innerHTML += `
-                <div class="master-list-item ${isActive}" onclick="selectMasterOem('${oem}')">
-                    <span style="font-weight:500; color:var(--text-main);">${oem}</span>
+                <div class="master-list-item ${isActive}" onclick="selectMasterOem('${oem}')" title="${pEsc(oem)}">
+                    <span style="font-weight:500; color:var(--text-main);">${pEsc(_dispName)}${_hasShort ? ` <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(${pEsc(oem)})</span>` : ''}</span>
                     <i class="fas fa-trash master-action-btn" onclick="event.stopPropagation(); deleteMasterOem('${oem}')"></i>
                 </div>
             `;
@@ -15935,7 +15980,9 @@ function selectMasterOem(oem) {
     activeMasterOem = oem;
     renderOemMasterList();
     
-    document.getElementById('masterSelectedOem').innerText = oem;
+    // 8BB.1 — Use display name (shortName when set) with full name on hover.
+    // innerHTML instead of innerText because getOemDisplayHtml returns a span.
+    document.getElementById('masterSelectedOem').innerHTML = getOemDisplayHtml(oem);
     document.getElementById('newProductName').disabled = false;
     document.getElementById('addProductBtn').disabled = false;
 
@@ -15972,6 +16019,9 @@ function renderOemMetadataPanel(oem) {
     if (forRadio) forRadio.checked = isForeign;
 
     const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+
+    // 8BB.1 — Short name (compact display alias)
+    setVal('oemMeta_shortName', meta.shortName);
 
     // Domestic legal/tax
     const stateSel = document.getElementById('oemMeta_stateCode');
@@ -16061,6 +16111,9 @@ function saveActiveOemMetadata() {
     // Country: hardcoded "India" for domestic so isOemForeign() works correctly
     meta.country = isForeign ? val('oemMeta_country') : 'India';
 
+    // 8BB.1 — Short name (display alias only)
+    meta.shortName = val('oemMeta_shortName');
+
     // Domestic legal/tax (kept across toggles so user doesn't lose data)
     meta.stateCode = val('oemMeta_stateCode');
     meta.gstin = val('oemMeta_gstin').toUpperCase();
@@ -16101,6 +16154,15 @@ function saveActiveOemMetadata() {
         hint.innerHTML = '<i class="fas fa-check-circle" style="color:var(--success);"></i> Saved at ' + new Date().toLocaleTimeString();
         hint.style.color = 'var(--success)';
     }
+    // 8BB.1 — Re-render OEM list + detail header so shortName edits surface
+    // immediately on the page. Other tabs pick up the new shortName next time
+    // they render (on tab switch, on filter change). Cheap calls; harmless if
+    // the elements aren't in the DOM yet.
+    try { if (typeof renderOemMasterList === 'function') renderOemMasterList(); } catch (_) {}
+    try {
+        const _h = document.getElementById('masterSelectedOem');
+        if (_h && activeMasterOem) _h.innerHTML = getOemDisplayHtml(activeMasterOem);
+    } catch (_) {}
 }
 
 // GSTIN input auto-select state (same pattern as Company Profile)
@@ -18805,7 +18867,7 @@ function renderContracts() {
             <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
                 <td class="sp-stacked-cell">
                     <i class="fas fa-chevron-right expand-icon"></i><span class="stacked-main" title="${pEsc(c.product || '')}">${pEsc(c.product || '-')}</span>
-                    ${c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(c.oem)}</div>` : ''}
+                    ${c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(getOemDisplayName(c.oem))}</div>` : ''}
                 </td>
                 <td title="${pEsc((expClientPOList.length > 0 ? (posToRender.map(p => p.poNo).filter(Boolean).join(', ')) : ''))}">${poDisplay}</td>
                 <td class="num">${c.licenses || '-'}</td>
@@ -21168,7 +21230,7 @@ function renderProspectCard(p) {
     const stale = isProspectStale(p);
     const nextAction = getProspectNextAction(p);
     const acvLabel = fmtMoneyShort(getProspectACVInINR(p));
-    const oemPills = (p.oems || []).slice(0, 2).map(o => `<span class="pc-pill oem"><i class="fas fa-shield-alt"></i> ${pEsc(o)}</span>`).join('');
+    const oemPills = (p.oems || []).slice(0, 2).map(o => `<span class="pc-pill oem" title="${pEsc(o)}"><i class="fas fa-shield-alt"></i> ${pEsc(getOemDisplayName(o))}</span>`).join('');
     const extraOem = (p.oems || []).length > 2 ? `<span class="pc-pill" style="background:var(--input-bg); color:var(--text-dim); border-color:var(--glass-border);">+${p.oems.length - 2}</span>` : '';
     const priorityClass = 'priority-' + (p.priority || 'warm');
     const priorityIcon = p.priority === 'hot' ? '🔥 ' : '';
@@ -21756,7 +21818,7 @@ function renderProspectDetail(p) {
                     <span class="stage-badge ${stageCfg.color}" style="font-size:12px; padding:5px 12px;">
                         <i class="fas fa-circle" style="font-size:7px;"></i> ${pEsc(p.stage)} · ${prob.toFixed(0)}%
                     </span>
-                    ${(p.oems || []).map(o => `<span class="pc-pill oem"><i class="fas fa-shield-alt"></i> ${pEsc(o)}</span>`).join('')}
+                    ${(p.oems || []).map(o => `<span class="pc-pill oem" title="${pEsc(o)}"><i class="fas fa-shield-alt"></i> ${pEsc(getOemDisplayName(o))}</span>`).join('')}
                     ${(p.tags || []).map(t => `<span class="pc-pill" style="background:rgba(148,163,184,0.12); color:var(--text-dim); border-color:rgba(148,163,184,0.2);"><i class="fas fa-tag"></i> ${pEsc(t)}</span>`).join('')}
                 </div>
             </div>
@@ -26499,7 +26561,7 @@ function renderPOsListView(filtered) {
             : { link: po.externalLink || '', localPath: po.externalLinkLocalPath || '' };
         return `<tr class="clickable-row" onclick="openPODetail('${po.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(_resolvedPo.localPath, true)}</td>
-            <td style="font-weight:600;">${pEsc(po.oem || '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
+            <td style="font-weight:600;" title="${pEsc(po.oem || '')}">${pEsc(po.oem ? getOemDisplayName(po.oem) : '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(po.subject || '')}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
             <td style="text-align:right; font-weight:700;">${fmtPoCcy(totals.grandTotal, po.currency)}</td>
@@ -27248,7 +27310,7 @@ function renderPODetail(po) {
             <div style="flex:1; min-width:0;">
                 <div style="font-size:11px; color:var(--text-dim); font-family:monospace; margin-bottom:4px;">${pEsc(po.poNumber || '(no number)')}</div>
                 <h2 style="font-size:22px; font-weight:700; color:var(--text-main); margin:0 0 8px 0; line-height:1.3;">${pEsc(po.subject)}</h2>
-                <div style="color:var(--text-dim); font-size:13px;"><i class="fas fa-building" style="color:var(--purple);"></i> ${pEsc(po.oem)}${foreign ? '<span class="po-foreign-flag"><i class="fas fa-globe-asia"></i> Foreign OEM</span>' : ''}${po.endClient ? ` · for end client <strong>${pEsc(po.endClient)}</strong>` : ''}</div>
+                <div style="color:var(--text-dim); font-size:13px;"><i class="fas fa-building" style="color:var(--purple);"></i> ${getOemDisplayHtml(po.oem)}${foreign ? '<span class="po-foreign-flag"><i class="fas fa-globe-asia"></i> Foreign OEM</span>' : ''}${po.endClient ? ` · for end client <strong>${pEsc(po.endClient)}</strong>` : ''}</div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
                     <span class="stage-badge po-status-${pEsc(po.status)}" style="font-size:12px; padding:5px 12px;">${pEsc(po.status)}</span>
                     ${gst.mode === 'zero-rated' ? `<span class="po-foreign-flag"><i class="fas fa-globe-asia"></i> Zero-rated · IGST under RCM</span>` :
@@ -37470,7 +37532,7 @@ function renderBusinessSnapshot() {
     const ctRowsEl = document.getElementById('bsCtRows');
     if (ctRowsEl) {
         let html = top2.map(([oem, n]) =>
-            `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${bsEsc(oem)}</span><span class="bs-tile-row-val">${n}</span></div>`
+            `<div class="bs-tile-row" title="${bsEsc(oem)}" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${bsEsc(getOemDisplayName(oem))}</span><span class="bs-tile-row-val">${n}</span></div>`
         ).join('');
         if (othersCount > 0) {
             html += `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">Others</span><span class="bs-tile-row-val">${othersCount}</span></div>`;
@@ -37489,7 +37551,7 @@ function renderBusinessSnapshot() {
         return st !== 'Confirmed' && st !== 'Lost';
     }).map(c => ({
         label: c.client || '(no client)',
-        sub: c.product || c.oem || '',
+        sub: c.product || (c.oem ? getOemDisplayName(c.oem) : ''),
         meta: `${Math.floor((new Date(c.endDate) - today) / 86400000)}d`,
         c
     }));
