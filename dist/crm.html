@@ -13,13 +13,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<!-- 8AG/8AN/8AO — IRN/QR auto-extraction libs.
-     8AO: jsQR also moves from cdnjs to unpkg. Diag confirmed pdf.js loaded
-     fine from unpkg but jsQR from cdnjs never appeared on window.jsQR —
-     looks like cdnjs.cloudflare.com is blocked or restricted in this
-     Tauri/WKWebView setup, while unpkg.com works. -->
+<!-- 8AG/8AN/8AO/8AU — IRN auto-extraction libs.
+     8AU: jsQR removed. The QR scan path (added 8AG, refined 8AR-8AT) was
+     abandoned because no preprocessing strategy reliably decoded CA-flattened
+     QR images. User uploads QR manually via the IRN modal now. pdf.js
+     is still needed for text-based IRN extraction. -->
 <script src="https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
-<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 
 <style>
 /* --- CORE VARIABLES --- */
@@ -5698,6 +5697,40 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return '<span class="register-localfile-icon" title="Open local file: '
             + safe + '" data-path="' + safe + '" onclick="' + stop
             + 'window.__msOpenLocalFile(this.dataset.path);"><i class="fas fa-paperclip"></i></span>';
+    };
+
+    // 8AU — Pin icon for invoices that have a signed PDF attachment.
+    // Mirrors the PO paperclip-pin affordance (Screenshot 2). Click opens the
+    // signed PDF via downloadInvoicePDF, which checks signedPdfAttachmentId
+    // first and falls back to PDF generation. Only renders when there's
+    // actually a signed PDF to open — consistent with the PO pattern where
+    // the paperclip appears only on rows that have an attachment.
+    //
+    // Accepts either:
+    //   - a full invoice object (preferred, no lookup needed)
+    //   - an invoice number string (we look up the invoice in `invoices[]`)
+    window.__msSignedInvoicePin = function (invOrNumber) {
+        try {
+            var inv = null;
+            if (invOrNumber && typeof invOrNumber === 'object') {
+                inv = invOrNumber;
+            } else if (invOrNumber && typeof invOrNumber === 'string') {
+                if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+                    inv = invoices.find(function (x) { return x && x.invoiceNumber === invOrNumber; });
+                }
+            }
+            if (!inv || !inv.signedPdfAttachmentId || !inv.id) return '';
+            var safeId = String(inv.id)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            return ' <a href="#" class="signed-inv-pin" onclick="event.stopPropagation(); downloadInvoicePDF(\''
+                + safeId + '\'); return false;" title="Open signed PDF" '
+                + 'style="color:var(--success); text-decoration:none; margin-left:4px;">'
+                + '<i class="fas fa-paperclip" style="font-size:11px;"></i></a>';
+        } catch (e) {
+            return '';
+        }
     };
 
 
@@ -18119,16 +18152,23 @@ function renderContracts() {
                         const anchor = window.__msDocAnchor(inv.localPath, inv.link,
                             'style="color:var(--accent-cyan); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;" title="Open client invoice"',
                             `<i class="fas fa-file-invoice"></i> ${inv.invNo || 'View Invoice'}`);
-                        return anchor || `<span style="color:var(--text-main); font-weight:500; display:block; margin-bottom:4px; white-space:nowrap;">${inv.invNo || '-'}</span>`;
+                        // 8AU — append paperclip pin (opens signed PDF) when the
+                        // CRM invoice with this number has a signedPdfAttachmentId.
+                        // No icon if there's no signed PDF on file — matches PO behavior.
+                        const pin = window.__msSignedInvoicePin(inv.invNo);
+                        const label = anchor || `<span style="color:var(--text-main); font-weight:500; display:block; white-space:nowrap;">${inv.invNo || '-'}</span>`;
+                        return `<div style="margin-bottom:4px;">${label}${pin}</div>`;
                      }).join('');
                      cInvDate = y.arInvoices.map(inv => `<div style="margin-bottom:4px; white-space:nowrap; height:18px;">${formatDateReadable(inv.date) || '-'}</div>`).join('');
                      cPaidDate = y.arInvoices.map(inv => `<div style="margin-bottom:4px; height:18px;">${inv.paidDate ? '<span class="badge ok" style="padding:2px 4px; font-size:10px;">'+formatDateReadable(inv.paidDate)+'</span>' : '<span class="badge pending" style="padding:2px 4px; font-size:10px;">Pending</span>'}</div>`).join('');
                 } else {
                      let dispInv = y.clientInvoiceNo || 'View Invoice';
-                     cInvText = (window.__msDocAnchor(y.clientInvoiceLocalPath, y.clientInvoiceLink,
+                     const baseInv = (window.__msDocAnchor(y.clientInvoiceLocalPath, y.clientInvoiceLink,
                             'style="color:var(--accent-cyan); text-decoration:none;" title="Open client invoice"',
                             `<i class="fas fa-file-invoice"></i> ${dispInv}`)
                          ) || (y.clientInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.clientInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
+                     // 8AU — also pin in the legacy single-invoice fallback path
+                     cInvText = baseInv + window.__msSignedInvoicePin(y.clientInvoiceNo);
                      cInvDate = formatDateReadable(y.actualInvoiceDate) || '-';
                      cPaidDate = y.paymentDate ? formatDateReadable(y.paymentDate) : (y.paid ? '<span class="badge ok">Fully Paid</span>' : '<span class="badge pending">Pending</span>');
                 }
@@ -28402,7 +28442,7 @@ function renderInvoiceCard(inv) {
         ? `<div style="font-size:10px; color:var(--warning); font-style:italic; margin-top:3px;"><i class="fas fa-handshake" style="font-size:9px;"></i> bill: ${pEsc(inv.sourcedViaResellerKey)}</div>`
         : '';
     return `<div class="inv-card status-${statusSlug}${overdue ? ' overdue' : ''}" onclick="openInvoiceDetail('${inv.id}')">
-        <div class="ic-num">${pEsc(inv.invoiceNumber || '(no number)')}${inv.signedPdfAttachmentId ? ` <a href="#" onclick="event.stopPropagation(); downloadInvoicePDF('${pEsc(inv.id)}'); return false;" title="Download signed PDF" style="color:var(--success); font-size:10px; margin-left:4px; text-decoration:none;"><i class="fas fa-file-signature"></i></a>` : ''}${overdue ? `<span class="inv-overdue-flag"><i class="fas fa-exclamation-circle"></i> Overdue ${invDaysOverdue(inv)}d</span>` : ''}</div>
+        <div class="ic-num">${pEsc(inv.invoiceNumber || '(no number)')}${window.__msSignedInvoicePin(inv)}${overdue ? `<span class="inv-overdue-flag"><i class="fas fa-exclamation-circle"></i> Overdue ${invDaysOverdue(inv)}d</span>` : ''}</div>
         <div class="ic-client">${pEsc(inv.clientName || '(no client)')}${typeof getAttachmentCountBadgeHtml === 'function' ? getAttachmentCountBadgeHtml('invoice', inv.id) : ''}</div>
         ${resalePill}
         <div class="ic-subject">${pEsc(inv.subject || '')}</div>
@@ -28447,9 +28487,9 @@ function renderInvoicesListView(filtered) {
         // "download signed PDF" path from the list, which is the dominant
         // usage pattern. The red fa-file-pdf button at the far right still
         // works for users who scroll to it.
-        const signedIcon = inv.signedPdfAttachmentId
-            ? ` <a href="#" onclick="event.stopPropagation(); downloadInvoicePDF('${pEsc(inv.id)}'); return false;" title="Download signed PDF" style="color:var(--success); font-size:10px; margin-left:4px; text-decoration:none;"><i class="fas fa-file-signature"></i></a>`
-            : '';
+        // 8AU — Use unified paperclip pin helper for consistency with PO list.
+        // Old code emitted fa-file-signature; pin matches PO Screenshot 2 affordance.
+        const signedIcon = window.__msSignedInvoicePin(inv);
         return `<tr class="clickable-row" onclick="openInvoiceDetail('${inv.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(inv.invoiceNumber || '—')}${signedIcon}</td>
             <td style="font-weight:600;">${pEsc(inv.clientName || '—')}${resalePill}</td>
@@ -37161,7 +37201,6 @@ function __diagRunBootScan() {
                 diag('INFO', `IRN libs check (${label})`, {
                     pdfjsLib: typeof window.pdfjsLib,
                     pdfjs: typeof window.pdfjs,
-                    jsQR: typeof window.jsQR,
                     ready: (typeof __irnLibsReady === 'function') ? __irnLibsReady() : 'fn missing'
                 });
             } catch (e) { /* ignore */ }
@@ -37401,15 +37440,14 @@ function __diagShowOrphanRepairBanner(orphanCount) {
 
 function __irnLibsReady() {
     if (typeof window === 'undefined') return false;
-    // 8AN — Some pdf.js builds expose pdfjsLib as window.pdfjsLib;
-    // others as window.pdfjs or globalThis.pdfjsLib. Check all three.
+    // 8AU — Only pdf.js needed now (QR scan removed). Still tolerate the
+    // various globals different pdf.js builds may expose.
     const pdfLib = window.pdfjsLib || window.pdfjs || (typeof globalThis !== 'undefined' ? globalThis.pdfjsLib : null);
-    const hasQR = typeof window.jsQR === 'function';
     if (pdfLib && pdfLib.getDocument && !window.pdfjsLib) {
         // Normalize for downstream code that uses window.pdfjsLib
         window.pdfjsLib = pdfLib;
     }
-    return !!(window.pdfjsLib && window.pdfjsLib.getDocument && hasQR);
+    return !!(window.pdfjsLib && window.pdfjsLib.getDocument);
 }
 
 // Read a file as ArrayBuffer (used by pdf.js)
@@ -37421,356 +37459,10 @@ function __irnReadFileAsArrayBuffer(file) {
         r.readAsArrayBuffer(file);
     });
 }
-
-// Try base64url-decode the JWT-style QR payload and parse JSON.
-// Returns the parsed object or null.
-function __irnDecodeQRPayload(qrText) {
-    if (!qrText || typeof qrText !== 'string') return null;
-    // GST e-invoice QR is a JWT: header.payload.signature
-    const parts = qrText.split('.');
-    if (parts.length < 2) return null;
-    try {
-        // Base64URL → base64
-        let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4) b64 += '=';
-        const json = atob(b64);
-        return JSON.parse(json);
-    } catch (e) {
-        diag('INFO', 'IRN extract: QR JWT decode failed', { error: String(e && e.message) });
-        return null;
-    }
-}
-
-// Render a pdf.js page to canvas and try to find a QR. Returns
-// { payload, imageDataUrl } or null.
-// 8AR — QR extraction now has two paths:
-//   Path 1: render whole page to canvas, scan with jsQR (the 8AO-stable approach)
-//   Path 2: walk pdf.js operator list, extract each image object,
-//           render each individually, scan with jsQR
-// Path 2 handles cases where the QR is embedded as a separate image stream
-// (typical of CA-signed PDFs from emSigner and similar signing tools) that
-// doesn't render to the page canvas in a jsQR-scannable form.
-
-async function __irnScanCanvasForQR(canvas, ctx, label) {
-    // Helper: pull RGBA from canvas + run jsQR with attemptBoth.
-    // Wrapped so any throw is logged and returns null instead of bubbling.
-    let imageData;
-    try {
-        imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    } catch (e) {
-        diag('INFO', `IRN extract: getImageData threw (${label})`, { error: String(e && e.message) });
-        return null;
-    }
-    let code = null;
-    try {
-        code = window.jsQR(imageData.data, canvas.width, canvas.height, {
-            inversionAttempts: 'attemptBoth'
-        });
-    } catch (e) {
-        diag('INFO', `IRN extract: jsQR threw (${label})`, { error: String(e && e.message) });
-        return null;
-    }
-    return (code && code.data) ? code : null;
-}
-
-async function __irnTryPageRender(page, pageNum) {
-    // Path 1: render entire page to a 2x canvas and scan.
-    let canvas, ctx;
-    try {
-        const viewport = page.getViewport({ scale: 2.0 });
-        canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-    } catch (e) {
-        diag('INFO', `IRN extract: page ${pageNum} canvas render threw`, { error: String(e && e.message) });
-        return null;
-    }
-    const code = await __irnScanCanvasForQR(canvas, ctx, `page ${pageNum} full-render`);
-    if (!code) {
-        diag('INFO', `IRN extract: full-page scan found no QR on page ${pageNum}`);
-        return null;
-    }
-    diag('INFO', `IRN extract: QR found on page ${pageNum} via full-page render`, { dataLength: code.data.length });
-    // Build crop dataUrl from the QR region
-    let qrImageDataUrl = null;
-    try {
-        if (code.location) {
-            const loc = code.location;
-            const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
-            const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
-            const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
-            const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
-            const pad = 10;
-            const x = Math.max(0, Math.floor(minX - pad));
-            const y = Math.max(0, Math.floor(minY - pad));
-            const w = Math.min(canvas.width - x, Math.ceil(maxX - minX + 2*pad));
-            const h = Math.min(canvas.height - y, Math.ceil(maxY - minY + 2*pad));
-            const cropCanvas = document.createElement('canvas');
-            cropCanvas.width = w;
-            cropCanvas.height = h;
-            cropCanvas.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
-            qrImageDataUrl = cropCanvas.toDataURL('image/png');
-        }
-    } catch (cropErr) {
-        diag('INFO', 'IRN extract: QR crop failed, using full page', { error: String(cropErr && cropErr.message) });
-        qrImageDataUrl = canvas.toDataURL('image/png');
-    }
-    return { payload: code.data, imageDataUrl: qrImageDataUrl };
-}
-
-async function __irnTryImageObjects(page, pageNum) {
-    // Path 2: walk the operator list, find image XObjects, scan each.
-    // We need to ensure objects are resolved, which the canvas render above
-    // would have done. If render failed, the objects may not be resolved
-    // and page.objs.get() can throw — we handle that gracefully.
-    const OPS = (window.pdfjsLib && window.pdfjsLib.OPS) ? window.pdfjsLib.OPS : null;
-    if (!OPS) {
-        diag('INFO', 'IRN extract: pdfjsLib.OPS unavailable, skipping image-object scan');
-        return null;
-    }
-    let opList;
-    try {
-        opList = await page.getOperatorList();
-    } catch (e) {
-        diag('INFO', `IRN extract: getOperatorList threw on page ${pageNum}`, { error: String(e && e.message) });
-        return null;
-    }
-    const imageOps = [];
-    for (let i = 0; i < opList.fnArray.length; i++) {
-        const op = opList.fnArray[i];
-        if (op === OPS.paintJpegXObject || op === OPS.paintImageXObject) {
-            const name = (opList.argsArray[i] && opList.argsArray[i][0]) || null;
-            if (name) imageOps.push({ name: name, op: op });
-        }
-    }
-    diag('INFO', `IRN extract: page ${pageNum} has ${imageOps.length} image XObjects`);
-    if (imageOps.length === 0) return null;
-
-    for (let idx = 0; idx < imageOps.length; idx++) {
-        const { name, op } = imageOps[idx];
-        let imgObj = null;
-        try {
-            // page.objs.get(name) may throw if unresolved, or accept a callback.
-            // Try direct/sync first; if it throws, try callback form.
-            try {
-                imgObj = page.objs.get(name);
-            } catch (syncErr) {
-                imgObj = await new Promise(function(resolve) {
-                    try {
-                        page.objs.get(name, function(o) { resolve(o); });
-                    } catch (cbErr) {
-                        diag('INFO', `IRN extract: page.objs.get threw for ${name}`, { error: String(cbErr && cbErr.message) });
-                        resolve(null);
-                    }
-                });
-            }
-        } catch (e) {
-            diag('INFO', `IRN extract: page.objs.get outer error for ${name}`, { error: String(e && e.message) });
-        }
-        if (!imgObj) {
-            diag('INFO', `IRN extract: image ${name} unresolved/missing`);
-            continue;
-        }
-        // imgObj shape varies:
-        //   - { src: 'data:image/...' } for native-JPEG-decoded
-        //   - { data: Uint8Array, width, height, kind } for raw bitmaps
-        //   - { bitmap: ImageBitmap, width, height } for newer builds
-        let imgCanvas = null;
-        try {
-            if (imgObj.src && typeof imgObj.src === 'string') {
-                // Native decode: load via <img> element
-                const img = await new Promise(function(resolve, reject) {
-                    const el = new Image();
-                    el.onload = function() { resolve(el); };
-                    el.onerror = function() { reject(new Error('img load failed')); };
-                    el.src = imgObj.src;
-                });
-                imgCanvas = document.createElement('canvas');
-                imgCanvas.width = img.naturalWidth || img.width;
-                imgCanvas.height = img.naturalHeight || img.height;
-                imgCanvas.getContext('2d').drawImage(img, 0, 0);
-            } else if (imgObj.bitmap) {
-                imgCanvas = document.createElement('canvas');
-                imgCanvas.width = imgObj.width || imgObj.bitmap.width;
-                imgCanvas.height = imgObj.height || imgObj.bitmap.height;
-                imgCanvas.getContext('2d').drawImage(imgObj.bitmap, 0, 0);
-            } else if (imgObj.data && imgObj.width && imgObj.height) {
-                // Raw bitmap. kind: 1=grayscale,1bpp; 2=RGB,8bpp; 3=RGBA,8bpp
-                imgCanvas = document.createElement('canvas');
-                imgCanvas.width = imgObj.width;
-                imgCanvas.height = imgObj.height;
-                const ictx = imgCanvas.getContext('2d');
-                const ridata = ictx.createImageData(imgObj.width, imgObj.height);
-                const src = imgObj.data;
-                const dst = ridata.data;
-                if (imgObj.kind === 3) {
-                    // RGBA passthrough
-                    for (let p = 0; p < dst.length; p++) dst[p] = src[p];
-                } else if (imgObj.kind === 2 || (!imgObj.kind && src.length === imgObj.width * imgObj.height * 3)) {
-                    // RGB → RGBA
-                    let si = 0, di = 0;
-                    while (di < dst.length) {
-                        dst[di++] = src[si++];
-                        dst[di++] = src[si++];
-                        dst[di++] = src[si++];
-                        dst[di++] = 255;
-                    }
-                } else {
-                    // Grayscale fallback
-                    let si = 0, di = 0;
-                    while (di < dst.length && si < src.length) {
-                        const v = src[si++];
-                        dst[di++] = v; dst[di++] = v; dst[di++] = v; dst[di++] = 255;
-                    }
-                }
-                ictx.putImageData(ridata, 0, 0);
-            } else {
-                diag('INFO', `IRN extract: image ${name} unknown shape`, { keys: Object.keys(imgObj).slice(0, 6).join(',') });
-                continue;
-            }
-        } catch (decodeErr) {
-            diag('INFO', `IRN extract: image ${name} decode threw`, { error: String(decodeErr && decodeErr.message) });
-            continue;
-        }
-        if (!imgCanvas || imgCanvas.width < 30 || imgCanvas.height < 30) {
-            // Too small to be a QR
-            continue;
-        }
-        // 8AS — log source decode path so we know which branch produced the canvas
-        const srcType = imgObj.src ? 'src(dataUrl)' : (imgObj.bitmap ? 'bitmap' : (imgObj.data ? `data(kind=${imgObj.kind})` : 'unknown'));
-        diag('INFO', `IRN extract: scanning image ${name}`, { width: imgCanvas.width, height: imgCanvas.height, srcType: srcType });
-
-        // 8AS — Build a preprocessed scan canvas:
-        //   1. White background (composites away any alpha; QRs need black-on-white)
-        //   2. Quiet-zone padding around the image (~10% on each side)
-        //   3. Nearest-neighbor upscale for small images (jsQR is more reliable
-        //      when each QR module is 10+ pixels; a 165×168 QR has ~7px modules)
-        let scanCanvas = imgCanvas;
-        try {
-            const w0 = imgCanvas.width, h0 = imgCanvas.height;
-            // Decide upscale factor: target the smaller dimension to be at least 600px
-            const targetMin = 600;
-            const minDim = Math.min(w0, h0);
-            const upscale = minDim < targetMin ? Math.min(4, Math.ceil(targetMin / minDim)) : 1;
-            // Padding: 10% of upscaled side, capped at 40px
-            const pad = Math.min(40, Math.round(Math.max(w0, h0) * upscale * 0.1));
-            const newW = w0 * upscale + 2 * pad;
-            const newH = h0 * upscale + 2 * pad;
-            const pre = document.createElement('canvas');
-            pre.width = newW;
-            pre.height = newH;
-            const pctx = pre.getContext('2d');
-            // Fill white background
-            pctx.fillStyle = '#ffffff';
-            pctx.fillRect(0, 0, newW, newH);
-            // Disable image smoothing so upscale stays crisp (preserves QR edges)
-            pctx.imageSmoothingEnabled = false;
-            // For consistency across browsers
-            if ('webkitImageSmoothingEnabled' in pctx) pctx.webkitImageSmoothingEnabled = false;
-            // Draw original image centred with padding
-            pctx.drawImage(imgCanvas, 0, 0, w0, h0, pad, pad, w0 * upscale, h0 * upscale);
-            scanCanvas = pre;
-            diag('INFO', `IRN extract: preprocessed image ${name}`, { upscale: upscale, pad: pad, scanW: newW, scanH: newH });
-        } catch (preErr) {
-            diag('INFO', `IRN extract: preprocess failed for ${name}, using raw image`, { error: String(preErr && preErr.message) });
-            scanCanvas = imgCanvas;
-        }
-
-        // 8AT — Sample pixels from a 3x3 grid on the scan canvas to diagnose
-        // whether the image is actually black-and-white or some other color
-        // profile. Logged as a single string to fit safeStr.
-        try {
-            const sctx = scanCanvas.getContext('2d');
-            const w = scanCanvas.width, h = scanCanvas.height;
-            const sx = [Math.floor(w * 0.25), Math.floor(w * 0.5), Math.floor(w * 0.75)];
-            const sy = [Math.floor(h * 0.25), Math.floor(h * 0.5), Math.floor(h * 0.75)];
-            const samples = [];
-            for (const y of sy) {
-                for (const x of sx) {
-                    const d = sctx.getImageData(x, y, 1, 1).data;
-                    samples.push(`(${x},${y})rgba(${d[0]},${d[1]},${d[2]},${d[3]})`);
-                }
-            }
-            diag('INFO', `IRN extract: pixel samples ${name} :: ${samples.join(' ')}`);
-        } catch (e) { /* ignore */ }
-
-        // 8AT — First try scanning the preprocessed canvas as-is
-        let code = await __irnScanCanvasForQR(scanCanvas, scanCanvas.getContext('2d'), `image ${name}`);
-
-        // 8AT — If that didn't decode, try a binary-threshold version.
-        // Many CA-signed PDFs embed the QR as an anti-aliased grayscale or
-        // very-light-gray image. jsQR's internal binarization can fail on
-        // these. Force pure black/white via luminance threshold.
-        let thresholdCanvas = null;
-        if (!code) {
-            try {
-                thresholdCanvas = document.createElement('canvas');
-                thresholdCanvas.width = scanCanvas.width;
-                thresholdCanvas.height = scanCanvas.height;
-                const tctx = thresholdCanvas.getContext('2d');
-                tctx.drawImage(scanCanvas, 0, 0);
-                const tImg = tctx.getImageData(0, 0, thresholdCanvas.width, thresholdCanvas.height);
-                const tData = tImg.data;
-                for (let i = 0; i < tData.length; i += 4) {
-                    const lum = 0.299 * tData[i] + 0.587 * tData[i + 1] + 0.114 * tData[i + 2];
-                    const v = lum >= 128 ? 255 : 0;
-                    tData[i] = v; tData[i + 1] = v; tData[i + 2] = v; tData[i + 3] = 255;
-                }
-                tctx.putImageData(tImg, 0, 0);
-                diag('INFO', `IRN extract: applied threshold to ${name}, retrying`);
-                code = await __irnScanCanvasForQR(thresholdCanvas, tctx, `image ${name} (threshold)`);
-            } catch (thrErr) {
-                diag('INFO', `IRN extract: threshold preprocessing threw for ${name}`, { error: String(thrErr && thrErr.message) });
-            }
-        }
-
-        // Use thresholdCanvas as the "scan canvas" for QR-region crop if it decoded
-        const finalScanCanvas = (thresholdCanvas && code) ? thresholdCanvas : scanCanvas;
-        if (code) {
-            const decodedFrom = (thresholdCanvas && code) ? 'threshold' : 'preprocessed';
-            diag('INFO', `IRN extract: QR found in image ${name} via ${decodedFrom}`, { dataLength: code.data.length });
-            let qrImageDataUrl = null;
-            // Crop the QR region from the canvas that produced the decode
-            try {
-                if (code.location) {
-                    const loc = code.location;
-                    const minX = Math.min(loc.topLeftCorner.x, loc.bottomLeftCorner.x);
-                    const minY = Math.min(loc.topLeftCorner.y, loc.topRightCorner.y);
-                    const maxX = Math.max(loc.topRightCorner.x, loc.bottomRightCorner.x);
-                    const maxY = Math.max(loc.bottomLeftCorner.y, loc.bottomRightCorner.y);
-                    const cpad = 10;
-                    const x = Math.max(0, Math.floor(minX - cpad));
-                    const y = Math.max(0, Math.floor(minY - cpad));
-                    const w = Math.min(finalScanCanvas.width - x, Math.ceil(maxX - minX + 2 * cpad));
-                    const h = Math.min(finalScanCanvas.height - y, Math.ceil(maxY - minY + 2 * cpad));
-                    const cropCanvas = document.createElement('canvas');
-                    cropCanvas.width = w;
-                    cropCanvas.height = h;
-                    cropCanvas.getContext('2d').drawImage(finalScanCanvas, x, y, w, h, 0, 0, w, h);
-                    qrImageDataUrl = cropCanvas.toDataURL('image/png');
-                } else {
-                    qrImageDataUrl = imgCanvas.toDataURL('image/png');
-                }
-            } catch (e) {
-                try { qrImageDataUrl = imgCanvas.toDataURL('image/png'); } catch (e2) { /* ignore */ }
-            }
-            return { payload: code.data, imageDataUrl: qrImageDataUrl };
-        }
-    }
-    diag('INFO', `IRN extract: no QR found in any image XObject on page ${pageNum}`);
-    return null;
-}
-
-async function __irnFindQRInPage(page, pageNum) {
-    // Try Path 1 first (page render). If it returns a QR, great.
-    // If it returns null (no QR found OR crashed), fall through to Path 2.
-    const pathResult = await __irnTryPageRender(page, pageNum);
-    if (pathResult) return pathResult;
-    // Path 2: image XObject extraction
-    return await __irnTryImageObjects(page, pageNum);
-}
+// 8AU — QR scan code removed in Phase 8AU. The QR image extraction
+// approach was abandoned after multiple phases (8AR-8AT) couldn't reliably
+// decode the CA-signed QR images. User uploads QR manually now. The IRN
+// text extraction path below works reliably and is retained.
 
 // Main extraction function. Returns:
 //   { irn, ackNumber, ackDate, signedQR, qrImageDataUrl, source }
@@ -37916,73 +37608,21 @@ async function extractIRNFromPDF(file) {
 
     diag('INFO', 'extractIRNFromPDF: ack regex results', { ackNumber: ackNumber, ackDate: ackDate });
 
-    // ---- Phase 3: QR extraction ----
-    let qrIrn = null, signedQR = null, qrImageDataUrl = null;
-    for (let p = 1; p <= pdf.numPages; p++) {
-        try {
-            const page = await pdf.getPage(p);
-            const qrResult = await __irnFindQRInPage(page, p);
-            if (qrResult && qrResult.payload) {
-                signedQR = qrResult.payload;
-                qrImageDataUrl = qrResult.imageDataUrl;
-                const jwt = __irnDecodeQRPayload(qrResult.payload);
-                if (jwt && jwt.data) {
-                    // The IRP JWT has the structure { data: { Irn, AckNo, AckDt, ... } }
-                    // Sometimes wrapped, sometimes direct. Handle both.
-                    let inner = jwt.data;
-                    if (typeof inner === 'string') {
-                        try { inner = JSON.parse(inner); } catch (e) {}
-                    }
-                    if (inner && typeof inner === 'object' && inner.Irn) {
-                        qrIrn = String(inner.Irn).toLowerCase();
-                        if (inner.AckNo && !ackNumber) ackNumber = String(inner.AckNo);
-                        if (inner.AckDt && !ackDate) ackDate = String(inner.AckDt);
-                    }
-                } else if (jwt && jwt.Irn) {
-                    // Some PDFs put data fields at the top level
-                    qrIrn = String(jwt.Irn).toLowerCase();
-                    if (jwt.AckNo && !ackNumber) ackNumber = String(jwt.AckNo);
-                    if (jwt.AckDt && !ackDate) ackDate = String(jwt.AckDt);
-                }
-                break; // Stop after first QR found
-            }
-        } catch (e) {
-            diag('INFO', `extractIRNFromPDF: page ${p} QR scan threw`, { error: String(e && e.message) });
-        }
-    }
-    diag('INFO', 'extractIRNFromPDF: QR phase complete', { qrIrnFound: !!qrIrn, signedQRLen: signedQR ? signedQR.length : 0 });
+    // ---- 8AU — QR extraction phase removed. The IRN itself comes from text. ----
+    // User uploads the QR image manually via the IRN modal.
 
-    // ---- Resolve final IRN: prefer QR (authoritative) when present ----
-    let finalIrn = null, source = null;
-    if (qrIrn && textIrn) {
-        if (qrIrn === textIrn) {
-            finalIrn = qrIrn;
-            source = 'both';
-        } else {
-            diag('INFO', 'extractIRNFromPDF: QR and text disagree, preferring QR', { qrIrn: qrIrn.slice(0,12)+'…', textIrn: textIrn.slice(0,12)+'…' });
-            finalIrn = qrIrn;
-            source = 'qr';
-        }
-    } else if (qrIrn) {
-        finalIrn = qrIrn;
-        source = 'qr';
-    } else if (textIrn) {
-        finalIrn = textIrn;
-        source = 'text';
-    }
-
-    if (!finalIrn) {
-        diag('INFO', 'extractIRNFromPDF: no IRN found via text or QR');
+    if (!textIrn) {
+        diag('INFO', 'extractIRNFromPDF: no IRN found in text');
         return null;
     }
 
     return {
-        irn: finalIrn,
+        irn: textIrn,
         ackNumber: ackNumber,
         ackDate: ackDate,
-        signedQR: signedQR,
-        qrImageDataUrl: qrImageDataUrl,
-        source: source
+        signedQR: null,
+        qrImageDataUrl: null,
+        source: 'text'
     };
 }
 
@@ -37991,12 +37631,11 @@ async function extractIRNFromPDF(file) {
 async function runIRNExtraction(inv, file) {
     if (!inv || !file) return;
     diag('INFO', 'runIRNExtraction: starting', { invoiceNumber: inv.invoiceNumber });
-    // 8AN — Wait up to 10 seconds for libs to be ready, log progress every 2s
+    // 8AU — Wait up to 10 seconds for pdf.js to load (jsQR no longer needed)
     if (!__irnLibsReady()) {
         diag('INFO', 'runIRNExtraction: libs not yet ready, waiting up to 10s', {
             pdfjsLib: typeof window.pdfjsLib,
-            pdfjs: typeof window.pdfjs,
-            jsQR: typeof window.jsQR
+            pdfjs: typeof window.pdfjs
         });
         const deadline = Date.now() + 10000;
         let lastLogTime = Date.now();
@@ -38007,8 +37646,7 @@ async function runIRNExtraction(inv, file) {
                 diag('INFO', 'runIRNExtraction: still waiting for libs', {
                     elapsedMs: Date.now() - (deadline - 10000),
                     pdfjsLib: typeof window.pdfjsLib,
-                    pdfjs: typeof window.pdfjs,
-                    jsQR: typeof window.jsQR
+                    pdfjs: typeof window.pdfjs
                 });
                 lastLogTime = Date.now();
             }
@@ -38018,11 +37656,10 @@ async function runIRNExtraction(inv, file) {
         diag('CRITICAL', 'runIRNExtraction: libs never loaded after 10s wait', {
             pdfjsLib: typeof window.pdfjsLib,
             pdfjs: typeof window.pdfjs,
-            jsQR: typeof window.jsQR,
-            note: 'Likely Tauri WKWebView blocked CDN. If reproduces, may need to inline libs (Phase 8AO).'
+            note: '8AU: pdf.js failed to load. Re-uploading from a different CDN may help.'
         });
         if (typeof showProspectToast === 'function') {
-            showProspectToast(`<i class="fas fa-info-circle" style="color:var(--text-dim);"></i> IRN auto-extraction unavailable (libraries didn't load). Use <strong>Record IRN</strong> to enter manually.`, 6000);
+            showProspectToast(`<i class="fas fa-info-circle" style="color:var(--text-dim);"></i> IRN auto-extraction unavailable (library didn't load). Use <strong>Record IRN</strong> to enter manually.`, 6000);
         }
         return;
     }
@@ -38072,8 +37709,7 @@ async function runIRNExtraction(inv, file) {
     inv.irn = result.irn;
     if (result.ackNumber) inv.irnAckNumber = result.ackNumber;
     if (result.ackDate) inv.irnAckDate = result.ackDate;
-    if (result.signedQR) inv.irnSignedQR = result.signedQR;
-    if (result.qrImageDataUrl) inv.qrCodeImageDataUrl = result.qrImageDataUrl;
+    // 8AU — QR fields removed (auto-extraction abandoned). User uploads QR manually.
     inv.irnSource = 'auto-extracted';
     inv.irnExtractedAt = new Date().toISOString();
     inv.updatedAt = new Date().toISOString();
@@ -38083,7 +37719,6 @@ async function runIRNExtraction(inv, file) {
         irnShort: result.irn.slice(0, 12) + '…',
         ackNumber: result.ackNumber,
         ackDate: result.ackDate,
-        hasQRImage: !!result.qrImageDataUrl,
         source: result.source
     });
 
@@ -39729,8 +39364,10 @@ function renderARApPage() {
             }
             // Linked Invoice lookup (Phase 3 T-INV-3) — reverse-links to dedicated Invoices module
             const linkedInv = (typeof findInvoiceForContractCycle === 'function') ? findInvoiceForContractCycle(r.cIdx, r.yIdx) : null;
+            // 8AU — append paperclip pin for signed-PDF if attached
+            const linkedInvPin = linkedInv ? window.__msSignedInvoicePin(linkedInv) : '';
             const linkedInvCell = linkedInv
-                ? `<a href="#" onclick="openInvoiceDetail('${linkedInv.id}'); return false;" style="color:var(--accent-cyan); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedInv.subject || '')} · ${pEsc(linkedInv.status)}">${pEsc(linkedInv.invoiceNumber)}<div style="font-size:10px; color:var(--text-dim); font-weight:400; margin-top:1px;">${pEsc(linkedInv.status)}</div></a>`
+                ? `<a href="#" onclick="openInvoiceDetail('${linkedInv.id}'); return false;" style="color:var(--accent-cyan); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedInv.subject || '')} · ${pEsc(linkedInv.status)}">${pEsc(linkedInv.invoiceNumber)}<div style="font-size:10px; color:var(--text-dim); font-weight:400; margin-top:1px;">${pEsc(linkedInv.status)}</div></a>${linkedInvPin}`
                 : (r.status !== 'PAID' ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); generateInvoiceFromContractCycle(${r.cIdx}, ${r.yIdx});" title="Generate invoice for this cycle" style="padding: 3px 8px; font-size:10.5px; color:var(--accent-cyan);"><i class="fas fa-file-invoice"></i> Generate</button>` : '<span style="color:var(--text-dim); font-size:11px;">—</span>');
             // Phase 4C.2 — Q4 Option B — show end client primary + "via [Reseller]" subtext for Resale
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
