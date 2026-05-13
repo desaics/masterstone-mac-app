@@ -7196,6 +7196,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <label>Payment Terms</label>
                 <input type="text" id="cpTplPayment_invoice" oninput="cpTplOnFieldChange('invoice'); cpMarkDirty();" placeholder="e.g. 30 days from invoice date">
             </div>
+            <!-- 8AY — Company-profile-level default for the per-invoice
+                 Statutory Advisory / Warning textarea. Lives outside the
+                 template-specific fields above (single global default,
+                 doesn't vary per template). Pre-fills new invoice records;
+                 user can override or blank out per-invoice. If blanked, the
+                 entire advisory block is omitted from the invoice PDF. The
+                 per-invoice colour (red/blue) is chosen on each invoice. -->
+            <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--glass-border);">
+                <label>Default Statutory Advisory / Warning <span style="font-size:10.5px; color:var(--text-dim); font-weight:normal;">(applies to all invoice templates · pre-fills the per-invoice advisory field · colour is chosen per-invoice)</span></label>
+                <textarea id="cp_defaultStatutoryAdvisory" rows="2" style="width:100%; resize:vertical; font-family:inherit;" oninput="cpMarkDirty();" placeholder="e.g. We are registered under MSME Development Act, 2006. Our Udhyam Registration No. is ..."></textarea>
+            </div>
         </div>
 
         </div><!-- end data-syscat=templates -->
@@ -12143,6 +12154,13 @@ function initCompanyProfile() {
         defaultPOInstructions: 'Please acknowledge receipt of this PO and confirm expected delivery timeline.',
         defaultInvoiceTerms: '1. Interest @ 18% p.a. applicable on invoices outstanding beyond the due date.\n2. TDS, if any, to be deducted as per applicable provisions of the Income Tax Act.\n3. Any dispute regarding this invoice must be raised in writing within 7 days of receipt.\n4. All disputes subject to Mumbai jurisdiction.',
         defaultInvoicePaymentTerms: '30 days from invoice date',
+        // 8AY — Company-profile-level default for the per-invoice Statutory
+        // Advisory / Warning text. Pre-fills new invoices; user can override
+        // or blank out per-invoice. If blanked, the entire advisory block is
+        // omitted from the invoice PDF. Existing CRM users see this seeded
+        // automatically on next save (via the standard defaults migration
+        // a few lines below).
+        defaultStatutoryAdvisory: 'We are registered under MSME Development Act, 2006. Our Udhyam Registration No. is UDYAM-MH-18-0023784.',
         defaultGSTRate: 18,
         // Phase 8E — Services Catalog
         // Master list of one-time professional service offerings (AI consultancy,
@@ -14719,6 +14737,8 @@ function cpLoadForm() {
     val('cp_defaultGSTRate', companyProfile.defaultGSTRate);
     // Phase 8K — Default PO Instructions (company-profile level)
     val('cp_defaultPOInstructions', companyProfile.defaultPOInstructions || '');
+    // 8AY — Default Statutory Advisory (company-profile level)
+    val('cp_defaultStatutoryAdvisory', companyProfile.defaultStatutoryAdvisory || '');
     // Refresh live preview boxes + labels
     if (typeof cpRefreshNumberingPreviews === 'function') cpRefreshNumberingPreviews();
     // Terms Templates Library loaded via cpTplLoadLibraryAll (Phase 3 addendum — T-2)
@@ -15083,6 +15103,13 @@ function cpSave() {
     {
         const _el = document.getElementById('cp_defaultPOInstructions');
         if (_el) companyProfile.defaultPOInstructions = (_el.value || '').trim();
+    }
+    // 8AY — Default Statutory Advisory (company-profile level). Same pattern
+    // as defaultPOInstructions above — stored even when blank so the user
+    // can deliberately have no default. Per-invoice colour stays per-invoice.
+    {
+        const _el = document.getElementById('cp_defaultStatutoryAdvisory');
+        if (_el) companyProfile.defaultStatutoryAdvisory = (_el.value || '').trim();
     }
     // Terms Templates are already synced in-memory via cpTplOnFieldChange.
     // Keep legacy fields in sync with the default templates for backward compat with any code still reading them.
@@ -28789,7 +28816,10 @@ function openInvoiceForm(id) {
         val('invTerms', (companyProfile && companyProfile.defaultInvoiceTerms) || '');
         val('invNotes', '');
         // Bug fix #32 — new invoice: clear statutory advisory, default colour to red.
-        val('invStatutoryAdvisory', '');
+        // 8AY — Pre-fill from companyProfile.defaultStatutoryAdvisory if set.
+        // User can edit per-invoice; leaving blank omits the advisory block
+        // from the invoice PDF.
+        val('invStatutoryAdvisory', (companyProfile && companyProfile.defaultStatutoryAdvisory) || '');
         const _stRed_new = document.getElementById('invStatutoryColorRed');
         const _stBlue_new = document.getElementById('invStatutoryColorBlue');
         if (_stRed_new)  _stRed_new.checked  = true;
