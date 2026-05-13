@@ -5799,6 +5799,347 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             + 'window.__msOpenLocalFile(this.dataset.path);"><i class="fas fa-paperclip"></i></span>';
     };
 
+    // ====================================================================
+    // Phase 8BA — Broken-Link Scanner
+    // ====================================================================
+    // Walks every stored local file path across contracts, proposals, and
+    // purchase orders, asks the Rust side (check_file_exists) whether each
+    // path still resolves on disk, and presents a review modal listing the
+    // broken ones with per-row Clear / Open Record actions.
+    //
+    // Field inventory (see 8BA notes for full audit):
+    //   contracts[]:
+    //     .internalPOLocalPath
+    //     .clientPOLocalPath                              (legacy single-PO)
+    //     .clientPOs[].localPath                          (current array)
+    //     .billingYears[].clientInvoiceLocalPath          (legacy AR)
+    //     .billingYears[].oemInvoiceLocalPath             (legacy AP)
+    //     .billingYears[].arInvoices[].localPath          (current AR array)
+    //     .billingYears[].apInvoices[].localPath          (current AP array)
+    //   proposals[]:        .externalLinkLocalPath
+    //   purchaseOrders[]:   .externalLinkLocalPath
+    //
+    // We stash the latest findings on window.__msBrokenLinkFindings so the
+    // results modal's per-row onclick handlers can reference them by index
+    // (cleaner than embedding JSON in HTML attributes).
+    // ====================================================================
+
+    window.__msBrokenLinkFindings = [];
+
+    // Build the inventory of populated paths to check. Returns an array of
+    // { entityType, entityIdx|entityId, fieldDescriptor, cycleIdx?, arrIdx?,
+    //   path, label } records — one per non-empty path found.
+    function _collectAllStoredPaths() {
+        var list = [];
+        // ----- Contracts -----
+        if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+            contracts.forEach(function (c, cIdx) {
+                if (!c) return;
+                var clientName = c.client || '(unnamed)';
+                var productName = c.product || '';
+                var ctxBase = clientName + (productName ? ' · ' + productName : '');
+
+                if (c.internalPOLocalPath) {
+                    list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'internalPOLocalPath',
+                        path: c.internalPOLocalPath, label: ctxBase + ' · Internal PO' });
+                }
+                if (c.clientPOLocalPath) {
+                    list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOLocalPath',
+                        path: c.clientPOLocalPath, label: ctxBase + ' · Client PO (legacy)' });
+                }
+                if (Array.isArray(c.clientPOs)) {
+                    c.clientPOs.forEach(function (po, poIdx) {
+                        if (po && po.localPath) {
+                            list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOs[].localPath',
+                                arrIdx: poIdx, path: po.localPath,
+                                label: ctxBase + ' · Client PO ' + (po.poNo || '#' + (poIdx + 1)) });
+                        }
+                    });
+                }
+                if (Array.isArray(c.billingYears)) {
+                    c.billingYears.forEach(function (by, yIdx) {
+                        if (!by) return;
+                        var fyLabel = by.fy || ('Year ' + (yIdx + 1));
+                        if (by.clientInvoiceLocalPath) {
+                            list.push({ entityType: 'contract', entityIdx: cIdx,
+                                fieldDescriptor: 'billingYears[].clientInvoiceLocalPath', cycleIdx: yIdx,
+                                path: by.clientInvoiceLocalPath,
+                                label: ctxBase + ' · ' + fyLabel + ' · Client Invoice (legacy)' });
+                        }
+                        if (by.oemInvoiceLocalPath) {
+                            list.push({ entityType: 'contract', entityIdx: cIdx,
+                                fieldDescriptor: 'billingYears[].oemInvoiceLocalPath', cycleIdx: yIdx,
+                                path: by.oemInvoiceLocalPath,
+                                label: ctxBase + ' · ' + fyLabel + ' · OEM Invoice (legacy)' });
+                        }
+                        if (Array.isArray(by.arInvoices)) {
+                            by.arInvoices.forEach(function (arInv, arIdx) {
+                                if (arInv && arInv.localPath) {
+                                    list.push({ entityType: 'contract', entityIdx: cIdx,
+                                        fieldDescriptor: 'billingYears[].arInvoices[].localPath',
+                                        cycleIdx: yIdx, arrIdx: arIdx, path: arInv.localPath,
+                                        label: ctxBase + ' · ' + fyLabel + ' · AR ' + (arInv.invNo || '#' + (arIdx + 1)) });
+                                }
+                            });
+                        }
+                        if (Array.isArray(by.apInvoices)) {
+                            by.apInvoices.forEach(function (apInv, apIdx) {
+                                if (apInv && apInv.localPath) {
+                                    list.push({ entityType: 'contract', entityIdx: cIdx,
+                                        fieldDescriptor: 'billingYears[].apInvoices[].localPath',
+                                        cycleIdx: yIdx, arrIdx: apIdx, path: apInv.localPath,
+                                        label: ctxBase + ' · ' + fyLabel + ' · AP ' + (apInv.invNo || '#' + (apIdx + 1)) });
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+        }
+        // ----- Proposals -----
+        if (typeof proposals !== 'undefined' && Array.isArray(proposals)) {
+            proposals.forEach(function (p) {
+                if (p && p.externalLinkLocalPath) {
+                    list.push({ entityType: 'proposal', entityId: p.id, fieldDescriptor: 'externalLinkLocalPath',
+                        path: p.externalLinkLocalPath,
+                        label: (p.proposalNumber || '(unnumbered)') + ' · ' + (p.clientName || '(no client)') });
+                }
+            });
+        }
+        // ----- Purchase Orders -----
+        if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
+            purchaseOrders.forEach(function (po) {
+                if (po && po.externalLinkLocalPath) {
+                    list.push({ entityType: 'po', entityId: po.id, fieldDescriptor: 'externalLinkLocalPath',
+                        path: po.externalLinkLocalPath,
+                        label: (po.poNumber || '(unnumbered)') + ' · ' + (po.clientName || po.oemName || '(no context)') });
+                }
+            });
+        }
+        return list;
+    }
+
+    // Run the scan. Async because each path check is a Tauri invoke round-trip.
+    window.__msRunBrokenLinkScan = async function () {
+        var t = getTauri();
+        if (!t || !t.invoke) {
+            showActionToast('Tauri runtime unavailable — scanner needs the Mac app context.', 'error');
+            return;
+        }
+
+        var paths = _collectAllStoredPaths();
+        if (paths.length === 0) {
+            showActionToast('No local file paths stored anywhere — nothing to scan.', 'info');
+            return;
+        }
+
+        var btn = document.getElementById('msBrokenLinkScanBtn');
+        var originalLabel = btn ? btn.innerHTML : null;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning… (0/' + paths.length + ')';
+        }
+
+        var findings = [];
+        for (var i = 0; i < paths.length; i++) {
+            var item = paths[i];
+            try {
+                var r = await t.invoke('check_file_exists', { path: item.path });
+                if (r && r.ok && r.exists === false) {
+                    findings.push(item);
+                } else if (r && !r.ok) {
+                    // Invoke succeeded but Rust returned ok:false (e.g. empty path —
+                    // shouldn't happen here since we pre-filter, but be defensive)
+                    findings.push(Object.assign({}, item, { _checkError: r.error || 'unknown' }));
+                }
+            } catch (e) {
+                findings.push(Object.assign({}, item, { _checkError: String(e) }));
+            }
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning… (' + (i + 1) + '/' + paths.length + ')';
+            }
+        }
+
+        if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
+
+        window.__msBrokenLinkFindings = findings;
+        window.__msShowBrokenLinkResults(findings, paths.length);
+    };
+
+    // Render the results modal. Reads window.__msBrokenLinkFindings indirectly
+    // (action handlers index into it by row); we pass `findings` here too just
+    // so this function is testable in isolation.
+    window.__msShowBrokenLinkResults = function (findings, totalChecked) {
+        var modal = document.getElementById('brokenLinkResultsModal');
+        if (!modal) return;
+        var summary = document.getElementById('brokenLinkResultsSummary');
+        var body = document.getElementById('brokenLinkResultsBody');
+
+        var brokenCount = findings.length;
+        var okCount = totalChecked - brokenCount;
+        if (summary) {
+            if (brokenCount === 0) {
+                summary.innerHTML = '<i class="fas fa-check-circle" style="color:var(--success);"></i> '
+                    + '<strong>All ' + totalChecked + ' paths OK.</strong> No broken links found.';
+                summary.style.color = 'var(--success)';
+            } else {
+                summary.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> '
+                    + 'Checked <strong>' + totalChecked + '</strong> paths. <strong>' + brokenCount
+                    + '</strong> broken, <strong>' + okCount + '</strong> OK.';
+                summary.style.color = 'var(--text-main)';
+            }
+        }
+
+        if (body) {
+            if (brokenCount === 0) {
+                body.innerHTML = '<div style="padding:24px; text-align:center; color:var(--text-dim); font-style:italic;">'
+                    + 'Every stored local file path resolves on your disk. You\'re clean.'
+                    + '</div>';
+            } else {
+                var rows = findings.map(function (f, idx) {
+                    var safeLabel = (f.label || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    var safePath = (f.path || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    var errBadge = f._checkError
+                        ? '<span style="font-size:10px; color:var(--warning); margin-left:6px;">(check error: '
+                            + f._checkError.replace(/&/g, '&amp;').replace(/</g, '&lt;') + ')</span>'
+                        : '';
+                    return '<tr style="border-bottom:1px solid var(--glass-border);">'
+                        + '<td style="padding:10px 12px; font-size:12px; vertical-align:top;">'
+                            + '<div style="font-weight:600; color:var(--text-main); margin-bottom:3px;">' + safeLabel + errBadge + '</div>'
+                            + '<div style="font-family:monospace; font-size:10.5px; color:var(--text-dim); word-break:break-all; line-height:1.4;">' + safePath + '</div>'
+                        + '</td>'
+                        + '<td style="padding:10px 12px; vertical-align:top; white-space:nowrap; text-align:right;">'
+                            + '<button class="btn btn-ghost btn-sm" onclick="window.__msOpenRecordFromFinding(' + idx + ')" title="Jump to the record that owns this path" style="margin-right:6px;"><i class="fas fa-external-link-alt"></i> Open record</button>'
+                            + '<button class="btn btn-ghost btn-sm" onclick="window.__msClearBrokenLink(' + idx + ')" title="Remove this broken link from the CRM (file on disk is not touched)" style="color:var(--danger);"><i class="fas fa-unlink"></i> Clear link</button>'
+                        + '</td>'
+                        + '</tr>';
+                }).join('');
+                body.innerHTML =
+                    '<table style="width:100%; border-collapse:collapse; font-size:12px;">'
+                    + '<thead><tr style="background:var(--detail-bg); border-bottom:2px solid var(--glass-border);">'
+                        + '<th style="padding:10px 12px; text-align:left; font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px;">Record / Broken Path</th>'
+                        + '<th style="padding:10px 12px; text-align:right; font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px;">Actions</th>'
+                    + '</tr></thead>'
+                    + '<tbody>' + rows + '</tbody>'
+                    + '</table>';
+            }
+        }
+        modal.style.display = 'flex';
+    };
+
+    window.__msCloseBrokenLinkResults = function () {
+        var modal = document.getElementById('brokenLinkResultsModal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    // Clear a single broken link from the underlying data after user confirm.
+    // Re-renders the modal table so the cleared row disappears immediately.
+    window.__msClearBrokenLink = async function (findingIdx) {
+        var findings = window.__msBrokenLinkFindings || [];
+        var f = findings[findingIdx];
+        if (!f) return;
+
+        var ok = await window.__msConfirm(
+            'Clear this broken link from the CRM?\n\n' + f.label + '\n\nThe file on disk is not touched — only the reference inside Masterstone is removed. You can re-attach a file later from the record itself.'
+        );
+        if (!ok) return;
+
+        var saved = false;
+        try {
+            if (f.entityType === 'contract') {
+                var c = (typeof contracts !== 'undefined') ? contracts[f.entityIdx] : null;
+                if (!c) throw new Error('Contract record not found at index ' + f.entityIdx);
+                switch (f.fieldDescriptor) {
+                    case 'internalPOLocalPath': c.internalPOLocalPath = ''; break;
+                    case 'clientPOLocalPath':   c.clientPOLocalPath = ''; break;
+                    case 'clientPOs[].localPath':
+                        if (c.clientPOs && c.clientPOs[f.arrIdx]) c.clientPOs[f.arrIdx].localPath = '';
+                        break;
+                    case 'billingYears[].clientInvoiceLocalPath':
+                        if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].clientInvoiceLocalPath = '';
+                        break;
+                    case 'billingYears[].oemInvoiceLocalPath':
+                        if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].oemInvoiceLocalPath = '';
+                        break;
+                    case 'billingYears[].arInvoices[].localPath':
+                        if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].arInvoices
+                            && c.billingYears[f.cycleIdx].arInvoices[f.arrIdx]) {
+                            c.billingYears[f.cycleIdx].arInvoices[f.arrIdx].localPath = '';
+                        }
+                        break;
+                    case 'billingYears[].apInvoices[].localPath':
+                        if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].apInvoices
+                            && c.billingYears[f.cycleIdx].apInvoices[f.arrIdx]) {
+                            c.billingYears[f.cycleIdx].apInvoices[f.arrIdx].localPath = '';
+                        }
+                        break;
+                    default: throw new Error('Unknown contract fieldDescriptor: ' + f.fieldDescriptor);
+                }
+                if (typeof persistData === 'function') persistData();
+                saved = true;
+            } else if (f.entityType === 'proposal') {
+                var p = (typeof proposals !== 'undefined') ? proposals.find(function (x) { return x.id === f.entityId; }) : null;
+                if (!p) throw new Error('Proposal not found: ' + f.entityId);
+                p.externalLinkLocalPath = '';
+                if (typeof saveProposals === 'function') saveProposals();
+                saved = true;
+            } else if (f.entityType === 'po') {
+                var po = (typeof purchaseOrders !== 'undefined') ? purchaseOrders.find(function (x) { return x.id === f.entityId; }) : null;
+                if (!po) throw new Error('PO not found: ' + f.entityId);
+                po.externalLinkLocalPath = '';
+                if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
+                saved = true;
+            } else {
+                throw new Error('Unknown entityType: ' + f.entityType);
+            }
+        } catch (e) {
+            showActionToast('Could not clear link: ' + e.message, 'error');
+            return;
+        }
+
+        if (saved) {
+            // Remove from the visible findings list and re-render the table.
+            findings.splice(findingIdx, 1);
+            window.__msBrokenLinkFindings = findings;
+            // Re-render with original totalChecked recomputed from summary text.
+            // (Simpler: rebuild keeping the same totals; we infer original total
+            // from current summary text's first <strong> number.)
+            var summary = document.getElementById('brokenLinkResultsSummary');
+            var origTotal = findings.length; // fallback
+            if (summary) {
+                var m = summary.textContent.match(/Checked\s+(\d+)/);
+                if (m) origTotal = parseInt(m[1], 10);
+            }
+            window.__msShowBrokenLinkResults(findings, origTotal);
+            showActionToast('Link cleared.', 'info');
+        }
+    };
+
+    // Deep-link to the record that owns the broken path. Closes the modal first
+    // so the user lands directly on the target form/detail page.
+    window.__msOpenRecordFromFinding = function (findingIdx) {
+        var findings = window.__msBrokenLinkFindings || [];
+        var f = findings[findingIdx];
+        if (!f) return;
+        window.__msCloseBrokenLinkResults();
+        try {
+            if (f.entityType === 'contract' && typeof editContract === 'function') {
+                editContract(f.entityIdx);
+            } else if (f.entityType === 'proposal' && typeof openProposalDetail === 'function') {
+                openProposalDetail(f.entityId);
+            } else if (f.entityType === 'po' && typeof openPODetail === 'function') {
+                openPODetail(f.entityId);
+            } else {
+                showActionToast('Could not open record: handler unavailable.', 'error');
+            }
+        } catch (e) {
+            showActionToast('Open record error: ' + e.message, 'error');
+        }
+    };
+    // ====================================================================
+    // End Phase 8BA — Broken-Link Scanner
+    // ====================================================================
+
     // 8AU — Pin icon for invoices that have a signed PDF attachment.
     // Mirrors the PO paperclip-pin affordance (Screenshot 2).
     //
@@ -7673,6 +8014,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <div style="font-size:11.5px; color:var(--text-dim);">Brings back the indigo Mac-app banner at the top of the window if you closed it.</div>
                 </div>
                 <button class="btn btn-ghost btn-sm" type="button" onclick="window.__msRestoreBanner()" style="background:var(--input-bg);"><i class="fas fa-arrow-up"></i> Show top banner</button>
+            </div>
+        </div>
+
+        <!-- Phase 8BA — Broken-Link Scanner -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--danger); border-radius:6px; padding:14px 16px; margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:240px;">
+                    <div style="font-size:13px; font-weight:600; color:var(--text-main); margin-bottom:4px;"><i class="fas fa-unlink" style="color:var(--danger);"></i> Broken-Link Scanner</div>
+                    <div style="font-size:11.5px; color:var(--text-dim);">Scans every stored local file path (contracts, proposals, POs) and lists the ones that no longer resolve on your disk. Catches silent rot before you need a document for a client.</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="msBrokenLinkScanBtn" type="button" onclick="window.__msRunBrokenLinkScan()" style="background:var(--input-bg);"><i class="fas fa-search"></i> Scan now</button>
             </div>
         </div>
 
@@ -10634,6 +10986,24 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <button class="btn btn-ghost" onclick="submitMarkIssued(false)" title="Mark Issued without uploading a signed PDF (you can attach it later)"><i class="fas fa-paper-plane"></i> Mark Issued (skip upload)</button>
         <button class="btn btn-primary" onclick="submitMarkIssued(true)"><i class="fas fa-check"></i> Mark Issued + Save Signed PDF</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Phase 8BA — Broken-Link Scanner results modal. Populated dynamically by
+     window.__msShowBrokenLinkResults. Per-row actions: Clear link (removes the
+     CRM reference, file on disk untouched) and Open record (deep-links to the
+     entity form / detail page). -->
+<div id="brokenLinkResultsModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 900px; max-height: 80vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-shrink:0;">
+      <h2 style="font-size:18px; margin:0;"><i class="fas fa-unlink" style="color:var(--danger);"></i> Broken-Link Scanner — Results</h2>
+      <button class="btn btn-ghost" onclick="window.__msCloseBrokenLinkResults()" style="border:none;"><i class="fas fa-times" style="font-size:18px;"></i></button>
+    </div>
+    <div id="brokenLinkResultsSummary" style="background:var(--detail-bg); padding:12px 14px; border-radius:6px; border:1px solid var(--glass-border); margin-bottom:14px; font-size:13px; line-height:1.5; flex-shrink:0;">—</div>
+    <div id="brokenLinkResultsBody" style="overflow-y:auto; flex:1; min-height:80px; border:1px solid var(--glass-border); border-radius:6px;"></div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-shrink:0;">
+      <button class="btn btn-primary" onclick="window.__msCloseBrokenLinkResults()">Close</button>
     </div>
   </div>
 </div>

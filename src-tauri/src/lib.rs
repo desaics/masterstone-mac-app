@@ -1279,6 +1279,29 @@ fn open_local_file<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) ->
 }
 
 // ============================================================================
+// Phase 8BA — check_file_exists: lightweight existence probe for the
+// broken-link sweeper. Same existence-check logic as open_local_file (line
+// above) but stops after the .exists() call — no app.opener() invocation,
+// no side effects. The sweeper calls this once per stored local path; with
+// hundreds of paths potentially in scope we cannot use open_local_file
+// because that would launch hundreds of OS-default-app windows.
+//
+// Returns:
+//   {ok: true,  exists: true|false}     for a non-empty path
+//   {ok: false, error: "Empty path"}    for an empty/whitespace input
+// ============================================================================
+
+#[tauri::command]
+fn check_file_exists(path: String) -> serde_json::Value {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({"ok": false, "error": "Empty path"});
+    }
+    let p = std::path::Path::new(trimmed);
+    serde_json::json!({"ok": true, "exists": p.exists()})
+}
+
+// ============================================================================
 // Phase 8AV — open_pdf_dataurl: open an in-memory PDF in the OS default viewer.
 //
 // Signed invoice PDFs are stored as base64 data URLs inside SQLite (no file
@@ -2871,6 +2894,9 @@ pub fn run() {
             // Phase 8C: local file attachments (companion to OneDrive URLs)
             pick_file,
             open_local_file,
+            // Phase 8BA: existence probe for the broken-link sweeper —
+            // see check_file_exists definition for rationale.
+            check_file_exists,
             // Phase 8AV: open in-memory PDF (base64 dataUrl) in OS default
             // viewer. Used by signed-invoice paperclip pins — invoice
             // attachments live in SQLite as base64, not on disk, so the
