@@ -28082,7 +28082,10 @@ function invoiceBlank() {
         // Bug fix #32 — Per-invoice statutory advisory / warning printed at the bottom
         // of the invoice PDF in the chosen colour. Empty string = nothing printed.
         statutoryAdvisory: '',
-        statutoryAdvisoryColor: 'red',  // 'red' | 'blue'
+        // 8AZ.1 — Default colour flipped from 'red' to 'blue'. Existing invoices
+        // keep their saved colour (the load path at openInvoiceForm respects
+        // whatever's already on the record); only NEW invoices default blue.
+        statutoryAdvisoryColor: 'blue',  // 'red' | 'blue'
         terms: '',
         notes: '',
         creditNoteNumber: '',
@@ -28829,10 +28832,11 @@ function openInvoiceForm(id) {
         // User can edit per-invoice; leaving blank omits the advisory block
         // from the invoice PDF.
         val('invStatutoryAdvisory', (companyProfile && companyProfile.defaultStatutoryAdvisory) || '');
+        // 8AZ.1 — Default colour for new invoices flipped to blue (was red).
         const _stRed_new = document.getElementById('invStatutoryColorRed');
         const _stBlue_new = document.getElementById('invStatutoryColorBlue');
-        if (_stRed_new)  _stRed_new.checked  = true;
-        if (_stBlue_new) _stBlue_new.checked = false;
+        if (_stRed_new)  _stRed_new.checked  = false;
+        if (_stBlue_new) _stBlue_new.checked = true;
         invFormLineItems = [invoiceLineItemBlank()];
         document.getElementById('invDeleteBtn').style.display = 'none';
     }
@@ -29665,6 +29669,28 @@ function renderInvoiceDetail(inv) {
             <div style="font-size:10.5px; color:var(--success); font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; display:flex; align-items:center; gap:5px;"><i class="fas fa-qrcode"></i> E-Invoice Registered (IRN)</div>
             <div style="font-family:monospace; font-size:10.5px; color:var(--text-main); word-break:break-all; line-height:1.4;">${pEsc(inv.irn)}</div>
             ${inv.irnAckNumber ? `<div style="font-size:11px; color:var(--text-dim); margin-top:4px;"><strong>Ack #:</strong> ${pEsc(inv.irnAckNumber)}${inv.irnAckDate ? ` · ${formatDateReadable(inv.irnAckDate)}` : ''}</div>` : ''}
+            ${(() => {
+                // 8AZ.1 — IRN provenance audit line. Three cases:
+                //   1. irnSource === 'auto-extracted' — pulled from signed PDF by runIRNExtraction (8AG)
+                //   2. irnSource === 'manual'         — typed via Record IRN modal (post 8AZ.1)
+                //   3. irnSource undefined/empty      — legacy manual entry from before provenance tracking
+                const _src = inv.irnSource;
+                let _label, _icon, _date;
+                if (_src === 'auto-extracted') {
+                    _icon = 'fa-magic';
+                    _label = 'Auto-extracted from signed PDF';
+                    _date = inv.irnExtractedAt ? formatDateReadable(inv.irnExtractedAt) : '';
+                } else if (_src === 'manual') {
+                    _icon = 'fa-keyboard';
+                    _label = 'Manually entered';
+                    _date = inv.irnExtractedAt ? formatDateReadable(inv.irnExtractedAt) : '';
+                } else {
+                    _icon = 'fa-keyboard';
+                    _label = 'Manually entered (legacy)';
+                    _date = '';
+                }
+                return `<div style="font-size:10.5px; color:var(--text-dim); margin-top:6px; font-style:italic; display:flex; align-items:center; gap:5px;"><i class="fas ${_icon}" style="font-size:9px;"></i>${pEsc(_label)}${_date ? ` · ${pEsc(_date)}` : ''}</div>`;
+            })()}
         </div>` : ''}
 
         ${inv.status === 'Credit Note Issued' && inv.creditNoteNumber ? `<div style="margin-top:12px; padding:10px 12px; background:var(--accent-tint-low); border:1px solid var(--accent-tint-strong); border-radius:6px;">
@@ -29723,6 +29749,12 @@ function submitMarkIssued(withFile) {
         try { _propagateInvoiceToContractCycle(inv); } catch (e) { console.warn('Cycle propagation:', e); }
         renderInvoiceDetail(inv);
         renderInvoicesPage();
+        // 8AZ.1 — Refresh Subscription Portfolio too, so the Invoicing Lifecycle
+        // table reflects the new Issued status without requiring a manual refresh
+        // or tab-flip. Cheap call; idempotent if the tab isn't visible.
+        if (typeof renderContracts === 'function') {
+            try { renderContracts(); } catch (e) { console.warn('renderContracts post-mark-issued:', e); }
+        }
         closeMarkIssuedModal();
         const signedSuffix = inv.signedPdfAttachmentId ? ' with signed PDF' : '';
         if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-paper-plane"></i> Invoice <strong>${pEsc(inv.invoiceNumber)}</strong> marked Issued${signedSuffix}.`);
@@ -31518,6 +31550,15 @@ function saveIRNFromForm() {
     inv.irnAckNumber = irnAckNumber;
     inv.irnAckDate = irnAckDate;
     inv.irnSignedQR = irnSignedQR;
+    // 8AZ.1 — Stamp provenance fields so manually-entered IRNs from this point
+    // forward carry explicit audit metadata. Pre-existing manual entries from
+    // before 8AZ.1 will have irnSource undefined; the display path treats that
+    // as "manually entered (legacy)". Auto-extraction sets these in
+    // runIRNExtraction (8AG).
+    if (irnNumber) {
+        inv.irnSource = 'manual';
+        inv.irnExtractedAt = new Date().toISOString();
+    }
     // #12 fix — persist the QR image dataUrl from preview
     const _qrBox = document.getElementById('irnQrImagePreview');
     inv.qrCodeImageDataUrl = (_qrBox && _qrBox.dataset.qrDataUrl) ? _qrBox.dataset.qrDataUrl : '';
@@ -31538,6 +31579,10 @@ function clearIRNForInvoice(invId) {
     inv.irnAckDate = '';
     inv.irnSignedQR = '';
     inv.qrCodeImageDataUrl = '';
+    // 8AZ.1 — Clear provenance fields too. Otherwise a stale "Auto-extracted on
+    // X date" badge would linger on an invoice whose IRN has been wiped.
+    inv.irnSource = '';
+    inv.irnExtractedAt = '';
     inv.updatedAt = new Date().toISOString();
     saveInvoices();
     renderInvoiceDetail(inv);
