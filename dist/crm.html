@@ -12507,8 +12507,20 @@ function cpTplOnFieldChange(type) {
 }
 
 // Create a new template for the given type
-function cpTplNew(type) {
-    const name = prompt(`Name for new ${type === 'po' ? 'PO' : type} template (e.g. Standard, Enterprise, Government):`, '');
+// 8AX — Replaced native prompt() with __msPrompt because Tauri's WKWebView
+// silently no-ops native window.prompt(). The function now returns a Promise
+// instead of being synchronous. Callers (button onclick handlers) don't await
+// it, which is fine — the side effects (template creation, picker refresh,
+// toast) happen via the await chain.
+async function cpTplNew(type) {
+    const promptFn = (typeof window.__msPrompt === 'function') ? window.__msPrompt : null;
+    let name;
+    if (promptFn) {
+        name = await promptFn(`Name for new ${type === 'po' ? 'PO' : type} template (e.g. Standard, Enterprise, Government):`, '');
+    } else {
+        // Browser-shell fallback (no Tauri runtime, no __msPrompt) — use native.
+        name = prompt(`Name for new ${type === 'po' ? 'PO' : type} template (e.g. Standard, Enterprise, Government):`, '');
+    }
     if (!name || !name.trim()) return;
     ensureTermsTemplatesInitialized();
     const newTpl = {
@@ -19520,10 +19532,26 @@ function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='', loc
     const row = document.createElement('div');
     row.className = 'ar-row with-local-file';
     row.style.marginBottom = '6px';
+    // 8AX — Compute signed-PDF pin for this invoice number. The pin only
+    // renders when a CRM invoice with this number has a signedPdfAttachmentId
+    // on file. Clicking opens the signed PDF in the user's default PDF viewer
+    // (Acrobat) via __msOpenSignedInvoicePdf — same affordance as the pin in
+    // Invoicing Lifecycle Details on the Subscription Portfolio tab.
+    //
+    // Note: this is computed at row-construction time. If the user edits the
+    // invoice # mid-modal, the pin doesn't reactively update; re-opening the
+    // modal will refresh it. Acceptable for this workflow — the pin's purpose
+    // is to surface the existing signed-PDF link, not provide live previews.
+    const signedPin = (typeof window.__msSignedInvoicePin === 'function' && invNo)
+        ? window.__msSignedInvoicePin(invNo)
+        : '';
     // Outer block stacks the main grid + the (initially hidden) local-file panel
     row.innerHTML = `
         <div class="ar-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 1.2fr 1.5fr auto auto; gap:10px; align-items:center;">
-            <input type="text" class="ar-no" placeholder="Invoice #" value="${invNo}" style="font-size:12px; padding:8px;">
+            <div style="display:flex; align-items:center; gap:4px;">
+                <input type="text" class="ar-no" placeholder="Invoice #" value="${invNo}" style="font-size:12px; padding:8px; flex:1; min-width:0;">
+                <span class="ar-signed-pin">${signedPin}</span>
+            </div>
             <input type="date" class="ar-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
             <input type="number" class="ar-amt" placeholder="Amt (INR)" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
             <input type="date" class="ar-paiddate" value="${paidDate}" style="font-size:12px; padding:8px;" title="Date Paid">
