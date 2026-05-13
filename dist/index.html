@@ -342,18 +342,51 @@
       }
 
       // Populate localStorage with loaded snapshot.
+      //
+      // 8AX-fix — Skip the attachments bucket. ms_attachments_v1 can be
+      // megabytes (base64-encoded signed PDFs), and WKWebView's localStorage
+      // is capped near 2–3MB. Pre-fix, when total payload exceeded the cap,
+      // the loop threw QuotaExceededError and the entire boot failed —
+      // user saw a "localStorage error" splash and couldn't reach the CRM.
+      //
+      // crm.html post-8AW reads attachments directly from SQLite via the
+      // storage_load_attachments command (the "Pass 2" refresh in
+      // initAttachments). So localStorage doesn't need them anymore.
+      //
+      // Per-key try/catch is belt-and-suspenders: if any OTHER bucket grows
+      // large enough to hit quota in the future, we log the failure and
+      // continue rather than blocking the entire boot. crm.html's 8AW
+      // interceptor handles the runtime case; this handles the boot case.
       $status.textContent = 'Populating local cache…';
-      try {
-        for (var k in result.data) {
-          if (Object.prototype.hasOwnProperty.call(result.data, k)) {
-            window.localStorage.setItem(k, result.data[k]);
-          }
+      var SKIP_BUCKETS_LS = { 'ms_attachments_v1': true };
+      // Note: any existing ms_attachments_v1 value in localStorage from a
+      // pre-fix session is left alone — crm.html's Pass 1 uses it as a fast
+      // warm cache for the UI to render against immediately, then Pass 2
+      // (storage_load_attachments) overrides with the canonical SQLite state.
+      // Wiping localStorage here would leave Pass 1 empty and produce a
+      // brief visual flash where signed-PDF pins disappear and re-appear
+      // on every boot. The stale value will simply stop growing.
+      var skippedDueToQuota = [];
+      var skippedByDesign = [];
+      for (var k in result.data) {
+        if (!Object.prototype.hasOwnProperty.call(result.data, k)) continue;
+        if (SKIP_BUCKETS_LS[k]) {
+          skippedByDesign.push(k);
+          continue;
         }
-      } catch (e) {
-        fail('localStorage error',
-          'Failed to write loaded data into localStorage.', String(e));
-        return;
+        try {
+          window.localStorage.setItem(k, result.data[k]);
+        } catch (e) {
+          // Don't fail the boot — log and move on. crm.html can fall back to
+          // a per-bucket Rust read if a specific bucket is missing.
+          skippedDueToQuota.push({ key: k, error: String(e && e.message || e) });
+          console.warn('[boot] localStorage write skipped for ' + k + ': ' + e);
+        }
       }
+      try {
+        window.localStorage.setItem('__ms_boot_skipped_buckets__',
+          JSON.stringify({ byDesign: skippedByDesign, byQuota: skippedDueToQuota, at: new Date().toISOString() }));
+      } catch (e) { /* even this can fail, but it's diagnostic only */ }
 
       window.localStorage.setItem('__ms_mac_app_mode__', '1');
       window.localStorage.setItem('__ms_db_path__', result.db_path || '');
