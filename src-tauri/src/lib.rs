@@ -955,6 +955,76 @@ fn storage_save_attachments(state: tauri::State<DbState>, payload: String) -> Sa
     }) { Ok(n) => SaveResult::ok(n), Err(e) => SaveResult::err(e) }
 }
 
+// ============================================================================
+// Phase 8AW — storage_load_attachments: lightweight read-only fetch.
+//
+// The attachments bucket can grow large (megabytes per signed-PDF upload, all
+// base64-encoded). Pre-8AW, the bucket was routed through localStorage like
+// every other bucket, but WKWebView's localStorage caps near 2–3MB and the
+// user started hitting QuotaExceededError on the 3rd signed-PDF upload.
+//
+// The fix is to take the attachments bucket out of localStorage entirely:
+//   - mid-session saves go to SQLite directly (saveAttachments calls the
+//     new __msScheduleBucketWriteDirect helper, bypassing the localStorage
+//     interceptor)
+//   - boot-time loads call THIS command directly into the in-memory map,
+//     skipping the localStorage hydration path for this bucket
+//
+// Other buckets are small (kilobytes) and stay on the localStorage path so
+// existing diagnostics (DB Sanity Check, etc.) keep working. Only attachments
+// take the direct-to-SQLite route.
+//
+// Returns the same flat-array shape that storage_load_all puts in
+// data['ms_attachments_v1'] — a JSON-encoded array string for parity, so the
+// frontend's existing regrouping logic can consume it unchanged.
+// ============================================================================
+
+#[derive(Serialize, Debug)]
+struct LoadAttachmentsResult {
+    ok: bool,
+    error: Option<String>,
+    payload: Option<String>,
+    record_count: usize,
+}
+
+#[tauri::command]
+fn storage_load_attachments() -> LoadAttachmentsResult {
+    let path = match db_path() {
+        Some(p) => p,
+        None => return LoadAttachmentsResult {
+            ok: false, error: Some("Database path unavailable".into()),
+            payload: None, record_count: 0,
+        },
+    };
+    if !path.exists() {
+        // No DB yet — return empty array, same as a fresh install.
+        return LoadAttachmentsResult {
+            ok: true, error: None,
+            payload: Some("[]".into()), record_count: 0,
+        };
+    }
+    let con = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return LoadAttachmentsResult {
+            ok: false, error: Some(format!("Open DB failed: {e}")),
+            payload: None, record_count: 0,
+        },
+    };
+    let attachments = match collect_array(&con, "SELECT raw_data FROM attachments ORDER BY uploaded_at, id") {
+        Ok(a) => a,
+        Err(e) => return LoadAttachmentsResult {
+            ok: false, error: Some(format!("Query failed: {e}")),
+            payload: None, record_count: 0,
+        },
+    };
+    let count = attachments.len();
+    let payload = serde_json::Value::Array(attachments).to_string();
+    LoadAttachmentsResult {
+        ok: true, error: None,
+        payload: Some(payload), record_count: count,
+    }
+}
+
 // 8YZ — Consultants master save. Schema: id (text PK), name, role, gst_registered
 // (0/1), pan_number, raw_data (full JSON blob), modified_at. CREATE TABLE IF NOT
 // EXISTS is the first statement so the table materializes on first write — no
@@ -2776,6 +2846,10 @@ pub fn run() {
             storage_save_commissions,
             storage_save_company_profile,
             storage_save_attachments,
+            // 8AW — direct attachments read (bypasses localStorage hydration
+            // for this bucket; see storage_load_attachments definition for
+            // rationale around the WKWebView quota issue)
+            storage_load_attachments,
             storage_save_setting,
             // 8YZ — Consultants module
             storage_save_consultants,

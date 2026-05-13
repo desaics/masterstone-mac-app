@@ -4995,9 +4995,28 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     var startupGraceUntil = Date.now() + 2000;
     var realSet = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-        // Always update the in-page localStorage first (sync) so reads see
-        // the new value immediately.
-        var ret = realSet.apply(this, arguments);
+        // 8AW — Resilience: localStorage on WKWebView caps near a few MB.
+        // If the synchronous write fails due to quota, we still want the
+        // SQLite write to fire — that's the durable store anyway. Pre-8AW,
+        // the throw would propagate and the SQLite write would never happen.
+        var ret;
+        var lsError = null;
+        try {
+            ret = realSet.apply(this, arguments);
+        } catch (e) {
+            lsError = e;
+            // Log the failure for visibility but don't propagate.
+            try {
+                if (window.__diag && typeof window.__diag.log === 'function') {
+                    window.__diag.log('CRITICAL', 'localStorage.setItem threw — continuing to SQLite write', {
+                        key: typeof key === 'string' ? key : String(key),
+                        errorName: e && e.name,
+                        errorMessage: e && e.message ? String(e.message) : String(e),
+                        valueLength: typeof value === 'string' ? value.length : 0
+                    });
+                }
+            } catch (logErr) { /* never let diag failures break the app */ }
+        }
         // Internal flags (start with __ms_) never touch SQLite.
         if (typeof key === 'string' && key.indexOf('__ms_') !== 0) {
             // Skip during startup grace window.
@@ -5008,7 +5027,33 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 }
             }
         }
+        // If localStorage failed, return undefined (same semantics as a real
+        // setItem throw being caught by caller). Callers that explicitly check
+        // for the throw will need to adapt — but no existing call site does.
         return ret;
+    };
+
+    // 8AW — Expose a helper that writes to SQLite ONLY, bypassing localStorage
+    // entirely. Used by saveAttachments because the attachments bucket can
+    // exceed WKWebView's localStorage quota and we don't want to depend on
+    // localStorage for that data path at all.
+    //
+    // The CRM's other buckets are small (kilobytes) and still use the
+    // localStorage interceptor route — that path is unchanged.
+    window.__msScheduleBucketWriteDirect = function (key, value) {
+        try {
+            return scheduleWrite(key, value);
+        } catch (e) {
+            try {
+                if (window.__diag && typeof window.__diag.log === 'function') {
+                    window.__diag.log('CRITICAL', '__msScheduleBucketWriteDirect threw', {
+                        key: key,
+                        errorMessage: e && e.message ? String(e.message) : String(e)
+                    });
+                }
+            } catch (_) {}
+            return false;
+        }
     };
 
     // Flush pending writes when the window is about to close. beforeunload
@@ -32193,19 +32238,7 @@ function initAttachments() {
         //   - array from localStorage = freshly hydrated by Rust, regroup
         //   - object from localStorage = legacy mid-session state, accept
         if (Array.isArray(parsed)) {
-            // Regroup flat array into the in-memory map shape
-            attachments = {};
-            parsed.forEach(function(rec) {
-                if (!rec || !rec.relatedEntityType || !rec.relatedEntityId) {
-                    // Record is missing the key info — skip it; can't be addressed
-                    try { if (window.__diag) window.__diag.log('ERROR', 'initAttachments: dropping record with no entity refs', { rec: rec }); } catch (e) {}
-                    return;
-                }
-                const key = `${rec.relatedEntityType}_${rec.relatedEntityId}`;
-                if (!attachments[key]) attachments[key] = [];
-                attachments[key].push(rec);
-            });
-            try { if (window.__diag) window.__diag.log('INFO', 'initAttachments: regrouped flat array into map', { records: parsed.length, keys: Object.keys(attachments).length }); } catch (e) {}
+            __ingestAttachmentsArray(parsed, 'localStorage');
         } else if (parsed && typeof parsed === 'object') {
             // Legacy object shape (mid-session save before 8AK)
             attachments = parsed;
@@ -32217,6 +32250,90 @@ function initAttachments() {
         console.warn("Attachments load failed:", e);
         try { if (window.__diag) window.__diag.log('ERROR', 'initAttachments: parse failed', { error: String(e && e.message) }); } catch (ie) {}
         attachments = {};
+    }
+    // 8AW — Pass 2: refresh from SQLite directly. The boot path (index.html)
+    // populates localStorage from SQLite via storage_load_all, but if
+    // localStorage hit quota during hydration (or in a prior session's
+    // mid-write), it may be missing records. SQLite is the durable source of
+    // truth. We fire this asynchronously so the UI can render with Pass 1
+    // data immediately; Pass 2 then overrides if it finds newer/more data.
+    //
+    // saveAttachments writes direct-to-SQLite (8AW), so going forward this is
+    // the canonical load path. localStorage's role for this bucket is now
+    // just an opportunistic warm cache from the boot shim.
+    setTimeout(function () { __refreshAttachmentsFromSQLite(); }, 0);
+}
+
+// 8AW — Helper: regroup a flat array of attachment records into the keyed
+// in-memory map (attachments[`${entityType}_${entityId}`] = [records]).
+// Pulled out so both Pass 1 (localStorage) and Pass 2 (SQLite) use the
+// same logic.
+function __ingestAttachmentsArray(parsed, source) {
+    attachments = {};
+    parsed.forEach(function(rec) {
+        if (!rec || !rec.relatedEntityType || !rec.relatedEntityId) {
+            try { if (window.__diag) window.__diag.log('ERROR', 'initAttachments: dropping record with no entity refs', { rec: rec, source: source }); } catch (e) {}
+            return;
+        }
+        const key = `${rec.relatedEntityType}_${rec.relatedEntityId}`;
+        if (!attachments[key]) attachments[key] = [];
+        attachments[key].push(rec);
+    });
+    try { if (window.__diag) window.__diag.log('INFO', `initAttachments: regrouped flat array (${source}) into map`, { records: parsed.length, keys: Object.keys(attachments).length }); } catch (e) {}
+}
+
+// 8AW — Async refresh: fetch attachments straight from SQLite, bypassing
+// localStorage entirely. This is the new canonical load path; localStorage
+// is just an opportunistic fast-start cache from the boot shim.
+//
+// Failures fall through silently — the in-memory map already has whatever
+// localStorage provided (Pass 1). We log to diag for visibility.
+async function __refreshAttachmentsFromSQLite() {
+    try {
+        var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!t || !t.invoke) {
+            try { if (window.__diag) window.__diag.log('INFO', 'attachments SQLite refresh: Tauri unavailable, keeping localStorage data'); } catch (e) {}
+            return;
+        }
+        var r = await t.invoke('storage_load_attachments');
+        if (!r || !r.ok) {
+            try { if (window.__diag) window.__diag.log('ERROR', 'attachments SQLite refresh failed', { error: r && r.error }); } catch (e) {}
+            return;
+        }
+        var payload = r.payload || '[]';
+        var arr;
+        try { arr = JSON.parse(payload); } catch (e) {
+            try { if (window.__diag) window.__diag.log('CRITICAL', 'attachments SQLite payload parse failed', { error: String(e && e.message) }); } catch (ie) {}
+            return;
+        }
+        if (!Array.isArray(arr)) {
+            try { if (window.__diag) window.__diag.log('ERROR', 'attachments SQLite payload not an array'); } catch (e) {}
+            return;
+        }
+        // Count what was in pass 1 vs SQLite to surface any mismatch.
+        var pass1Count = 0;
+        Object.keys(attachments).forEach(function(k) { pass1Count += (attachments[k] || []).length; });
+        __ingestAttachmentsArray(arr, 'SQLite');
+        try {
+            if (window.__diag) window.__diag.log('INFO', 'attachments SQLite refresh complete', {
+                sqliteRecords: arr.length,
+                pass1Records: pass1Count,
+                deltaFromPass1: arr.length - pass1Count
+            });
+        } catch (e) {}
+        // If any UI was rendered between pass 1 and pass 2 and depends on
+        // the attachments count being correct, re-render here. The lists
+        // we know touch attachments:
+        //   - the Invoices list (signed-PDF pin)
+        //   - the Subscription Portfolio (signed-PDF pin in lifecycle table)
+        //   - the Consultants register
+        // These all read from `attachments` lazily on render, so a tab switch
+        // or a manual refresh picks up the new data. We don't force a global
+        // re-render — that would be a heavy operation for a boot-time delta
+        // that's usually zero. The diag delta number above tells us if it's
+        // worth tightening.
+    } catch (e) {
+        try { if (window.__diag) window.__diag.log('CRITICAL', 'attachments SQLite refresh threw', { error: String(e && e.message) }); } catch (ie) {}
     }
 }
 
@@ -32270,26 +32387,50 @@ function saveAttachments() {
         // 8AK — Serialize as a flat array (Rust expects this shape).
         const flat = flattenAttachmentsForSave();
         const payload = JSON.stringify(flat);
-        // 8AH — Diagnostic: log payload size before write
-        diag('INFO', `saveAttachments writing to localStorage`, {
+        // 8AW — Bypass localStorage for the attachments bucket. WKWebView
+        // limits localStorage to ~2-3MB; signed-PDF base64 payloads exceed
+        // that quickly. Attachments now persist via direct-to-SQLite scheduling
+        // and are read at boot via storage_load_attachments (not localStorage).
+        // The 8AH diag log is preserved for visibility.
+        diag('INFO', `saveAttachments writing direct to SQLite`, {
             entityKeyCount: Object.keys(attachments).length,
             recordCount: flat.length,
             payloadLength: payload.length,
             payloadSizeMB: (payload.length / 1024 / 1024).toFixed(2),
-            shape: 'flat array (8AK)'
+            shape: 'flat array (8AK)',
+            route: 'SQLite-direct (8AW)'
         });
-        localStorage.setItem(ATTACHMENTS_KEY, payload);
-        diag('INFO', 'saveAttachments: localStorage.setItem succeeded');
-        return true;
+        if (typeof window.__msScheduleBucketWriteDirect === 'function') {
+            const ok = window.__msScheduleBucketWriteDirect(ATTACHMENTS_KEY, payload);
+            if (ok === false) {
+                diag('CRITICAL', 'saveAttachments: SQLite-direct scheduling failed', {});
+                alert('Unable to save attachment. The save was rejected. Please check the diagnostic log.');
+                return false;
+            }
+            diag('INFO', 'saveAttachments: SQLite-direct scheduled');
+            return true;
+        }
+        // Fallback for browser-shell mode (no Tauri runtime). In that case
+        // localStorage IS the only persistence — keep legacy path so dev work
+        // outside the Mac app still works.
+        try {
+            localStorage.setItem(ATTACHMENTS_KEY, payload);
+            diag('INFO', 'saveAttachments: legacy localStorage fallback succeeded');
+            return true;
+        } catch (e) {
+            diag('CRITICAL', 'saveAttachments: localStorage fallback threw', {
+                errorName: e && e.name,
+                errorMessage: e && e.message ? String(e.message) : String(e)
+            });
+            alert("Unable to save attachment. Browser storage is full.");
+            return false;
+        }
     } catch (e) {
-        // 8AH — Capture detailed error for diagnostic
-        diag('CRITICAL', 'saveAttachments: localStorage write threw', {
-            errorName: e && e.name,
-            errorMessage: e && e.message ? String(e.message) : String(e),
-            attachmentKeyCount: Object.keys(attachments).length
+        diag('CRITICAL', 'saveAttachments: unexpected error', {
+            errorMessage: e && e.message ? String(e.message) : String(e)
         });
         console.error("Attachments save failed:", e);
-        alert("Unable to save attachment. Browser storage is full. Please delete older attachments via System Controls → Attachments Storage → Manage All Attachments.");
+        alert("Unable to save attachment. Please check the diagnostic log.");
         return false;
     }
 }
