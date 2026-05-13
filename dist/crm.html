@@ -23538,9 +23538,13 @@ function syncProposalToProspect(proposal, isNewProposal) {
         const totals = (typeof computeProposalTotals === 'function') ? computeProposalTotals(proposal.lineItems, gst.mode) : { subtotal: 0, grandTotal: 0 };
         const acvInr = totals.subtotal || 0;
 
-        // Target stage based on proposal status (Draft/Sent both → Proposal Sent)
+        // Target stage based on proposal status — only Sent proposals advance the
+        // prospect to "Proposal Sent". A Draft proposal hasn't been handed to the
+        // client yet, so the customer-facing pipeline shouldn't move forward.
+        // (Phase 8AZ bug fix — was previously Draft|Sent, which caused prospects
+        // to show "Proposal Sent" while the proposal itself was still Draft.)
         let targetStage = null;
-        if (proposal.status === 'Draft' || proposal.status === 'Sent') targetStage = 'Proposal Sent';
+        if (proposal.status === 'Sent') targetStage = 'Proposal Sent';
         // Accepted/Rejected/etc. are handled by the explicit mark* functions
 
         // ===== Resolve/create the prospect =====
@@ -23580,7 +23584,12 @@ function syncProposalToProspect(proposal, isNewProposal) {
             // Derive OEMs from line items
             const oemsFromProposal = [...new Set((proposal.lineItems || []).map(li => li.oem).filter(Boolean))];
             if (oemsFromProposal.length > 0) prospect.oems = oemsFromProposal;
-            prospect.stage = targetStage || 'Proposal Sent';
+            // Phase 8AZ — fallback stage for auto-created prospects is now
+            // 'Qualified', not 'Proposal Sent'. If the proposal is Sent,
+            // targetStage will already be 'Proposal Sent'; if Draft (or any
+            // other status), Qualified is the right floor (you wouldn't draft
+            // a proposal for an unqualified lead).
+            prospect.stage = targetStage || 'Qualified';
             prospect.stageHistory = [{ stage: prospect.stage, changedAt: now, reason: 'Auto-created from Proposal ' + (proposal.proposalNumber || '') }];
             prospect.proposalIds = [proposal.id];
             prospect.activities = [{
