@@ -52,8 +52,55 @@ jobs:
       - name: Generate app icons from source PNG
         run: npx tauri icon ./app-icon.png
 
+      # Phase 8BB.1a-CI-v2 — surface PATH, cargo lookup, and Tauri CLI version
+      # IMMEDIATELY before the build step that fails. Step 5 (Verify Rust install)
+      # showed cargo works in a plain shell; step 9 (Build Tauri) fails with
+      # cargo-actually-being-rustup-init. This step prints the exact state of
+      # the environment at the failure point so we can identify whether:
+      #   - some other cargo binary is shadowing $HOME/.cargo/bin/cargo on PATH
+      #   - the installed Tauri CLI is a regressed version
+      #   - rustup default toolchain isn't set
+      # Always continues (|| true on the optional probes) so this step itself
+      # never fails the build — it's purely diagnostic.
+      - name: Pre-build diagnostics
+        run: |
+          echo "=== PATH (one per line) ==="
+          echo "$PATH" | tr ':' '\n'
+          echo ""
+          echo "=== which cargo ==="
+          which cargo || echo "(cargo not on PATH)"
+          echo ""
+          echo "=== ls -l \$(which cargo) ==="
+          ls -l "$(which cargo)" 2>/dev/null || echo "(cargo not found to ls)"
+          echo ""
+          echo "=== cargo --version ==="
+          cargo --version || echo "(cargo --version failed)"
+          echo ""
+          echo "=== rustup default ==="
+          rustup default || echo "(no default toolchain set)"
+          echo ""
+          echo "=== \$HOME/.cargo/bin/cargo --version ==="
+          "$HOME/.cargo/bin/cargo" --version || echo "(\$HOME/.cargo/bin/cargo not present)"
+          echo ""
+          echo "=== Tauri CLI version ==="
+          npx tauri --version || true
+          echo ""
+          echo "=== CARGO_HOME / RUSTUP_HOME / RUSTUP_TOOLCHAIN ==="
+          echo "CARGO_HOME=${CARGO_HOME:-(unset)}"
+          echo "RUSTUP_HOME=${RUSTUP_HOME:-(unset)}"
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-(unset)}"
+
+      # Phase 8BB.1a-CI-v2 — explicitly prepend $HOME/.cargo/bin to PATH for
+      # this step. The dtolnay/rust-toolchain action adds it to GITHUB_PATH,
+      # but evidence from the previous failed run shows that when Tauri build
+      # internally invokes `cargo metadata` as a subprocess, that subprocess
+      # finds a different cargo binary (effectively rustup-init from the
+      # macOS runner's pre-installed Homebrew layout). This export forces
+      # the right cargo to win the PATH race for this step's process tree.
       - name: Build Tauri universal macOS binary
-        run: npx tauri build --target universal-apple-darwin
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          npx tauri build --target universal-apple-darwin
 
       - name: Upload .app bundle
         uses: actions/upload-artifact@v4
