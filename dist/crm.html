@@ -12790,6 +12790,61 @@ function getOemDisplayHtml(fullName) {
     return `<span title="${pEsc(fullName)}">${pEsc(display)}</span>`;
 }
 
+// Phase 8BB.1a — Free-text product-description display transformation.
+// Many places store the OEM canonical name baked into a product/subject
+// string (e.g. "Darktrace Holdings Limited (DT Email)"). This helper scans
+// the string for any known canonical OEM name (from oemMetadata) and
+// substitutes the OEM's shortName at display time only — the stored string
+// is never mutated, so PDFs always print the canonical name.
+//
+// Matching rules:
+//  - Only substitutes when a shortName is set AND differs from the canonical
+//  - Word-boundary aware: "Darktrace" inside "Darktracer" will NOT match
+//    (matches must be preceded by start-of-string or a non-alphanumeric
+//    character, AND followed by a non-alphanumeric character or end)
+//  - Longest-canonical-first: if one OEM canonical is a prefix of another
+//    ("Acme" vs "Acme Holdings"), the longer one is tried first so we don't
+//    partially replace
+//  - Case-sensitive: deliberate — keeps the transformation predictable and
+//    avoids accidental matches on similar-looking but unrelated text
+function formatProductForDisplay(productStr) {
+    if (!productStr || typeof productStr !== 'string') return productStr || '';
+    try {
+        if (typeof oemMetadata !== 'object' || !oemMetadata) return productStr;
+        const aliases = [];
+        for (const oemKey in oemMetadata) {
+            if (!Object.prototype.hasOwnProperty.call(oemMetadata, oemKey)) continue;
+            const meta = oemMetadata[oemKey];
+            if (!meta || !meta.shortName) continue;
+            const sn = String(meta.shortName).trim();
+            if (!sn || sn === oemKey) continue;
+            aliases.push({ canonical: oemKey, short: sn });
+        }
+        if (aliases.length === 0) return productStr;
+        // Longest canonical first
+        aliases.sort((a, b) => b.canonical.length - a.canonical.length);
+        let out = productStr;
+        for (let i = 0; i < aliases.length; i++) {
+            const escaped = aliases[i].canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // (^|[^A-Za-z0-9]) captures the leading boundary; (?![A-Za-z0-9])
+            // is a negative lookahead at the trailing edge. We preserve the
+            // leading char via $1 in the replacement.
+            const re = new RegExp('(^|[^A-Za-z0-9])' + escaped + '(?![A-Za-z0-9])', 'g');
+            out = out.replace(re, '$1' + aliases[i].short);
+        }
+        return out;
+    } catch (_) { return productStr; }
+}
+
+// HTML helper: returns the display string wrapped in a span with the original
+// as a hover tooltip when the two differ. Plain pEsc'd text when they don't.
+function getProductDisplayHtml(productStr) {
+    if (!productStr) return '';
+    const display = formatProductForDisplay(productStr);
+    if (display === productStr) return pEsc(productStr);
+    return `<span title="${pEsc(productStr)}">${pEsc(display)}</span>`;
+}
+
 // Build a default client record skeleton
 /* ======================================================================
    TERMS TEMPLATE LIBRARY (Phase 3 addendum — T-2)
@@ -18914,7 +18969,7 @@ function renderContracts() {
 
                                 <div class="expanded-block">
                                     <h5>Scope &amp; Assets</h5>
-                                    <div class="info-row"><span class="info-label">Product</span><span class="info-val">${pEsc(c.product || '-')}</span></div>
+                                    <div class="info-row"><span class="info-label">Product</span><span class="info-val">${c.product ? getProductDisplayHtml(c.product) : '-'}</span></div>
                                     <div class="info-row"><span class="info-label">Licenses</span><span class="info-val">${c.licenses || '-'}</span></div>
                                     <div class="info-row" style="align-items:flex-start;"><span class="info-label">Hardware</span><span class="info-val">${pEsc(c.hardware || '-')}</span></div>
                                 </div>
@@ -19896,7 +19951,7 @@ function renderOemInvoicesExpected() {
             : '';
         return `<tr>
             <td><strong>${formatDateReadable(r.expectedDate)}</strong></td>
-            <td><strong>${pEsc(r.oemName)}</strong><div style="font-size:11px; color:var(--text-dim);">${pEsc(r.product)} · ${getClientDisplayHtml(r.client)}</div>${poBadge}</td>
+            <td><strong>${getOemDisplayHtml(r.oemName)}</strong><div style="font-size:11px; color:var(--text-dim);">${getProductDisplayHtml(r.product)} · ${getClientDisplayHtml(r.client)}</div>${poBadge}</td>
             <td>Cycle ${r.cycle}</td>
             <td style="text-align:right; font-weight:600;">${amtLabel}</td>
             <td>${urgency}</td>
@@ -26562,7 +26617,7 @@ function renderPOsListView(filtered) {
         return `<tr class="clickable-row" onclick="openPODetail('${po.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(_resolvedPo.localPath, true)}</td>
             <td style="font-weight:600;" title="${pEsc(po.oem || '')}">${pEsc(po.oem ? getOemDisplayName(po.oem) : '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
-            <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(po.subject || '')}</td>
+            <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(formatProductForDisplay(po.subject || ''))}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
             <td style="text-align:right; font-weight:700;">${fmtPoCcy(totals.grandTotal, po.currency)}</td>
             <td style="color:var(--text-dim);">${pEsc(po.currency)}</td>
@@ -29094,7 +29149,7 @@ function renderInvoicesListView(filtered) {
         return `<tr class="clickable-row" onclick="openInvoiceDetail('${inv.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(inv.invoiceNumber || '—')}${signedIcon}</td>
             <td style="font-weight:600;">${pEsc(inv.clientName || '—')}${resalePill}</td>
-            <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(inv.subject || '')}">${pEsc(inv.subject || '')}</td>
+            <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(inv.subject || '')}">${pEsc(formatProductForDisplay(inv.subject || ''))}</td>
             <td><span class="stage-badge inv-status-${statusSlug}">${pEsc(inv.status)}</span></td>
             <td style="text-align:right; font-weight:700; font-variant-numeric: tabular-nums;">${fmtInr(inv.grandTotal)}</td>
             <td style="text-align:right; font-variant-numeric: tabular-nums; color:${inv.amountOutstanding > 0 ? 'var(--warning)' : 'var(--text-dim)'};">${fmtInr(inv.amountOutstanding)}</td>
@@ -32316,7 +32371,7 @@ function renderRenewalList(candidates) {
             <div class="ren-row-top">
                 <div>
                     <div class="ren-row-client">${pEsc(c.client || '—')}</div>
-                    <div class="ren-row-product">${pEsc(c.product || '—')}</div>
+                    <div class="ren-row-product">${c.product ? getProductDisplayHtml(c.product) : '—'}</div>
                 </div>
                 <div class="ren-row-expiry">
                     <strong>${c.endDate ? formatDateReadable(c.endDate) : '—'}</strong>
@@ -32732,7 +32787,7 @@ function renderDashboardRenewals() {
         else daysLabel = `<span class="badge pending">${days}d left</span>`;
         return `<tr>
             <td><strong>${formatDateReadable(c.endDate)}</strong></td>
-            <td><strong>${getClientDisplayHtml(c.client)}</strong><div style="font-size:11px; color:var(--text-dim);">${pEsc(c.product)}</div></td>
+            <td><strong>${getClientDisplayHtml(c.client)}</strong><div style="font-size:11px; color:var(--text-dim);">${getProductDisplayHtml(c.product)}</div></td>
             <td style="text-align:right; font-weight:600;">${fmtMoneyShort(val)}</td>
             <td>${daysLabel}</td>
             <td>${renderRenewalMilestoneStrip(c, i)}</td>
@@ -40115,7 +40170,7 @@ function renderARApPage() {
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
                 ? `${getClientDisplayHtml(r.client)}<div style="font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; font-style:italic;">via ${pEsc(r.sourcedViaResellerKey)}</div>`
                 : getClientDisplayHtml(r.client);
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${pEsc(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${getProductDisplayHtml(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         arRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
@@ -40257,7 +40312,7 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${pEsc(r.product)}</div></td><td>${pEsc(r.oem || '—')}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${r.oem ? getOemDisplayHtml(r.oem) : '—'}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
