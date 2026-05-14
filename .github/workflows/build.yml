@@ -11,7 +11,14 @@ on:
 jobs:
   build-macos:
     name: Build universal .app + .dmg
-    runs-on: macos-latest
+    # Phase 8BB.1a hotfix — pinned to macos-15 (was: macos-latest).
+    # The `macos-latest` label silently migrates to new runner images
+    # which can break the Rust toolchain setup without warning. Phase 8BB.1
+    # built successfully on May 13 against the macos-15 image. After that
+    # date macos-latest rolled to a newer image where `cargo` was
+    # effectively rustup-init, causing 'cargo metadata' to fail. Pinning
+    # to macos-15 restores the known-good build environment.
+    runs-on: macos-15
 
     steps:
       - name: Check out repo
@@ -26,6 +33,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # Phase 8BB.1a hotfix — surface cargo/rustc availability immediately.
+      # If a future runner-image change ever breaks the Rust setup again,
+      # this step fails clearly here instead of letting the error bury
+      # itself inside `npx tauri build` output many lines later.
+      - name: Verify Rust install
+        run: cargo --version && rustc --version
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
