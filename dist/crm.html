@@ -39691,12 +39691,15 @@ function _caExportComputeRange(monthStr, scope) {
 }
 
 // Derive BUSINESS HEAD for a given contract.
-// Order of precedence: contract.businessHead (override) → contract.oem (uppercased)
-// → 'SERVICE' (fallback for contracts with no OEM at all).
+// Order of precedence: contract.businessHead (override) → effective OEM (uppercased,
+// where effective OEM = c.oem or inferred from c.product) → 'SERVICE' (fallback).
+// 8BC.2 — uses _caExportEffectiveOem so contracts with c.oem empty but
+// c.product containing the OEM name still resolve to the right head.
 function _caExportBusinessHeadForContract(c) {
     if (!c) return 'SERVICE';
     if (c.businessHead && String(c.businessHead).trim()) return String(c.businessHead).trim().toUpperCase();
-    if (c.oem && String(c.oem).trim()) return String(c.oem).trim().toUpperCase();
+    const eff = _caExportEffectiveOem(c);
+    if (eff) return eff.toUpperCase();
     return 'SERVICE';
 }
 
@@ -39709,6 +39712,55 @@ function _caExportBusinessHeadForConsultant(con) {
     if (cat === 'Content') return 'CONTENT';
     if (cat === 'Service Vendor') return 'SERVICE';
     return 'SERVICE'; // Consultant default
+}
+
+// 8BC.2 — Fallback OEM inference. When a contract has c.oem empty (which
+// happens on some legacy/service-style contracts), try to infer the OEM by
+// scanning c.product for any known OEM name. Matches against BOTH the
+// canonical name AND the shortName from oemMetadata (because product strings
+// almost always contain the short name, not the full canonical — e.g.
+// product "Darktrace (DT Email)" should match the OEM whose shortName is
+// "Darktrace" and canonical "Darktrace Holdings Limited"). Longest needle
+// wins (so "Darktrace Holdings Limited" wins over "Darktrace" when both
+// appear in the product string).
+// Returns canonical OEM name or '' if no match.
+function _caExportInferOemFromProduct(productStr) {
+    if (!productStr) return '';
+    if (typeof oemMetadata !== 'object' || !oemMetadata) return '';
+    // Build a flat list of {needle, canonical} pairs covering both forms.
+    const needles = [];
+    for (const oemKey in oemMetadata) {
+        if (!oemKey || !oemKey.trim()) continue;
+        needles.push({ needle: oemKey.trim().toLowerCase(), canonical: oemKey });
+        const meta = oemMetadata[oemKey];
+        if (meta && meta.shortName && String(meta.shortName).trim()) {
+            const sn = String(meta.shortName).trim().toLowerCase();
+            if (sn !== oemKey.trim().toLowerCase()) {
+                needles.push({ needle: sn, canonical: oemKey });
+            }
+        }
+    }
+    if (needles.length === 0) return '';
+    // Longest needle first (so "Darktrace Holdings Limited" wins over "Darktrace"
+    // if both happen to appear in the same product string).
+    needles.sort((a, b) => b.needle.length - a.needle.length);
+    const haystack = String(productStr).toLowerCase();
+    for (const n of needles) {
+        if (!n.needle) continue;
+        if (haystack.includes(n.needle)) return n.canonical;
+    }
+    return '';
+}
+
+// 8BC.2 — Returns the contract's effective OEM. Prefers c.oem (the canonical
+// stored field) but falls back to substring-inference from c.product when
+// c.oem is empty. Used throughout the CA export so PARTY/BUSINESS HEAD and
+// OEM metadata lookups survive contracts where the user typed everything
+// into c.product without setting c.oem.
+function _caExportEffectiveOem(c) {
+    if (!c) return '';
+    if (c.oem && String(c.oem).trim()) return String(c.oem).trim();
+    return _caExportInferOemFromProduct(c.product || '');
 }
 
 // Resolve client master record from a client name string.
@@ -39821,7 +39873,10 @@ function _caExportOemPhone(oemName) {
 // Returns { usdValue, fxRate, inrValue, igst, cgst, sgst, isUSDcontract, isForeignOem }.
 function _caExportComputeApAmounts(c, y, yIdx, ap) {
     const isUSDcontract = ((c && c.costCurrency) || 'USD') !== 'INR';
-    const isForeignOem = (typeof isOemForeign === 'function') ? !!isOemForeign(c && c.oem) : false;
+    // 8BC.2 — Use effective OEM so foreign detection works even when c.oem
+    // is empty but the OEM identity is recoverable from c.product.
+    const effOem = _caExportEffectiveOem(c);
+    const isForeignOem = (typeof isOemForeign === 'function') ? !!isOemForeign(effOem) : false;
     const rawAmt = parseFloat(ap.amount) || 0;
 
     let fxRate = 1.0;
@@ -40212,10 +40267,13 @@ async function generateCaExport() {
                 if (!c || !Array.isArray(c.billingYears)) return;
                 const businessHead = _caExportBusinessHeadForContract(c);
                 // 8BC.1 — Pull OEM vendor metadata once per contract.
-                const oemPhone = _caExportOemPhone(c.oem);
-                const oemAddr = _caExportOemAddressString(c.oem);
-                const oemPan = _caExportOemPan(c.oem);
-                const oemTaxId = _caExportOemTaxId(c.oem);
+                // 8BC.2 — Use effective OEM (c.oem if set, else inferred from c.product)
+                // so PARTY and metadata resolve on contracts where c.oem is empty.
+                const effOem = _caExportEffectiveOem(c);
+                const oemPhone = _caExportOemPhone(effOem);
+                const oemAddr = _caExportOemAddressString(effOem);
+                const oemPan = _caExportOemPan(effOem);
+                const oemTaxId = _caExportOemTaxId(effOem);
                 c.billingYears.forEach((y, yIdx) => {
                     if (!y || !Array.isArray(y.apInvoices)) return;
                     y.apInvoices.forEach(ap => {
@@ -40232,7 +40290,7 @@ async function generateCaExport() {
                             'BUSINESS HEAD': businessHead,
                             'INVOICE BOOKING DATE': _caExportToDate(ap.bookingDate || ap.date),
                             'INVOICE DATE': _caExportToDate(ap.date),
-                            'PARTY': c.oem || '',
+                            'PARTY': effOem,
                             'PHONE NUMBER': oemPhone,
                             'ADDRESS': oemAddr,
                             'PAN': oemPan,
