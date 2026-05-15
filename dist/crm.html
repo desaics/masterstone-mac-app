@@ -39712,17 +39712,149 @@ function _caExportBusinessHeadForConsultant(con) {
 }
 
 // Resolve client master record from a client name string.
+// 8BC.1 hotfix — v1 incorrectly used a non-existent `clients` variable.
+// The real Client Master is `clientMaster` (an object keyed by `cmKey(name)`).
 function _caExportFindClient(clientName) {
-    if (!clientName || typeof clientName !== 'object' && typeof clients === 'undefined') return null;
-    if (typeof clients !== 'object' || !clients) return null;
-    // clients is an object keyed by client name (canonical). Look up directly.
-    if (clients[clientName]) return clients[clientName];
-    // Fallback: case-insensitive match
+    if (!clientName) return null;
+    if (typeof clientMaster !== 'object' || !clientMaster) return null;
+    const key = (typeof cmKey === 'function') ? cmKey(clientName) : String(clientName).trim();
+    if (clientMaster[key]) return clientMaster[key];
+    // Case-insensitive fallback
     const want = String(clientName).trim().toLowerCase();
-    for (const k in clients) {
-        if (String(k).trim().toLowerCase() === want) return clients[k];
+    for (const k in clientMaster) {
+        if (String(k).trim().toLowerCase() === want) return clientMaster[k];
     }
     return null;
+}
+
+// 8BC.1 hotfix — pick the most useful GSTIN from a Client Master record.
+// Multi-entry: prefer gstEntries[].isPrimary, else first non-empty entry.
+// Legacy: fall back to single `gstin` field.
+function _caExportClientGstin(client) {
+    if (!client) return '';
+    if (Array.isArray(client.gstEntries) && client.gstEntries.length > 0) {
+        const primary = client.gstEntries.find(e => e && e.isPrimary && e.gstin);
+        if (primary) return primary.gstin;
+        const firstWithGstin = client.gstEntries.find(e => e && e.gstin);
+        if (firstWithGstin) return firstWithGstin.gstin;
+    }
+    return client.gstin || '';
+}
+
+// 8BC.1 hotfix — pick the primary billing/shipping address from a Client Master record.
+// Multi-entry: prefer isPrimary, else first non-empty. Legacy: fall back to single field.
+function _caExportClientBillingAddr(client) {
+    if (!client) return '';
+    if (Array.isArray(client.billingAddresses) && client.billingAddresses.length > 0) {
+        const primary = client.billingAddresses.find(e => e && e.isPrimary && e.address);
+        if (primary) return primary.address;
+        const firstWithAddr = client.billingAddresses.find(e => e && e.address);
+        if (firstWithAddr) return firstWithAddr.address;
+    }
+    return client.billAddr || '';
+}
+
+function _caExportClientShippingAddr(client) {
+    if (!client) return '';
+    if (Array.isArray(client.shippingAddresses) && client.shippingAddresses.length > 0) {
+        const primary = client.shippingAddresses.find(e => e && e.isPrimary && e.address);
+        if (primary) return primary.address;
+        const firstWithAddr = client.shippingAddresses.find(e => e && e.address);
+        if (firstWithAddr) return firstWithAddr.address;
+    }
+    return client.shipAddr || _caExportClientBillingAddr(client);
+}
+
+// 8BC.1 hotfix — compose a vendor (OEM) address string from oemMetadata fields.
+// Handles both domestic (Indian pincode) and foreign (postalCode + foreignState + country) layouts.
+function _caExportOemAddressString(oemName) {
+    if (!oemName) return '';
+    if (typeof oemMetadata !== 'object' || !oemMetadata) return '';
+    const meta = oemMetadata[oemName];
+    if (!meta) return '';
+    // Prefer the structured composite; fall back to the legacy single textarea.
+    const parts = [];
+    if (meta.addressLine1) parts.push(meta.addressLine1);
+    if (meta.addressLine2) parts.push(meta.addressLine2);
+    if (meta.city) parts.push(meta.city);
+    if (meta.origin === 'foreign') {
+        if (meta.foreignState) parts.push(meta.foreignState);
+        if (meta.postalCode) parts.push(meta.postalCode);
+        if (meta.country) parts.push(meta.country);
+    } else {
+        if (meta.pincode) parts.push(meta.pincode);
+    }
+    const composed = parts.filter(Boolean).join(', ');
+    return composed || meta.address || '';
+}
+
+// 8BC.1 hotfix — pick the most useful tax identifier for a vendor (OEM).
+// Domestic → GSTIN. Foreign → VAT number.
+function _caExportOemTaxId(oemName) {
+    if (!oemName || typeof oemMetadata !== 'object' || !oemMetadata) return '';
+    const meta = oemMetadata[oemName];
+    if (!meta) return '';
+    if (meta.origin === 'foreign') return meta.vatNumber || '';
+    return meta.gstin || '';
+}
+
+// 8BC.1 hotfix — vendor PAN (domestic) or Company Reg No (foreign).
+function _caExportOemPan(oemName) {
+    if (!oemName || typeof oemMetadata !== 'object' || !oemMetadata) return '';
+    const meta = oemMetadata[oemName];
+    if (!meta) return '';
+    if (meta.origin === 'foreign') return meta.companyRegNo || '';
+    return meta.pan || '';
+}
+
+// 8BC.1 hotfix — vendor contact phone.
+function _caExportOemPhone(oemName) {
+    if (!oemName || typeof oemMetadata !== 'object' || !oemMetadata) return '';
+    const meta = oemMetadata[oemName];
+    if (!meta) return '';
+    return meta.contactPhone || '';
+}
+
+// 8BC.1 hotfix — compute INR/USD values + GST for a single AP invoice row.
+// Authoritative FX resolution: ap.fx if set on the record, else getEffectiveFX()
+// from the cycle (same logic the rest of the CRM uses for AP records).
+// Returns { usdValue, fxRate, inrValue, igst, cgst, sgst, isUSDcontract, isForeignOem }.
+function _caExportComputeApAmounts(c, y, yIdx, ap) {
+    const isUSDcontract = ((c && c.costCurrency) || 'USD') !== 'INR';
+    const isForeignOem = (typeof isOemForeign === 'function') ? !!isOemForeign(c && c.oem) : false;
+    const rawAmt = parseFloat(ap.amount) || 0;
+
+    let fxRate = 1.0;
+    if (isUSDcontract) {
+        // ap.fx (per-invoice override) wins; else cycle effective FX
+        const apFx = parseFloat(ap.fx);
+        if (apFx && apFx > 0) {
+            fxRate = apFx;
+        } else if (typeof getEffectiveFX === 'function') {
+            fxRate = getEffectiveFX(c, y, yIdx) || (c.baseFX || 83.5);
+        } else {
+            fxRate = c.baseFX || 83.5;
+        }
+    }
+
+    const usdValue = isUSDcontract ? rawAmt : 0;
+    const inrValue = isUSDcontract
+        ? Math.round(rawAmt * fxRate * 100) / 100
+        : rawAmt;
+
+    // GST — foreign OEM gets RCM IGST @ 18% of INR-converted value.
+    // Domestic vendor uses whatever was captured on the record (or zero).
+    let igst, cgst, sgst;
+    if (isForeignOem) {
+        igst = Math.round(inrValue * 0.18 * 100) / 100;
+        cgst = 0;
+        sgst = 0;
+    } else {
+        igst = parseFloat(ap.igst) || 0;
+        cgst = parseFloat(ap.cgst) || 0;
+        sgst = parseFloat(ap.sgst) || 0;
+    }
+    return { usdValue, fxRate, inrValue, igst, cgst, sgst, isUSDcontract, isForeignOem };
 }
 
 // Cross-reference: for a Path B invoice, find the matching Path A arInvoice
@@ -39789,10 +39921,10 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                 'INVOICE DATE': _caExportToDate(inv.invoiceDate),
                 'CLIENT NAME': inv.clientName || '',
                 'PHONE NUMBER': client ? (client.contactPhone || '') : '',
-                'KYC ADDRESS': client ? (client.billAddr || '') : '',
-                'DELIVERY ADDRESS': client ? (client.shipAddr || client.billAddr || '') : '',
+                'KYC ADDRESS': _caExportClientBillingAddr(client),
+                'DELIVERY ADDRESS': _caExportClientShippingAddr(client),
                 'PAN': client ? (client.pan || '') : '',
-                'GST': client ? (client.gstin || '') : '',
+                'GST': _caExportClientGstin(client),
                 'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
                 'INVOICE NO.': inv.invoiceNumber || '',
                 'ITEMS': items,
@@ -39826,11 +39958,15 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
 
     // ---- Pass 2: cycle-attached AR invoices (Path A) for any not already covered ----
     if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
-        contracts.forEach((c) => {
+        contracts.forEach((c, cIdx) => {
             if (!c || !Array.isArray(c.billingYears)) return;
             const businessHead = _caExportBusinessHeadForContract(c);
             const client = _caExportFindClient(c.client);
-            c.billingYears.forEach((y) => {
+            // 8BC.1 — Sales-side currency handling. Almost always INR for clients
+            // but support USD-billed clients for completeness (handled the same way
+            // as AP side — costCurrency from contract, FX via getEffectiveFX).
+            const isUSDcontract = ((c && c.costCurrency) || 'USD') !== 'INR';
+            c.billingYears.forEach((y, yIdx) => {
                 if (!y || !Array.isArray(y.arInvoices)) return;
                 y.arInvoices.forEach(ar => {
                     if (!ar || !ar.invNo) return;
@@ -39838,31 +39974,43 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                     const dateStr = ar.date || '';
                     if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
 
+                    // FX resolution mirrors AP side
+                    const rawAmt = parseFloat(ar.amount) || 0;
+                    let fxRate = 1.0;
+                    if (isUSDcontract) {
+                        const apFx = parseFloat(ar.fx);
+                        if (apFx && apFx > 0) fxRate = apFx;
+                        else if (typeof getEffectiveFX === 'function') fxRate = getEffectiveFX(c, y, yIdx) || (c.baseFX || 83.5);
+                        else fxRate = c.baseFX || 83.5;
+                    }
+                    const usdValue = isUSDcontract ? rawAmt : 0;
+                    const inrValue = isUSDcontract ? Math.round(rawAmt * fxRate * 100) / 100 : rawAmt;
+
                     const row = {
                         'SR. NO': rows.length + 1,
                         'BUSINESS HEAD': businessHead,
                         'INVOICE DATE': _caExportToDate(ar.date),
                         'CLIENT NAME': c.client || '',
                         'PHONE NUMBER': client ? (client.contactPhone || '') : '',
-                        'KYC ADDRESS': client ? (client.billAddr || '') : '',
-                        'DELIVERY ADDRESS': client ? (client.shipAddr || client.billAddr || '') : '',
+                        'KYC ADDRESS': _caExportClientBillingAddr(client) || (c.billAddr || ''),
+                        'DELIVERY ADDRESS': _caExportClientShippingAddr(client) || (c.shipAddr || c.billAddr || ''),
                         'PAN': client ? (client.pan || '') : (c.clientPAN || ''),
-                        'GST': client ? (client.gstin || '') : (c.clientGST || ''),
+                        'GST': _caExportClientGstin(client) || (c.clientGST || ''),
                         'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
                         'INVOICE NO.': ar.invNo || '',
                         'ITEMS': c.product || '',
                         'CTS/QTY': '',
-                        'USD VALUE': '',
-                        'USD:INR INVOICE DATE RATE': '',
-                        'INR VALUE': parseFloat(ar.amount) || 0,
+                        'USD VALUE': usdValue || '',
+                        'USD:INR INVOICE DATE RATE': isUSDcontract ? fxRate : '',
+                        'INR VALUE': inrValue,
                         'IGST': 0, 'CGST': 0, 'SGST': 0, 'TOTAL GST': 0,
-                        'INVOICE VALUE': parseFloat(ar.amount) || 0,
+                        'INVOICE VALUE': inrValue,
                         'TERMS (DAYS)': '',
                         'DUE DATE': null,
                         'RECEIVED DATE': _caExportToDate(ar.paidDate),
-                        'AMOUNT RECEIVED': ar.paidDate ? (parseFloat(ar.amount) || 0) : 0,
+                        'AMOUNT RECEIVED': ar.paidDate ? inrValue : 0,
                         'USD:INR PAYMNT RECD DATE RATE': '',
-                        'BALANCE DUE': ar.paidDate ? 0 : (parseFloat(ar.amount) || 0),
+                        'BALANCE DUE': ar.paidDate ? 0 : inrValue,
                         'PYMNT MODE': '', 'PAYMNT DETAILS': ''
                     };
                     rows.push(row);
@@ -40063,22 +40211,21 @@ async function generateCaExport() {
             contracts.forEach(c => {
                 if (!c || !Array.isArray(c.billingYears)) return;
                 const businessHead = _caExportBusinessHeadForContract(c);
-                c.billingYears.forEach(y => {
+                // 8BC.1 — Pull OEM vendor metadata once per contract.
+                const oemPhone = _caExportOemPhone(c.oem);
+                const oemAddr = _caExportOemAddressString(c.oem);
+                const oemPan = _caExportOemPan(c.oem);
+                const oemTaxId = _caExportOemTaxId(c.oem);
+                c.billingYears.forEach((y, yIdx) => {
                     if (!y || !Array.isArray(y.apInvoices)) return;
                     y.apInvoices.forEach(ap => {
                         if (!ap || !ap.invNo) return;
                         const dateStr = ap.date || '';
                         if (!dateStr || dateStr < range.start || dateStr > range.end) return;
-                        const isForeign = (typeof isOemForeign === 'function') ? !!isOemForeign(c.oem) : false;
-                        const inrValue = parseFloat(ap.amount) || 0;
-                        const isUSD = (ap.fx && parseFloat(ap.fx) > 1.5);
-                        const usdValue = isUSD ? inrValue : 0;
-                        const fxRate = isUSD ? (parseFloat(ap.fx) || 0) : 0;
-                        const inrComputed = isUSD ? (usdValue * fxRate) : inrValue;
-                        const gstAmt = (parseFloat(ap.gstAmount) || 0) || (isForeign ? Math.round(inrComputed * 0.18) : 0);
-                        const igst = isForeign ? gstAmt : (parseFloat(ap.igst) || 0);
-                        const cgst = isForeign ? 0 : (parseFloat(ap.cgst) || 0);
-                        const sgst = isForeign ? 0 : (parseFloat(ap.sgst) || 0);
+                        // 8BC.1 hotfix — authoritative FX + currency conversion
+                        const amt = _caExportComputeApAmounts(c, y, yIdx, ap);
+                        const totalGst = amt.igst + amt.cgst + amt.sgst;
+                        const paymentValue = amt.inrValue + totalGst;
                         paymentsAcc.push({
                             _link: ap.link || '',
                             'SR. NO': 0,
@@ -40086,21 +40233,25 @@ async function generateCaExport() {
                             'INVOICE BOOKING DATE': _caExportToDate(ap.bookingDate || ap.date),
                             'INVOICE DATE': _caExportToDate(ap.date),
                             'PARTY': c.oem || '',
-                            'PHONE NUMBER': '', 'ADDRESS': '', 'PAN': '', 'GST': '', 'AADHAR': 'N/A',
+                            'PHONE NUMBER': oemPhone,
+                            'ADDRESS': oemAddr,
+                            'PAN': oemPan,
+                            'GST': oemTaxId,
+                            'AADHAR': 'N/A',
                             'INVOICE NO.': ap.invNo || '',
                             'ITEMS': c.product || '',
                             'UNIT': 1, 'PRICE/UNIT': 0,
-                            'USD VALUE': usdValue || '',
-                            'USD:INR INVOICE DATE RATE': fxRate || '',
-                            'INR VALUE': inrComputed,
-                            'IGST': igst, 'CGST': cgst, 'SGST': sgst,
-                            'TOTAL GST': igst + cgst + sgst,
-                            'PAYMENT VALUE': inrComputed + igst + cgst + sgst,
+                            'USD VALUE': amt.usdValue || '',
+                            'USD:INR INVOICE DATE RATE': amt.isUSDcontract ? amt.fxRate : '',
+                            'INR VALUE': amt.inrValue,
+                            'IGST': amt.igst, 'CGST': amt.cgst, 'SGST': amt.sgst,
+                            'TOTAL GST': totalGst,
+                            'PAYMENT VALUE': paymentValue,
                             'TERMS (DAYS)': '',
                             'USD:INR PAYMNT DATE RATE': '',
-                            'AMOUNT PAID': ap.payDate ? (inrComputed + igst + cgst + sgst) : 0,
+                            'AMOUNT PAID': ap.payDate ? paymentValue : 0,
                             'TDS': 0,
-                            'RCM GST': isForeign ? igst : 0,
+                            'RCM GST': amt.isForeignOem ? amt.igst : 0,
                             'DISCREPANCY': 0,
                             'DUE DATE': null,
                             'PAYMENT DATE': _caExportToDate(ap.payDate)
