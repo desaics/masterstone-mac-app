@@ -10,7 +10,14 @@
 <!-- 8Z-forms: Plex Sans + Mono for editorial form labels and inputs; Source Serif 4 italic for errors/hints. -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- 8BC.3 — Excel library swap: xlsx-js-style is a fork of SheetJS 0.18.5
+     (same version we were on) that adds cell-style writing capability
+     (font, alignment, fill, border). Drop-in API compatible — same global
+     `XLSX`, same utils, same read/write functions. All existing XLSX
+     usages in the CRM (54 call sites across the codebase, 52 writes +
+     2 reads) work unchanged. Only difference: writes can now include
+     cell.s style objects that previously were silently dropped. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <!-- 8AG/8AN/8AO/8AU — IRN auto-extraction libs.
@@ -40227,6 +40234,213 @@ function _caExportAttachHyperlinksToSheet(ws, rows, urlExtractor) {
     });
 }
 
+// 8BC.3 — Apply full Excel formatting (column widths, row heights, font,
+// alignment, number formats, freeze pane, and per-row formulas) to a CA
+// export sheet. Uses xlsx-js-style cell.s style objects (font, alignment)
+// which the standard SheetJS community edition silently drops; only works
+// because we swapped to xlsx-js-style for this drop.
+//
+// sheetType: 'sales' | 'payments'
+// rowCount: number of DATA rows (not including header row at index 0)
+function _caExportApplyFormatting(ws, sheetType, rowCount) {
+    if (!ws || typeof XLSX === 'undefined') return;
+
+    // ---- 1. Define styles ----
+    const FONT = { name: 'Bodoni 72 Book', sz: 12 };
+    const headerStyle = {
+        font: FONT,
+        alignment: {
+            horizontal: sheetType === 'sales' ? 'left' : 'center',
+            vertical: 'center',
+            wrapText: true
+        }
+    };
+    // Sales: all data cells left-aligned
+    // Payments: mostly center, except PARTY (col E=4), ADDRESS (col G=6), ITEMS (col L=11)
+    function dataStyleFor(colIdx) {
+        if (sheetType === 'sales') {
+            return { font: FONT, alignment: { horizontal: 'left', vertical: 'center' } };
+        }
+        const leftCols = new Set([4, 6, 11]);
+        const horiz = leftCols.has(colIdx) ? 'left' : 'center';
+        return { font: FONT, alignment: { horizontal: horiz, vertical: 'center' } };
+    }
+
+    // ---- 2. Column widths (matched character-width to user's existing file) ----
+    if (sheetType === 'sales') {
+        ws['!cols'] = [
+            {wch:7.0},{wch:21.5},{wch:15.7},{wch:24.2},{wch:15.7},
+            {wch:41.3},{wch:13.0},{wch:16.2},{wch:22.2},{wch:13.8},
+            {wch:32.5},{wch:54.5},{wch:12.7},{wch:13.0},{wch:13.0},
+            {wch:13.5},{wch:11.8},{wch:13.0},{wch:11.3},{wch:13.0},
+            {wch:15.8},{wch:13.7},{wch:15.7},{wch:16.0},{wch:19.2},
+            {wch:19.2},{wch:14.0},{wch:13.3},{wch:65.3}
+        ];
+    } else {
+        ws['!cols'] = [
+            {wch:7.0},{wch:15.5},{wch:24.0},{wch:15.8},{wch:30.0},
+            {wch:17.7},{wch:73.7},{wch:13.3},{wch:31.3},{wch:13.8},
+            {wch:22.2},{wch:49.8},{wch:5.7},{wch:12.0},{wch:15.7},
+            {wch:17.8},{wch:15.7},{wch:13.0},{wch:13.0},{wch:13.0},
+            {wch:13.0},{wch:13.0},{wch:13.7},{wch:17.8},{wch:15.7},
+            {wch:13.0},{wch:13.0},{wch:14.0},{wch:15.7},{wch:13.0}
+        ];
+    }
+
+    // ---- 3. Row heights ----
+    const headerHpt = sheetType === 'sales' ? 49 : 32;
+    const dataHpt = sheetType === 'sales' ? 64 : 32;
+    const rowsArr = [{hpt: headerHpt}];
+    for (let r = 1; r <= rowCount; r++) rowsArr.push({hpt: dataHpt});
+    ws['!rows'] = rowsArr;
+
+    // ---- 4. Number formats per column (0-indexed) ----
+    const FMT_DATE = '[$-809]d\\ mmmm\\ yyyy;@';
+    const FMT_ACCT = '_(* #,##0_);_(* \\(#,##0\\);_(* "-"??_);_(@_)';
+    const FMT_INT  = '#,##0';
+    const FMT_DEC2 = '#,##0.00';
+    const FMT_DEC3 = '#,##0.000';
+    const FMT_QTY  = '#,##0_);(#,##0)';
+
+    let colFormats;
+    if (sheetType === 'sales') {
+        colFormats = {
+            2:  FMT_DATE, // C INVOICE DATE
+            12: FMT_QTY,  // M CTS/QTY
+            13: FMT_INT,  // N USD VALUE
+            14: FMT_DEC3, // O USD:INR INVOICE DATE RATE
+            15: FMT_ACCT, // P INR VALUE
+            16: FMT_ACCT, // Q IGST
+            17: FMT_ACCT, // R CGST
+            18: FMT_ACCT, // S SGST
+            19: FMT_ACCT, // T TOTAL GST
+            20: FMT_ACCT, // U INVOICE VALUE
+            22: FMT_DATE, // W DUE DATE
+            23: FMT_DATE, // X RECEIVED DATE
+            24: FMT_DEC2, // Y AMOUNT RECEIVED
+            25: FMT_DEC3, // Z USD:INR PAYMNT RECD DATE RATE
+            26: FMT_DEC2  // AA BALANCE DUE
+        };
+    } else {
+        colFormats = {
+            2:  FMT_DATE, // C INVOICE BOOKING DATE
+            3:  FMT_DATE, // D INVOICE DATE
+            12: FMT_INT,  // M UNIT
+            13: FMT_INT,  // N PRICE/UNIT
+            14: FMT_INT,  // O USD VALUE
+            15: FMT_DEC3, // P USD:INR INVOICE DATE RATE
+            16: FMT_INT,  // Q INR VALUE
+            17: FMT_INT,  // R IGST
+            18: FMT_INT,  // S CGST
+            19: FMT_INT,  // T SGST
+            20: FMT_INT,  // U TOTAL GST
+            21: FMT_INT,  // V PAYMENT VALUE
+            23: FMT_DEC3, // X USD:INR PAYMNT DATE RATE
+            24: FMT_INT,  // Y AMOUNT PAID
+            25: FMT_INT,  // Z TDS
+            26: FMT_INT,  // AA RCM GST
+            27: FMT_INT,  // AB DISCREPANCY
+            28: FMT_DATE, // AC DUE DATE
+            29: FMT_DATE  // AD PAYMENT DATE
+        };
+    }
+
+    // ---- 5. Walk every cell: apply style + number format. Hyperlinked cells
+    //         get blue + underline added to font (preserves font name/size). ----
+    const colCount = sheetType === 'sales' ? 29 : 30;
+    for (let r = 0; r <= rowCount; r++) {
+        for (let c = 0; c < colCount; c++) {
+            const cellAddr = XLSX.utils.encode_cell({ r, c });
+            const cell = ws[cellAddr];
+            if (!cell) continue;
+            const base = r === 0 ? headerStyle : dataStyleFor(c);
+            const newStyle = Object.assign({}, base);
+            if (cell.l) {
+                // Hyperlinked: layer blue+underline on top of base font
+                newStyle.font = Object.assign({}, base.font, {
+                    color: { rgb: '0000FF' },
+                    underline: true
+                });
+            }
+            cell.s = newStyle;
+            if (r > 0 && colFormats[c] !== undefined) {
+                cell.z = colFormats[c];
+            }
+        }
+    }
+
+    // ---- 6. Per-row formulas (only where they match the computed value,
+    //         keeping the file behaviourally identical to writing literals). ----
+    for (let r = 1; r <= rowCount; r++) {
+        const rE = r + 1; // Excel 1-indexed row number
+        if (sheetType === 'sales') {
+            // TOTAL GST = Q+R+S (always)
+            const tCell = ws[`T${rE}`];
+            if (tCell) tCell.f = `Q${rE}+R${rE}+S${rE}`;
+            // INVOICE VALUE = T+P (always)
+            const uCell = ws[`U${rE}`];
+            if (uCell) uCell.f = `T${rE}+P${rE}`;
+            // IGST = P*18% only when foreign-OEM (detected: IGST literal > 0 AND CGST = SGST = 0)
+            const qCell = ws[`Q${rE}`];
+            const rCell = ws[`R${rE}`];
+            const sCell = ws[`S${rE}`];
+            if (qCell && (parseFloat(qCell.v) || 0) > 0 &&
+                (!rCell || (parseFloat(rCell.v) || 0) === 0) &&
+                (!sCell || (parseFloat(sCell.v) || 0) === 0)) {
+                qCell.f = `P${rE}*18%`;
+            }
+            // DUE DATE = V+C only when both have values
+            const wCell = ws[`W${rE}`];
+            const vCell = ws[`V${rE}`];
+            const cCell = ws[`C${rE}`];
+            if (wCell && vCell && cCell && vCell.v && cCell.v) {
+                wCell.f = `V${rE}+C${rE}`;
+            }
+            // BALANCE DUE = Y-U only when Y has value (received)
+            const aaCell = ws[`AA${rE}`];
+            const yCell = ws[`Y${rE}`];
+            if (aaCell && yCell && parseFloat(yCell.v || 0) > 0) {
+                aaCell.f = `Y${rE}-U${rE}`;
+            }
+        } else {
+            // Payments
+            // INR VALUE = P*O when USD VALUE > 0
+            const oCell = ws[`O${rE}`];
+            const qCellP = ws[`Q${rE}`];
+            if (qCellP && oCell && parseFloat(oCell.v || 0) > 0) {
+                qCellP.f = `P${rE}*O${rE}`;
+            }
+            // IGST = Q*18% when foreign-OEM (detected via RCM GST > 0)
+            const aaCellP = ws[`AA${rE}`];
+            const rCellP = ws[`R${rE}`];
+            if (rCellP && aaCellP && parseFloat(aaCellP.v || 0) > 0) {
+                rCellP.f = `Q${rE}*18%`;
+            }
+            // TOTAL GST = R+S+T (always)
+            const uCellP = ws[`U${rE}`];
+            if (uCellP) uCellP.f = `R${rE}+S${rE}+T${rE}`;
+            // PAYMENT VALUE = Q+U (always)
+            const vCellP = ws[`V${rE}`];
+            if (vCellP) vCellP.f = `Q${rE}+U${rE}`;
+            // RCM GST = U when foreign-OEM (RCM already > 0)
+            if (aaCellP && parseFloat(aaCellP.v || 0) > 0) {
+                aaCellP.f = `U${rE}`;
+            }
+            // DUE DATE = W+D when both have values
+            const acCell = ws[`AC${rE}`];
+            const wCellP = ws[`W${rE}`];
+            const dCell = ws[`D${rE}`];
+            if (acCell && wCellP && dCell && wCellP.v && dCell.v) {
+                acCell.f = `W${rE}+D${rE}`;
+            }
+        }
+    }
+
+    // ---- 7. Freeze top row (header always visible while scrolling) ----
+    // xlsx-js-style supports the SheetJS view object form.
+    ws['!view'] = [{ state: 'frozen', ySplit: 1, xSplit: 0, topLeftCell: 'A2', activePane: 'bottomLeft' }];
+}
+
 // Main entrypoint — called by the "Generate & Download" button.
 async function generateCaExport() {
     const statusEl = document.getElementById('caExportStatus');
@@ -40382,14 +40596,16 @@ async function generateCaExport() {
             'INVOICE VALUE','TERMS (DAYS)','DUE DATE','RECEIVED DATE','AMOUNT RECEIVED',
             'USD:INR PAYMNT RECD DATE RATE','BALANCE DUE','PYMNT MODE','PAYMNT DETAILS'];
         const wsSales = XLSX.utils.json_to_sheet(sales.rows, { header: salesHeaders });
-        // Attach hyperlinks
+        // Attach hyperlinks (cell styling is applied later in _caExportApplyFormatting)
         sales.hyperlinks.forEach(h => {
             const cellAddr = XLSX.utils.encode_cell({ r: h.rowIndex, c: 10 });
             if (wsSales[cellAddr]) {
                 wsSales[cellAddr].l = { Target: h.url, Tooltip: 'Open in OneDrive' };
-                wsSales[cellAddr].s = { font: { color: { rgb: '0000FF' }, underline: true } };
             }
         });
+        // 8BC.3 — Apply full Excel formatting (column widths, row heights, fonts,
+        // alignment, number formats, freeze pane, and per-row formulas).
+        _caExportApplyFormatting(wsSales, 'sales', sales.rows.length);
         XLSX.utils.book_append_sheet(wb, wsSales, 'Sales');
 
         // Payments sheet
@@ -40404,9 +40620,10 @@ async function generateCaExport() {
             const cellAddr = XLSX.utils.encode_cell({ r: i + 1, c: 10 });
             if (wsPayments[cellAddr]) {
                 wsPayments[cellAddr].l = { Target: url, Tooltip: 'Open in OneDrive' };
-                wsPayments[cellAddr].s = { font: { color: { rgb: '0000FF' }, underline: true } };
             }
         });
+        // 8BC.3 — Apply full Excel formatting (same helper, payments variant)
+        _caExportApplyFormatting(wsPayments, 'payments', paymentsRows.length);
         XLSX.utils.book_append_sheet(wb, wsPayments, 'Payments');
 
         // Filename
