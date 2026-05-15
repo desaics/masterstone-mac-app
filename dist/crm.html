@@ -6304,6 +6304,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <!-- 8YZ — Consultants module: tracks payments to consultants/freelancers
        who serve across clients. Not PO-driven, not client-linked. -->
   <div class="nav-item" title="Consultants" onclick="showTab('consultantsTab')"><i class="fas fa-user-tie"></i> Consultants</div>
+  <!-- 8BC — CA Export: monthly GST-filing-style Excel for the CA. Two sheets
+       (Sales + Payments), exact column layout matching pre-CRM Master file. -->
+  <div class="nav-item" title="CA Export" onclick="showTab('caExportTab')"><i class="fas fa-file-export"></i> CA Export</div>
   <!-- Bug fix #27 — Cleanup: removed hidden arApTab nav fallback. Original removal in #13 Batch 3B; transitional stub no longer needed. -->
 
   <div class="nav-section-header">Insights</div>
@@ -7014,6 +7017,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
              </div>
              
              <div><label>Vendor Code</label><input type="text" id="vendorCode" placeholder="Your Code in Client Sys"></div>
+             <!-- 8BC — Business Head override for CA export. Empty = derive from OEM
+                  uppercased (or 'SERVICE' if no OEM). Override for service/content
+                  contracts that need a specific tag (e.g. SERVICE, CONTENT). -->
+             <div><label>Business Head Override <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional, for CA export)</span></label><input type="text" id="contractBusinessHead" placeholder="e.g. SERVICE / CONTENT (blank = auto from OEM)" style="text-transform:uppercase;"></div>
              <div>
                 <div id="gstSelectorRow" class="prov-selector-row" style="display:none;"></div>
                 <label>GSTIN</label><input type="text" id="clientGST" placeholder="Client GST Number">
@@ -10120,6 +10127,55 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
      module for tracking consultant/freelancer payments. Distinct from Payables
      because not PO-driven and not client-linked.
      ============================================================================ -->
+<!-- ===================== 8BC — CA EXPORT TAB ===================== -->
+<!-- Monthly export to an Excel file in the exact column layout used by the
+     CA pre-CRM (Master_FYxx-xx.xlsx). Two sheets: Sales (AR invoices) and
+     Payments (AP — OEM payables + consultants + service vendors).
+     Invoice numbers are hyperlinked to OneDrive URLs where the `link` field
+     is populated on the source record. -->
+<div id="caExportTab" class="hidden">
+    <div class="tab-header">
+        <h2><i class="fas fa-file-export" style="color:var(--accent-cyan);"></i> CA Export</h2>
+    </div>
+    <div class="card" style="max-width:780px;">
+        <p style="font-size:13px; color:var(--text-dim); margin-top:0; line-height:1.5;">
+            Generates the monthly Excel for your CA in the exact column layout from the
+            pre-CRM Master file. Sales sheet pulls from issued invoices; Payments sheet
+            pulls from contract AP invoices, consultants, and service vendors. Invoice
+            numbers are hyperlinked to OneDrive where the link is populated on the record.
+        </p>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:18px;">
+            <div>
+                <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Month</label>
+                <input type="month" id="caExportMonth" style="width:100%; padding:9px 12px;">
+            </div>
+            <div>
+                <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Scope</label>
+                <select id="caExportScope" style="width:100%; padding:9px 12px;">
+                    <option value="month">This month only</option>
+                    <option value="fytd">FY-to-date (through this month)</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="margin-top:22px; display:flex; gap:10px; align-items:center;">
+            <button class="btn btn-primary" id="caExportGenerateBtn" onclick="generateCaExport()" style="padding:11px 22px;"><i class="fas fa-download"></i> Generate &amp; Download</button>
+            <span id="caExportStatus" style="font-size:12.5px; color:var(--text-dim);"></span>
+        </div>
+
+        <div style="margin-top:22px; padding:12px 14px; background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.2); border-radius:6px; font-size:11.5px; color:var(--text-dim); line-height:1.6;">
+            <div style="font-weight:600; color:var(--text-main); margin-bottom:4px;"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> Coverage notes</div>
+            • Sales sheet: all invoices with status Issued, Paid, or Credit-Note-Issued in the chosen period<br>
+            • Payments sheet: contract AP invoices + consultant payments + service-vendor payments<br>
+            • Invoice numbers link to OneDrive where the cloud URL is on the record (fall back to plain text otherwise)<br>
+            • Foreign-OEM lines: GST shown as IGST only (your CA handles the RCM logic)<br>
+            • Filename: <code>Masterstone_GST_{Month}_{Year}.xlsx</code> or <code>Masterstone_FY{xx-yy}_thru_{Month}{Year}.xlsx</code>
+        </div>
+    </div>
+</div>
+<!-- ===================== /8BC ===================== -->
+
 <div id="consultantsTab" class="hidden">
 
   <!-- Sub-tab strip (uses existing .arap-subtab pattern for visual consistency) -->
@@ -10398,6 +10454,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div>
         <label>PAN Number</label>
         <input type="text" id="conMasterPan" placeholder="optional, for reconciliation" style="text-transform:uppercase;">
+      </div>
+      <!-- 8BC — Category & Business Head Override (for CA export) -->
+      <div>
+        <label>Category <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(drives CA export "Business Head")</span></label>
+        <select id="conMasterCategory">
+          <option value="Consultant">Consultant</option>
+          <option value="Service Vendor">Service Vendor</option>
+          <option value="Content">Content</option>
+        </select>
+      </div>
+      <div>
+        <label>Business Head Override <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional, blank = auto from Category)</span></label>
+        <input type="text" id="conMasterBusinessHead" placeholder="e.g. DARKTRACE (for OEM-linked consultants)" style="text-transform:uppercase;">
       </div>
     </div>
   </div>
@@ -11425,6 +11494,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="cm-form-grid-2">
       <div><label>PAN</label><input type="text" id="cmPAN" placeholder="ABCDE1234F" style="text-transform:uppercase;"></div>
       <div><label>CIN</label><input type="text" id="cmCIN" placeholder="U12345MH2024PTC123456"></div>
+    </div>
+    <!-- 8BC — Aadhaar override. Default empty → CA export renders "N/A".
+         Override only for proprietorships / individual clients. -->
+    <div class="cm-form-grid-2" style="margin-top:14px;">
+      <div><label>Aadhaar <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(only for proprietorships / individuals; defaults to N/A)</span></label><input type="text" id="cmAadhaar" placeholder="N/A" maxlength="14"></div>
+      <div></div>
     </div>
     <div class="cm-form-grid-2" style="margin-top:14px;">
       <div><label>Vendor Code (Internal Ref)</label><input type="text" id="cmVendorCode" placeholder="VC-1001"></div>
@@ -14912,6 +14987,8 @@ function openClientMasterForm(key) {
         setVal('cmGSTIN', r.gstin); // legacy hidden field kept in sync
         setVal('cmPAN', r.pan);
         setVal('cmCIN', r.cin);
+        // 8BC — Aadhaar override (Phase 8BC, CA export)
+        setVal('cmAadhaar', r.aadhaar);
         setVal('cmVendorCode', r.vendorCode);
         document.getElementById('cmIsReseller').checked = !!r.isReseller;
         setVal('cmResellerName', r.resellerName);
@@ -15078,6 +15155,8 @@ function saveClientMasterEntry() {
         shipAddr: primS ? (primS.address || '') : '',
         pan: document.getElementById('cmPAN').value.trim().toUpperCase(),
         cin: document.getElementById('cmCIN').value.trim(),
+        // 8BC — Aadhaar (CA export). Empty string is fine; export renders "N/A".
+        aadhaar: (document.getElementById('cmAadhaar').value || '').trim(),
         vendorCode: document.getElementById('cmVendorCode').value.trim(),
         isReseller: document.getElementById('cmIsReseller').checked,
         resellerName: document.getElementById('cmResellerName').value.trim(),
@@ -17796,7 +17875,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -17828,6 +17907,11 @@ function showTab(tab) {
             // Reset to register sub-tab by default
             showConsultantsSubtab('register');
         }
+    }
+
+    // 8BC — CA Export tab: seed the month picker to current month if blank.
+    if (tab === 'caExportTab') {
+        if (typeof initCaExportTab === 'function') initCaExportTab();
     }
 
     // Bug fix #27 — Cleanup: removed transitional `if(tab === 'arApTab')` handler. AR/AP rendering is now triggered by the invoicesTab and purchaseInvoicesTab handlers below.
@@ -19250,6 +19334,8 @@ function saveContract() {
         clientPOs: newClientPOs, 
         
         vendorCode: document.getElementById('vendorCode').value,
+        // 8BC — Business Head override for CA export
+        businessHead: (document.getElementById('contractBusinessHead').value || '').trim().toUpperCase(),
         clientGST: document.getElementById('clientGST').value,
         clientPAN: document.getElementById('clientPAN').value,
         clientCIN: document.getElementById('clientCIN').value,
@@ -19441,6 +19527,8 @@ function editContract(i) {
     } catch (_e) { /* fall through with raw values */ }
 
     document.getElementById('vendorCode').value = c.vendorCode || '';
+    // 8BC — Business Head override (CA export)
+    document.getElementById('contractBusinessHead').value = c.businessHead || '';
     document.getElementById('clientGST').value = c.clientGST || '';
     document.getElementById('clientPAN').value = c.clientPAN || '';
     document.getElementById('clientCIN').value = c.clientCIN || '';
@@ -38602,6 +38690,13 @@ function consultantBlank() {
         gstNumber: '',
         defaultPaymentTermsDays: 30,
         notes: '',
+        // 8BC — Category and business-head override for CA export
+        // category: 'Consultant' | 'Service Vendor' | 'Content'
+        // businessHead: optional override; empty = derive from category
+        //   (Consultant → DARKTRACE/etc OEM if linked to OEM-flavoured work, else SERVICE)
+        //   (Service Vendor → SERVICE, Content → CONTENT)
+        category: 'Consultant',
+        businessHead: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         archived: false
@@ -39199,6 +39294,9 @@ function openConsultantForm(id) {
         val('conMasterEmail', c.contactEmail);
         val('conMasterPhone', c.contactPhone);
         val('conMasterPan', c.panNumber);
+        // 8BC — Category + Business Head Override
+        val('conMasterCategory', c.category || 'Consultant');
+        val('conMasterBusinessHead', c.businessHead || '');
         const gstCb = document.getElementById('conMasterGstReg');
         if (gstCb) gstCb.checked = !!c.gstRegistered;
         val('conMasterGstNum', c.gstNumber);
@@ -39217,6 +39315,9 @@ function openConsultantForm(id) {
         val('conMasterEmail', '');
         val('conMasterPhone', '');
         val('conMasterPan', '');
+        // 8BC — Category + Business Head Override (reset)
+        val('conMasterCategory', 'Consultant');
+        val('conMasterBusinessHead', '');
         const gstCb = document.getElementById('conMasterGstReg');
         if (gstCb) gstCb.checked = false;
         val('conMasterGstNum', '');
@@ -39257,6 +39358,9 @@ function saveConsultantFromForm() {
     c.contactEmail = (document.getElementById('conMasterEmail').value || '').trim();
     c.contactPhone = (document.getElementById('conMasterPhone').value || '').trim();
     c.panNumber = (document.getElementById('conMasterPan').value || '').trim().toUpperCase();
+    // 8BC — Category + Business Head Override
+    c.category = (document.getElementById('conMasterCategory').value || 'Consultant');
+    c.businessHead = (document.getElementById('conMasterBusinessHead').value || '').trim().toUpperCase();
     c.gstRegistered = document.getElementById('conMasterGstReg').checked;
     c.gstNumber = c.gstRegistered ? (document.getElementById('conMasterGstNum').value || '').trim().toUpperCase() : '';
     c.defaultPaymentTermsDays = parseInt(document.getElementById('conMasterTerms').value) || 30;
@@ -39531,6 +39635,594 @@ function exportConsultantPayments() {
 
 /* ======================================================================
    End of 8YZ Consultants module
+   ====================================================================== */
+
+
+/* ======================================================================
+   Phase 8BC — CA Export module
+
+   Generates a monthly Excel for the CA in the exact column layout from
+   the pre-CRM Master file. Two sheets: Sales and Payments. Hyperlinks on
+   the INVOICE NO. column where the cloud URL is on the record.
+
+   The Sales sheet is the union of standalone invoices[] (Path B) and
+   contract-cycle arInvoices[] (Path A), with Path B preferred when both
+   exist for the same invoice number. The Payments sheet unions
+   contract apInvoices[] (OEM payables) + consultantPayments[] (all
+   categories — Consultant, Service Vendor, Content).
+
+   Foreign-OEM lines: GST is shown as IGST only (per user input — CA
+   handles RCM logic externally). The Forex Gain/Loss column is omitted
+   (per user input — column was useful pre-CRM, the app tracks it via
+   payment FX rate vs invoice FX rate on the AP record).
+   ====================================================================== */
+
+// Initialise the month picker to current month when the tab is opened.
+// Called from showTab when navigating to the CA Export tab.
+function initCaExportTab() {
+    const monthEl = document.getElementById('caExportMonth');
+    if (monthEl && !monthEl.value) {
+        const d = new Date();
+        monthEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    const statusEl = document.getElementById('caExportStatus');
+    if (statusEl) statusEl.textContent = '';
+}
+
+// Compute the [start, end] date range based on month picker + scope.
+// Returns ISO date strings yyyy-mm-dd inclusive.
+function _caExportComputeRange(monthStr, scope) {
+    // monthStr is "yyyy-mm" from <input type="month">
+    if (!monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) return null;
+    const [yr, mo] = monthStr.split('-').map(Number);
+    // End of selected month
+    const endDate = new Date(yr, mo, 0); // day 0 of next month = last day of selected month
+    const endStr = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
+    let startStr;
+    if (scope === 'fytd') {
+        // Indian FY starts April 1. If month is Jan-Mar, FY started prev calendar year.
+        const fyStartYear = (mo >= 4) ? yr : yr - 1;
+        startStr = `${fyStartYear}-04-01`;
+    } else {
+        // Just this month
+        startStr = `${yr}-${String(mo).padStart(2, '0')}-01`;
+    }
+    return { start: startStr, end: endStr };
+}
+
+// Derive BUSINESS HEAD for a given contract.
+// Order of precedence: contract.businessHead (override) → contract.oem (uppercased)
+// → 'SERVICE' (fallback for contracts with no OEM at all).
+function _caExportBusinessHeadForContract(c) {
+    if (!c) return 'SERVICE';
+    if (c.businessHead && String(c.businessHead).trim()) return String(c.businessHead).trim().toUpperCase();
+    if (c.oem && String(c.oem).trim()) return String(c.oem).trim().toUpperCase();
+    return 'SERVICE';
+}
+
+// Derive BUSINESS HEAD for a consultant. Order: consultant.businessHead (override)
+// → category mapping (Service Vendor → SERVICE, Content → CONTENT, Consultant → SERVICE).
+function _caExportBusinessHeadForConsultant(con) {
+    if (!con) return 'SERVICE';
+    if (con.businessHead && String(con.businessHead).trim()) return String(con.businessHead).trim().toUpperCase();
+    const cat = con.category || 'Consultant';
+    if (cat === 'Content') return 'CONTENT';
+    if (cat === 'Service Vendor') return 'SERVICE';
+    return 'SERVICE'; // Consultant default
+}
+
+// Resolve client master record from a client name string.
+function _caExportFindClient(clientName) {
+    if (!clientName || typeof clientName !== 'object' && typeof clients === 'undefined') return null;
+    if (typeof clients !== 'object' || !clients) return null;
+    // clients is an object keyed by client name (canonical). Look up directly.
+    if (clients[clientName]) return clients[clientName];
+    // Fallback: case-insensitive match
+    const want = String(clientName).trim().toLowerCase();
+    for (const k in clients) {
+        if (String(k).trim().toLowerCase() === want) return clients[k];
+    }
+    return null;
+}
+
+// Cross-reference: for a Path B invoice, find the matching Path A arInvoice
+// inside the linked contract's cycle, by invoice number. Returns {link, localPath}
+// or {link:'', localPath:''} if none found.
+function _caExportFindArLink(inv) {
+    const out = { link: '', localPath: '' };
+    if (!inv || !inv.invoiceNumber) return out;
+    const cIdx = parseInt(inv.linkedContractIdx);
+    const yIdx = parseInt(inv.linkedCycleYearIdx);
+    if (isNaN(cIdx) || isNaN(yIdx)) return out;
+    const c = contracts[cIdx];
+    if (!c || !Array.isArray(c.billingYears) || !c.billingYears[yIdx]) return out;
+    const arr = c.billingYears[yIdx].arInvoices || [];
+    const match = arr.find(x => x && x.invNo && String(x.invNo).trim() === String(inv.invoiceNumber).trim());
+    if (match) {
+        out.link = match.link || '';
+        out.localPath = match.localPath || '';
+    }
+    return out;
+}
+
+// Format an ISO date string yyyy-mm-dd to a Date object Excel will recognise as a date.
+// Returns null if the string is empty/invalid.
+function _caExportToDate(s) {
+    if (!s) return null;
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return null;
+    return d;
+}
+
+// Build the Sales sheet data rows. Returns { rows: [...], hyperlinks: {colK: [{row, url}, ...]} }
+function _caExportBuildSalesRows(rangeStart, rangeEnd) {
+    const rows = [];
+    const hyperlinks = []; // {rowIndex (1-based in sheet, 0=header), url}
+    const seenInvNos = new Set(); // dedup key: invoiceNumber
+
+    // ---- Pass 1: standalone invoices (Path B) ----
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+        const eligibleStatuses = new Set(['Issued', 'Paid', 'Credit-Note-Issued']);
+        invoices.forEach(inv => {
+            if (!inv || !eligibleStatuses.has(inv.status)) return;
+            const dateStr = inv.invoiceDate || '';
+            if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
+
+            const c = (typeof contracts !== 'undefined' && !isNaN(parseInt(inv.linkedContractIdx)))
+                ? contracts[parseInt(inv.linkedContractIdx)] : null;
+            const businessHead = _caExportBusinessHeadForContract(c);
+            const client = _caExportFindClient(inv.clientName);
+
+            const items = (Array.isArray(inv.lineItems) ? inv.lineItems : [])
+                .map(li => li.product || '').filter(Boolean).join('  ');
+            const qty = (Array.isArray(inv.lineItems) ? inv.lineItems : [])
+                .reduce((s, li) => s + (parseFloat(li.qty) || 0), 0);
+
+            const linkInfo = _caExportFindArLink(inv);
+
+            // First payment record (if any)
+            const firstPayment = (Array.isArray(inv.payments) && inv.payments.length > 0) ? inv.payments[0] : null;
+
+            const row = {
+                'SR. NO': rows.length + 1,
+                'BUSINESS HEAD': businessHead,
+                'INVOICE DATE': _caExportToDate(inv.invoiceDate),
+                'CLIENT NAME': inv.clientName || '',
+                'PHONE NUMBER': client ? (client.contactPhone || '') : '',
+                'KYC ADDRESS': client ? (client.billAddr || '') : '',
+                'DELIVERY ADDRESS': client ? (client.shipAddr || client.billAddr || '') : '',
+                'PAN': client ? (client.pan || '') : '',
+                'GST': client ? (client.gstin || '') : '',
+                'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
+                'INVOICE NO.': inv.invoiceNumber || '',
+                'ITEMS': items,
+                'CTS/QTY': qty || '',
+                'USD VALUE': '',  // Reserved for foreign-billed; populated if line items priced in USD
+                'USD:INR INVOICE DATE RATE': '',
+                'INR VALUE': parseFloat(inv.subtotal) || 0,
+                'IGST': parseFloat(inv.igst) || 0,
+                'CGST': parseFloat(inv.cgst) || 0,
+                'SGST': parseFloat(inv.sgst) || 0,
+                'TOTAL GST': parseFloat(inv.gstTotal) || 0,
+                'INVOICE VALUE': parseFloat(inv.grandTotal) || 0,
+                'TERMS (DAYS)': (() => {
+                    // Try to extract a number from paymentTerms string like "30 days from invoice date"
+                    const m = String(inv.paymentTerms || '').match(/(\d+)/);
+                    return m ? parseInt(m[1]) : '';
+                })(),
+                'DUE DATE': _caExportToDate(inv.dueDate),
+                'RECEIVED DATE': firstPayment ? _caExportToDate(firstPayment.date || firstPayment.receivedDate) : null,
+                'AMOUNT RECEIVED': parseFloat(inv.amountPaid) || 0,
+                'USD:INR PAYMNT RECD DATE RATE': '',
+                'BALANCE DUE': parseFloat(inv.amountOutstanding) || ((parseFloat(inv.grandTotal) || 0) - (parseFloat(inv.amountPaid) || 0)),
+                'PYMNT MODE': firstPayment ? (firstPayment.mode || firstPayment.paymentMode || '') : '',
+                'PAYMNT DETAILS': firstPayment ? (firstPayment.reference || firstPayment.paymentReference || '') : ''
+            };
+            rows.push(row);
+            if (linkInfo.link) hyperlinks.push({ rowIndex: rows.length, url: linkInfo.link });
+            if (inv.invoiceNumber) seenInvNos.add(String(inv.invoiceNumber).trim());
+        });
+    }
+
+    // ---- Pass 2: cycle-attached AR invoices (Path A) for any not already covered ----
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach((c) => {
+            if (!c || !Array.isArray(c.billingYears)) return;
+            const businessHead = _caExportBusinessHeadForContract(c);
+            const client = _caExportFindClient(c.client);
+            c.billingYears.forEach((y) => {
+                if (!y || !Array.isArray(y.arInvoices)) return;
+                y.arInvoices.forEach(ar => {
+                    if (!ar || !ar.invNo) return;
+                    if (seenInvNos.has(String(ar.invNo).trim())) return;
+                    const dateStr = ar.date || '';
+                    if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
+
+                    const row = {
+                        'SR. NO': rows.length + 1,
+                        'BUSINESS HEAD': businessHead,
+                        'INVOICE DATE': _caExportToDate(ar.date),
+                        'CLIENT NAME': c.client || '',
+                        'PHONE NUMBER': client ? (client.contactPhone || '') : '',
+                        'KYC ADDRESS': client ? (client.billAddr || '') : '',
+                        'DELIVERY ADDRESS': client ? (client.shipAddr || client.billAddr || '') : '',
+                        'PAN': client ? (client.pan || '') : (c.clientPAN || ''),
+                        'GST': client ? (client.gstin || '') : (c.clientGST || ''),
+                        'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
+                        'INVOICE NO.': ar.invNo || '',
+                        'ITEMS': c.product || '',
+                        'CTS/QTY': '',
+                        'USD VALUE': '',
+                        'USD:INR INVOICE DATE RATE': '',
+                        'INR VALUE': parseFloat(ar.amount) || 0,
+                        'IGST': 0, 'CGST': 0, 'SGST': 0, 'TOTAL GST': 0,
+                        'INVOICE VALUE': parseFloat(ar.amount) || 0,
+                        'TERMS (DAYS)': '',
+                        'DUE DATE': null,
+                        'RECEIVED DATE': _caExportToDate(ar.paidDate),
+                        'AMOUNT RECEIVED': ar.paidDate ? (parseFloat(ar.amount) || 0) : 0,
+                        'USD:INR PAYMNT RECD DATE RATE': '',
+                        'BALANCE DUE': ar.paidDate ? 0 : (parseFloat(ar.amount) || 0),
+                        'PYMNT MODE': '', 'PAYMNT DETAILS': ''
+                    };
+                    rows.push(row);
+                    if (ar.link) hyperlinks.push({ rowIndex: rows.length, url: ar.link });
+                });
+            });
+        });
+    }
+
+    return { rows, hyperlinks };
+}
+
+// Build the Payments sheet data rows. Sources: contract apInvoices[] + consultantPayments[].
+function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
+    const rows = [];
+    const hyperlinks = [];
+
+    // ---- Source 1: contract AP invoices (OEM payables) ----
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach(c => {
+            if (!c || !Array.isArray(c.billingYears)) return;
+            const businessHead = _caExportBusinessHeadForContract(c);
+            c.billingYears.forEach(y => {
+                if (!y || !Array.isArray(y.apInvoices)) return;
+                y.apInvoices.forEach(ap => {
+                    if (!ap || !ap.invNo) return;
+                    const dateStr = ap.date || '';
+                    if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
+
+                    // Foreign-OEM detection: drives GST as IGST-only display
+                    const isForeign = (typeof isOemForeign === 'function') ? !!isOemForeign(c.oem) : false;
+                    const inrValue = parseFloat(ap.amount) || 0; // ap.amount may be in INR or USD depending on contract
+                    const isUSD = (ap.fx && parseFloat(ap.fx) > 1.5);
+                    const usdValue = isUSD ? inrValue : 0;
+                    const fxRate = isUSD ? (parseFloat(ap.fx) || 0) : 0;
+                    const inrComputed = isUSD ? (usdValue * fxRate) : inrValue;
+
+                    // GST: foreign-OEM = IGST only (RCM); domestic = whatever was captured on the record
+                    const gstAmt = (parseFloat(ap.gstAmount) || 0) || (isForeign ? Math.round(inrComputed * 0.18) : 0);
+                    const igst = isForeign ? gstAmt : (parseFloat(ap.igst) || 0);
+                    const cgst = isForeign ? 0 : (parseFloat(ap.cgst) || 0);
+                    const sgst = isForeign ? 0 : (parseFloat(ap.sgst) || 0);
+
+                    const row = {
+                        'SR. NO': rows.length + 1,
+                        'BUSINESS HEAD': businessHead,
+                        'INVOICE BOOKING DATE': _caExportToDate(ap.bookingDate || ap.date),
+                        'INVOICE DATE': _caExportToDate(ap.date),
+                        'PARTY': c.oem || '',
+                        'PHONE NUMBER': '',
+                        'ADDRESS': '',
+                        'PAN': '',
+                        'GST': '',
+                        'AADHAR': 'N/A',
+                        'INVOICE NO.': ap.invNo || '',
+                        'ITEMS': c.product || '',
+                        'UNIT': 1,
+                        'PRICE/UNIT': 0,
+                        'USD VALUE': usdValue || '',
+                        'USD:INR INVOICE DATE RATE': fxRate || '',
+                        'INR VALUE': inrComputed,
+                        'IGST': igst,
+                        'CGST': cgst,
+                        'SGST': sgst,
+                        'TOTAL GST': igst + cgst + sgst,
+                        'PAYMENT VALUE': inrComputed + igst + cgst + sgst,
+                        'TERMS (DAYS)': '',
+                        'USD:INR PAYMNT DATE RATE': '',
+                        'AMOUNT PAID': ap.payDate ? (inrComputed + igst + cgst + sgst) : 0,
+                        'TDS': 0,
+                        'RCM GST': isForeign ? igst : 0,
+                        'DISCREPANCY': 0,
+                        'DUE DATE': null,
+                        'PAYMENT DATE': _caExportToDate(ap.payDate)
+                    };
+                    rows.push(row);
+                    if (ap.link) hyperlinks.push({ rowIndex: rows.length, url: ap.link });
+                });
+            });
+        });
+    }
+
+    // ---- Source 2: consultant payments (all categories: Consultant, Service Vendor, Content) ----
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) {
+        consultantPayments.forEach(p => {
+            if (!p) return;
+            const dateStr = p.invoiceDate || '';
+            if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
+            const con = (typeof getConsultantById === 'function') ? getConsultantById(p.consultantId) : null;
+            const businessHead = _caExportBusinessHeadForConsultant(con);
+
+            // Consultant payments are always domestic — split GST as CGST+SGST evenly
+            const subtotal = parseFloat(p.subtotal) || 0;
+            const gstAmt = p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0;
+            const cgst = gstAmt / 2;
+            const sgst = gstAmt / 2;
+
+            const row = {
+                'SR. NO': rows.length + 1,
+                'BUSINESS HEAD': businessHead,
+                'INVOICE BOOKING DATE': _caExportToDate(p.invoiceDate),
+                'INVOICE DATE': _caExportToDate(p.invoiceDate),
+                'PARTY': con ? con.name : '(unknown)',
+                'PHONE NUMBER': con ? (con.contactPhone || '') : '',
+                'ADDRESS': '',
+                'PAN': con ? (con.panNumber || '') : '',
+                'GST': con && con.gstRegistered ? (con.gstNumber || '') : 'N/A',
+                'AADHAR': 'N/A',
+                'INVOICE NO.': p.invoiceNumber || '',
+                'ITEMS': p.periodCovered || '',
+                'UNIT': 1,
+                'PRICE/UNIT': 0,
+                'USD VALUE': '',
+                'USD:INR INVOICE DATE RATE': '',
+                'INR VALUE': subtotal,
+                'IGST': 0,
+                'CGST': cgst,
+                'SGST': sgst,
+                'TOTAL GST': gstAmt,
+                'PAYMENT VALUE': subtotal + gstAmt,
+                'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
+                'USD:INR PAYMNT DATE RATE': '',
+                'AMOUNT PAID': p.paidDate ? (parseFloat(p.totalAmount) || (subtotal + gstAmt)) : 0,
+                'TDS': 0,
+                'RCM GST': 0,
+                'DISCREPANCY': 0,
+                'DUE DATE': _caExportToDate(p.dueDate),
+                'PAYMENT DATE': _caExportToDate(p.paidDate)
+            };
+            rows.push(row);
+            // Consultant payments don't currently have a `link` field, so no hyperlinks here.
+            // If link gets added to consultantPaymentBlank in future, change this to read p.link.
+        });
+    }
+
+    // Sort by INVOICE DATE asc, then renumber SR. NO
+    rows.sort((a, b) => {
+        const da = a['INVOICE DATE'] ? a['INVOICE DATE'].getTime() : 0;
+        const db = b['INVOICE DATE'] ? b['INVOICE DATE'].getTime() : 0;
+        return da - db;
+    });
+    // After sort, hyperlink rowIndex references are stale — rebuild by invoice no.
+    // For simplicity: drop hyperlinks and re-attach during sheet construction.
+    return { rows, hyperlinks: [] /* re-derived during writing */ };
+}
+
+// Re-attach hyperlinks AFTER sorting by reading the URL back from the source records.
+// Called by the writer once final row order is known.
+function _caExportAttachHyperlinksToSheet(ws, rows, urlExtractor) {
+    rows.forEach((row, idx) => {
+        const url = urlExtractor(row);
+        if (!url) return;
+        // INVOICE NO. column is column K (index 10, 0-based)
+        const cellAddr = XLSX.utils.encode_cell({ r: idx + 1, c: 10 });
+        if (!ws[cellAddr]) return;
+        ws[cellAddr].l = { Target: url, Tooltip: 'Open in OneDrive' };
+        // Style the cell to look like a hyperlink (blue, underlined)
+        ws[cellAddr].s = { font: { color: { rgb: '0000FF' }, underline: true } };
+    });
+}
+
+// Main entrypoint — called by the "Generate & Download" button.
+async function generateCaExport() {
+    const statusEl = document.getElementById('caExportStatus');
+    const setStatus = (txt, isErr) => {
+        if (!statusEl) return;
+        statusEl.textContent = txt;
+        statusEl.style.color = isErr ? 'var(--danger)' : 'var(--success)';
+    };
+
+    if (typeof XLSX === 'undefined') {
+        setStatus('Excel library not loaded — please refresh and try again.', true);
+        return;
+    }
+
+    const monthStr = document.getElementById('caExportMonth').value;
+    const scope = document.getElementById('caExportScope').value;
+    if (!monthStr) { setStatus('Please pick a month.', true); return; }
+
+    const range = _caExportComputeRange(monthStr, scope);
+    if (!range) { setStatus('Invalid month value.', true); return; }
+
+    setStatus('Generating…');
+
+    try {
+        // Sales
+        const sales = _caExportBuildSalesRows(range.start, range.end);
+
+        // Payments — we need to keep hyperlink URLs alongside rows because of sort
+        // (re-derive after sort instead of tracking rowIndex through the sort).
+        // For Payments, we attach a synthetic _hyperlinkUrl property on each row,
+        // then strip it before writing the sheet.
+        const paymentsAcc = [];
+        const paymentsHyperlinks = []; // urls aligned to rows by index after sort
+
+        // Build with synthetic _link
+        if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+            contracts.forEach(c => {
+                if (!c || !Array.isArray(c.billingYears)) return;
+                const businessHead = _caExportBusinessHeadForContract(c);
+                c.billingYears.forEach(y => {
+                    if (!y || !Array.isArray(y.apInvoices)) return;
+                    y.apInvoices.forEach(ap => {
+                        if (!ap || !ap.invNo) return;
+                        const dateStr = ap.date || '';
+                        if (!dateStr || dateStr < range.start || dateStr > range.end) return;
+                        const isForeign = (typeof isOemForeign === 'function') ? !!isOemForeign(c.oem) : false;
+                        const inrValue = parseFloat(ap.amount) || 0;
+                        const isUSD = (ap.fx && parseFloat(ap.fx) > 1.5);
+                        const usdValue = isUSD ? inrValue : 0;
+                        const fxRate = isUSD ? (parseFloat(ap.fx) || 0) : 0;
+                        const inrComputed = isUSD ? (usdValue * fxRate) : inrValue;
+                        const gstAmt = (parseFloat(ap.gstAmount) || 0) || (isForeign ? Math.round(inrComputed * 0.18) : 0);
+                        const igst = isForeign ? gstAmt : (parseFloat(ap.igst) || 0);
+                        const cgst = isForeign ? 0 : (parseFloat(ap.cgst) || 0);
+                        const sgst = isForeign ? 0 : (parseFloat(ap.sgst) || 0);
+                        paymentsAcc.push({
+                            _link: ap.link || '',
+                            'SR. NO': 0,
+                            'BUSINESS HEAD': businessHead,
+                            'INVOICE BOOKING DATE': _caExportToDate(ap.bookingDate || ap.date),
+                            'INVOICE DATE': _caExportToDate(ap.date),
+                            'PARTY': c.oem || '',
+                            'PHONE NUMBER': '', 'ADDRESS': '', 'PAN': '', 'GST': '', 'AADHAR': 'N/A',
+                            'INVOICE NO.': ap.invNo || '',
+                            'ITEMS': c.product || '',
+                            'UNIT': 1, 'PRICE/UNIT': 0,
+                            'USD VALUE': usdValue || '',
+                            'USD:INR INVOICE DATE RATE': fxRate || '',
+                            'INR VALUE': inrComputed,
+                            'IGST': igst, 'CGST': cgst, 'SGST': sgst,
+                            'TOTAL GST': igst + cgst + sgst,
+                            'PAYMENT VALUE': inrComputed + igst + cgst + sgst,
+                            'TERMS (DAYS)': '',
+                            'USD:INR PAYMNT DATE RATE': '',
+                            'AMOUNT PAID': ap.payDate ? (inrComputed + igst + cgst + sgst) : 0,
+                            'TDS': 0,
+                            'RCM GST': isForeign ? igst : 0,
+                            'DISCREPANCY': 0,
+                            'DUE DATE': null,
+                            'PAYMENT DATE': _caExportToDate(ap.payDate)
+                        });
+                    });
+                });
+            });
+        }
+        if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) {
+            consultantPayments.forEach(p => {
+                if (!p) return;
+                const dateStr = p.invoiceDate || '';
+                if (!dateStr || dateStr < range.start || dateStr > range.end) return;
+                const con = (typeof getConsultantById === 'function') ? getConsultantById(p.consultantId) : null;
+                const businessHead = _caExportBusinessHeadForConsultant(con);
+                const subtotal = parseFloat(p.subtotal) || 0;
+                const gstAmt = p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0;
+                const cgst = gstAmt / 2; const sgst = gstAmt / 2;
+                paymentsAcc.push({
+                    _link: p.link || '',  // future-compat: if link is added to consultantPaymentBlank
+                    'SR. NO': 0,
+                    'BUSINESS HEAD': businessHead,
+                    'INVOICE BOOKING DATE': _caExportToDate(p.invoiceDate),
+                    'INVOICE DATE': _caExportToDate(p.invoiceDate),
+                    'PARTY': con ? con.name : '(unknown)',
+                    'PHONE NUMBER': con ? (con.contactPhone || '') : '',
+                    'ADDRESS': '',
+                    'PAN': con ? (con.panNumber || '') : '',
+                    'GST': con && con.gstRegistered ? (con.gstNumber || '') : 'N/A',
+                    'AADHAR': 'N/A',
+                    'INVOICE NO.': p.invoiceNumber || '',
+                    'ITEMS': p.periodCovered || '',
+                    'UNIT': 1, 'PRICE/UNIT': 0,
+                    'USD VALUE': '', 'USD:INR INVOICE DATE RATE': '',
+                    'INR VALUE': subtotal,
+                    'IGST': 0, 'CGST': cgst, 'SGST': sgst,
+                    'TOTAL GST': gstAmt,
+                    'PAYMENT VALUE': subtotal + gstAmt,
+                    'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
+                    'USD:INR PAYMNT DATE RATE': '',
+                    'AMOUNT PAID': p.paidDate ? (parseFloat(p.totalAmount) || (subtotal + gstAmt)) : 0,
+                    'TDS': 0, 'RCM GST': 0, 'DISCREPANCY': 0,
+                    'DUE DATE': _caExportToDate(p.dueDate),
+                    'PAYMENT DATE': _caExportToDate(p.paidDate)
+                });
+            });
+        }
+
+        // Sort Payments by invoice date asc, renumber, strip _link into parallel array
+        paymentsAcc.sort((a, b) => {
+            const da = a['INVOICE DATE'] ? a['INVOICE DATE'].getTime() : 0;
+            const db = b['INVOICE DATE'] ? b['INVOICE DATE'].getTime() : 0;
+            return da - db;
+        });
+        const paymentsRows = paymentsAcc.map((r, i) => {
+            paymentsHyperlinks[i] = r._link;
+            const clone = Object.assign({}, r);
+            delete clone._link;
+            clone['SR. NO'] = i + 1;
+            return clone;
+        });
+
+        // Build workbook
+        const wb = XLSX.utils.book_new();
+
+        // Sales sheet — explicit header order
+        const salesHeaders = ['SR. NO','BUSINESS HEAD','INVOICE DATE','CLIENT NAME','PHONE NUMBER',
+            'KYC ADDRESS','DELIVERY ADDRESS','PAN','GST','AADHAR','INVOICE NO.','ITEMS','CTS/QTY',
+            'USD VALUE','USD:INR INVOICE DATE RATE','INR VALUE','IGST','CGST','SGST','TOTAL GST',
+            'INVOICE VALUE','TERMS (DAYS)','DUE DATE','RECEIVED DATE','AMOUNT RECEIVED',
+            'USD:INR PAYMNT RECD DATE RATE','BALANCE DUE','PYMNT MODE','PAYMNT DETAILS'];
+        const wsSales = XLSX.utils.json_to_sheet(sales.rows, { header: salesHeaders });
+        // Attach hyperlinks
+        sales.hyperlinks.forEach(h => {
+            const cellAddr = XLSX.utils.encode_cell({ r: h.rowIndex, c: 10 });
+            if (wsSales[cellAddr]) {
+                wsSales[cellAddr].l = { Target: h.url, Tooltip: 'Open in OneDrive' };
+                wsSales[cellAddr].s = { font: { color: { rgb: '0000FF' }, underline: true } };
+            }
+        });
+        XLSX.utils.book_append_sheet(wb, wsSales, 'Sales');
+
+        // Payments sheet
+        const paymentsHeaders = ['SR. NO','BUSINESS HEAD','INVOICE BOOKING DATE','INVOICE DATE','PARTY',
+            'PHONE NUMBER','ADDRESS','PAN','GST','AADHAR','INVOICE NO.','ITEMS','UNIT','PRICE/UNIT',
+            'USD VALUE','USD:INR INVOICE DATE RATE','INR VALUE','IGST','CGST','SGST','TOTAL GST',
+            'PAYMENT VALUE','TERMS (DAYS)','USD:INR PAYMNT DATE RATE','AMOUNT PAID','TDS','RCM GST',
+            'DISCREPANCY','DUE DATE','PAYMENT DATE'];
+        const wsPayments = XLSX.utils.json_to_sheet(paymentsRows, { header: paymentsHeaders });
+        paymentsHyperlinks.forEach((url, i) => {
+            if (!url) return;
+            const cellAddr = XLSX.utils.encode_cell({ r: i + 1, c: 10 });
+            if (wsPayments[cellAddr]) {
+                wsPayments[cellAddr].l = { Target: url, Tooltip: 'Open in OneDrive' };
+                wsPayments[cellAddr].s = { font: { color: { rgb: '0000FF' }, underline: true } };
+            }
+        });
+        XLSX.utils.book_append_sheet(wb, wsPayments, 'Payments');
+
+        // Filename
+        const [yr, mo] = monthStr.split('-').map(Number);
+        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const fname = scope === 'fytd'
+            ? (() => {
+                // FY label: Apr 2025-Mar 2026 → FY25-26
+                const fyStartYr = (mo >= 4) ? yr : yr - 1;
+                const fyEndYr = fyStartYr + 1;
+                return `Masterstone_FY${String(fyStartYr).slice(-2)}-${String(fyEndYr).slice(-2)}_thru_${monthNames[mo-1]}${yr}.xlsx`;
+            })()
+            : `Masterstone_GST_${monthNames[mo-1]}_${yr}.xlsx`;
+
+        XLSX.writeFile(wb, fname);
+
+        setStatus(`Generated. Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows.`, false);
+    } catch (e) {
+        console.error('CA Export failed:', e);
+        setStatus('Export failed: ' + (e && e.message ? e.message : 'unknown error'), true);
+    }
+}
+
+/* ======================================================================
+   End of 8BC CA Export module
    ====================================================================== */
 
 
