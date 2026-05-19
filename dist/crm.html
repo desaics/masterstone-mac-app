@@ -6324,6 +6324,22 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <div style="margin-top: auto;"></div>
 
+  <!-- 8BD — Live FX rate widget. Click the button to fetch today's USD:INR
+       from a free FX API (via Rust-side HTTP, bypassing WebView CORS).
+       Rate persists across launches in localStorage (ms_live_fx_v1).
+       Used by Payables register + Dashboard "OEM Invoice Awaited" card
+       to compute today's INR equivalent for outstanding USD AP invoices. -->
+  <div id="fxWidget" style="margin-bottom: 14px; padding: 10px 12px; background: var(--hover-bg); border: 1px solid var(--glass-border); border-radius: 6px; font-size: 11px;">
+      <button id="fxFetchBtn" onclick="fetchLiveFxRate()" title="Click to fetch today's USD:INR rate" style="display:flex; align-items:center; gap:6px; width:100%; padding: 6px 8px; background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.3); border-radius: 4px; color: var(--text-main); cursor: pointer; font-size: 11px; font-weight: 600;">
+          <i class="fas fa-coins" id="fxIcon" style="color: var(--accent-cyan);"></i>
+          <span id="fxBtnLabel">FX</span>
+      </button>
+      <div id="fxRateDisplay" style="margin-top: 6px; font-size: 11.5px; color: var(--text-dim); text-align: center; line-height: 1.3;">
+          <span id="fxRateValue">Never fetched</span><br>
+          <span id="fxRateMeta" style="font-size: 10px; opacity: 0.7;"></span>
+      </div>
+  </div>
+
   <div class="nav-item" id="themeToggleBtn" onclick="toggleTheme()" style="margin-bottom: 24px; justify-content:center; background: var(--hover-bg); border: 1px solid var(--glass-border);">
       <i class="fas fa-sun"></i> Light Mode
   </div>
@@ -10479,6 +10495,34 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <!-- Card 2: GST -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-map-marker-alt" style="color:var(--accent-cyan);"></i> Address</div>
+    <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:10px;">Used on the CA Export Payments sheet ADDRESS column for this consultant's payments.</div>
+    <div class="prospect-form-grid-2">
+      <div>
+        <label>Address Line 1</label>
+        <input type="text" id="conMasterAddr1" placeholder="e.g., 12 Sector 5, Industrial Area">
+      </div>
+      <div>
+        <label>Address Line 2</label>
+        <input type="text" id="conMasterAddr2" placeholder="optional">
+      </div>
+      <div>
+        <label>City</label>
+        <input type="text" id="conMasterCity" placeholder="e.g., Mumbai">
+      </div>
+      <div>
+        <label>State</label>
+        <input type="text" id="conMasterState" placeholder="e.g., Maharashtra">
+      </div>
+      <div>
+        <label>Pincode</label>
+        <input type="text" id="conMasterPincode" placeholder="e.g., 400001">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card 3: GST -->
   <div class="card" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-receipt" style="color:var(--success);"></i> GST</div>
     <div class="prospect-form-grid-2">
@@ -37337,6 +37381,15 @@ function bsBuildMoneyRecords() {
                         } else {
                             amtINR = cycleCostINR;
                         }
+                        // 8BD — Live FX repricing for outstanding foreign-OEM USD invoices.
+                        // For unpaid USD invoices, re-value at today's fetched rate so the
+                        // dashboard reflects today's INR obligation. INR-cost cycles untouched.
+                        if (c.costCurrency !== 'INR' && typeof getLiveFxRate === 'function') {
+                            const _liveFx = getLiveFxRate();
+                            if (_liveFx && _liveFx > 0 && inv.amount !== undefined && inv.amount !== null && inv.amount !== '') {
+                                amtINR = (Number(inv.amount) || 0) * _liveFx;
+                            }
+                        }
                         if (amtINR <= 0) return;
                         const invDate = new Date(inv.date);
                         const ageDays = Math.floor((today - invDate) / 86400000);
@@ -37352,8 +37405,15 @@ function bsBuildMoneyRecords() {
                     if (isPaid) return;
                     if (!billDate) return;
                     if (billDate >= fy.start && billDate <= fy.end) {
+                        // 8BD — Live FX repricing for PENDING (invoice-awaited) foreign-OEM cycles.
+                        // Same logic as above: re-value at today's rate when available.
+                        let pendingINR = cycleCostINR;
+                        if ((c.costCurrency || 'USD') !== 'INR' && typeof getLiveFxRate === 'function') {
+                            const _liveFx = getLiveFxRate();
+                            if (_liveFx && _liveFx > 0) pendingINR = cycleCostUSD * _liveFx;
+                        }
                         apToReceive.push({
-                            amount: cycleCostINR, billDate,
+                            amount: pendingINR, billDate,
                             oem: c.oem || '(no OEM)',
                             client: c.client || '',
                             type: 'TOISSUE', cIdx, yIdx
@@ -38704,6 +38764,12 @@ function consultantBlank() {
         //   (Service Vendor → SERVICE, Content → CONTENT)
         category: 'Consultant',
         businessHead: '',
+        // 8BD — Structured address (printed on CA Export Payments sheet ADDRESS column)
+        addressLine1: '',
+        addressLine2: '',
+        city: '',
+        state: '',
+        pincode: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         archived: false
@@ -39304,6 +39370,12 @@ function openConsultantForm(id) {
         // 8BC — Category + Business Head Override
         val('conMasterCategory', c.category || 'Consultant');
         val('conMasterBusinessHead', c.businessHead || '');
+        // 8BD — Structured address
+        val('conMasterAddr1', c.addressLine1 || '');
+        val('conMasterAddr2', c.addressLine2 || '');
+        val('conMasterCity', c.city || '');
+        val('conMasterState', c.state || '');
+        val('conMasterPincode', c.pincode || '');
         const gstCb = document.getElementById('conMasterGstReg');
         if (gstCb) gstCb.checked = !!c.gstRegistered;
         val('conMasterGstNum', c.gstNumber);
@@ -39325,6 +39397,12 @@ function openConsultantForm(id) {
         // 8BC — Category + Business Head Override (reset)
         val('conMasterCategory', 'Consultant');
         val('conMasterBusinessHead', '');
+        // 8BD — Structured address (reset)
+        val('conMasterAddr1', '');
+        val('conMasterAddr2', '');
+        val('conMasterCity', '');
+        val('conMasterState', '');
+        val('conMasterPincode', '');
         const gstCb = document.getElementById('conMasterGstReg');
         if (gstCb) gstCb.checked = false;
         val('conMasterGstNum', '');
@@ -39368,6 +39446,12 @@ function saveConsultantFromForm() {
     // 8BC — Category + Business Head Override
     c.category = (document.getElementById('conMasterCategory').value || 'Consultant');
     c.businessHead = (document.getElementById('conMasterBusinessHead').value || '').trim().toUpperCase();
+    // 8BD — Structured address (used on CA Export Payments sheet for consultant rows)
+    c.addressLine1 = (document.getElementById('conMasterAddr1').value || '').trim();
+    c.addressLine2 = (document.getElementById('conMasterAddr2').value || '').trim();
+    c.city         = (document.getElementById('conMasterCity').value || '').trim();
+    c.state        = (document.getElementById('conMasterState').value || '').trim();
+    c.pincode      = (document.getElementById('conMasterPincode').value || '').trim();
     c.gstRegistered = document.getElementById('conMasterGstReg').checked;
     c.gstNumber = c.gstRegistered ? (document.getElementById('conMasterGstNum').value || '').trim().toUpperCase() : '';
     c.defaultPaymentTermsDays = parseInt(document.getElementById('conMasterTerms').value) || 30;
@@ -39874,6 +39958,20 @@ function _caExportOemPhone(oemName) {
     return meta.contactPhone || '';
 }
 
+// 8BD — Compose a consultant address string from the structured fields.
+// Mirrors _caExportOemAddressString for the consultant-row case on the
+// Payments sheet ADDRESS column. Returns '' if no fields populated.
+function _caExportConsultantAddressString(con) {
+    if (!con) return '';
+    const parts = [];
+    if (con.addressLine1) parts.push(con.addressLine1);
+    if (con.addressLine2) parts.push(con.addressLine2);
+    if (con.city) parts.push(con.city);
+    if (con.state) parts.push(con.state);
+    if (con.pincode) parts.push(con.pincode);
+    return parts.filter(Boolean).join(', ');
+}
+
 // 8BC.1 hotfix — compute INR/USD values + GST for a single AP invoice row.
 // Authoritative FX resolution: ap.fx if set on the record, else getEffectiveFX()
 // from the cycle (same logic the rest of the CRM uses for AP records).
@@ -40177,7 +40275,7 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
                 'INVOICE DATE': _caExportToDate(p.invoiceDate),
                 'PARTY': con ? con.name : '(unknown)',
                 'PHONE NUMBER': con ? (con.contactPhone || '') : '',
-                'ADDRESS': '',
+                'ADDRESS': _caExportConsultantAddressString(con),
                 'PAN': con ? (con.panNumber || '') : '',
                 'GST': con && con.gstRegistered ? (con.gstNumber || '') : 'N/A',
                 'AADHAR': 'N/A',
@@ -40550,7 +40648,7 @@ async function generateCaExport() {
                     'INVOICE DATE': _caExportToDate(p.invoiceDate),
                     'PARTY': con ? con.name : '(unknown)',
                     'PHONE NUMBER': con ? (con.contactPhone || '') : '',
-                    'ADDRESS': '',
+                    'ADDRESS': _caExportConsultantAddressString(con),
                     'PAN': con ? (con.panNumber || '') : '',
                     'GST': con && con.gstRegistered ? (con.gstNumber || '') : 'N/A',
                     'AADHAR': 'N/A',
@@ -40652,10 +40750,237 @@ async function generateCaExport() {
    ====================================================================== */
 
 
+/* ======================================================================
+   Phase 8BD — Live FX rate fetch module
+
+   Fetches today's USD:INR from a free FX API via the Rust-side
+   fetch_fx_rate Tauri command (bypasses WebView CORS restrictions).
+   Tries three APIs in priority order; first success wins. State
+   persists in localStorage as ms_live_fx_v1. Used by Payables register
+   + Dashboard "OEM Invoice Awaited" card to compute today's INR equiv
+   for outstanding foreign-OEM USD invoices.
+   ====================================================================== */
+
+const FX_LS_KEY = 'ms_live_fx_v1';
+
+// In-memory copy of the FX state, kept in sync with localStorage.
+// Shape: { rate: number, fetchedAt: ISOString, source: string } | null
+let liveFxState = null;
+
+// API priority list — try in order, first success wins.
+// Each entry has the URL and a parser function for that API's response shape.
+const FX_API_LIST = [
+    {
+        url: 'https://api.exchangerate.host/latest?base=USD&symbols=INR',
+        source: 'exchangerate.host',
+        parse: (json) => {
+            if (json && json.rates && typeof json.rates.INR === 'number') return json.rates.INR;
+            return null;
+        }
+    },
+    {
+        url: 'https://api.frankfurter.app/latest?from=USD&to=INR',
+        source: 'frankfurter.app',
+        parse: (json) => {
+            if (json && json.rates && typeof json.rates.INR === 'number') return json.rates.INR;
+            return null;
+        }
+    },
+    {
+        url: 'https://open.er-api.com/v6/latest/USD',
+        source: 'open.er-api.com',
+        parse: (json) => {
+            if (json && json.rates && typeof json.rates.INR === 'number') return json.rates.INR;
+            return null;
+        }
+    }
+];
+
+// Load FX state from localStorage on app startup. Updates the widget UI.
+function loadLiveFxState() {
+    try {
+        const raw = localStorage.getItem(FX_LS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed.rate === 'number' && parsed.fetchedAt) {
+                liveFxState = parsed;
+            }
+        }
+    } catch (_) { liveFxState = null; }
+    refreshFxWidgetUI();
+}
+
+// Persist FX state to localStorage.
+function saveLiveFxState() {
+    try {
+        if (liveFxState) localStorage.setItem(FX_LS_KEY, JSON.stringify(liveFxState));
+        else localStorage.removeItem(FX_LS_KEY);
+    } catch (_) {}
+}
+
+// Format a human-readable "fetched X ago" string.
+function _fxFormatAge(iso) {
+    if (!iso) return '';
+    try {
+        const ms = Date.now() - new Date(iso).getTime();
+        if (ms < 0) return 'just now';
+        const sec = Math.floor(ms / 1000);
+        if (sec < 60) return 'just now';
+        const min = Math.floor(sec / 60);
+        if (min < 60) return `${min}m ago`;
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return `${hr}h ago`;
+        const days = Math.floor(hr / 24);
+        if (days < 30) return `${days}d ago`;
+        return `>30d ago`;
+    } catch (_) { return ''; }
+}
+
+// Refresh the sidebar widget visual state.
+// Three tiers based on rate age:
+//   - Fresh (< 24h):   default (cyan accent)
+//   - Stale (24h–7d):  amber tint
+//   - Very stale (>7d, or never): red tint
+function refreshFxWidgetUI() {
+    const btn = document.getElementById('fxFetchBtn');
+    const label = document.getElementById('fxBtnLabel');
+    const valEl = document.getElementById('fxRateValue');
+    const metaEl = document.getElementById('fxRateMeta');
+    const icon = document.getElementById('fxIcon');
+    if (!btn || !valEl || !metaEl) return;
+
+    if (!liveFxState) {
+        // Never fetched
+        valEl.textContent = 'Click to fetch';
+        metaEl.textContent = '';
+        if (label) label.textContent = 'Fetch FX Rate';
+        btn.style.background = 'rgba(239,68,68,0.10)';
+        btn.style.borderColor = 'rgba(239,68,68,0.35)';
+        if (icon) icon.style.color = 'var(--danger)';
+        btn.title = "No FX rate fetched yet. Click to fetch today's USD:INR.";
+        return;
+    }
+
+    const ageMs = Date.now() - new Date(liveFxState.fetchedAt).getTime();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * oneDayMs;
+
+    valEl.textContent = `₹${liveFxState.rate.toFixed(3)}`;
+    metaEl.textContent = _fxFormatAge(liveFxState.fetchedAt);
+    if (label) label.textContent = 'FX';
+
+    if (ageMs > sevenDaysMs) {
+        // Very stale
+        btn.style.background = 'rgba(239,68,68,0.10)';
+        btn.style.borderColor = 'rgba(239,68,68,0.35)';
+        if (icon) icon.style.color = 'var(--danger)';
+        btn.title = `Rate is over 7 days old — click to refresh.\nLast fetched: ${liveFxState.fetchedAt}\nSource: ${liveFxState.source}`;
+    } else if (ageMs > oneDayMs) {
+        // Stale
+        btn.style.background = 'rgba(245,158,11,0.10)';
+        btn.style.borderColor = 'rgba(245,158,11,0.35)';
+        if (icon) icon.style.color = 'var(--warning)';
+        btn.title = `Rate is over 24 hours old — click to refresh.\nLast fetched: ${liveFxState.fetchedAt}\nSource: ${liveFxState.source}`;
+    } else {
+        // Fresh
+        btn.style.background = 'rgba(56,189,248,0.08)';
+        btn.style.borderColor = 'rgba(56,189,248,0.30)';
+        if (icon) icon.style.color = 'var(--accent-cyan)';
+        btn.title = `Rate: ₹${liveFxState.rate.toFixed(3)} per USD\nFetched: ${liveFxState.fetchedAt}\nSource: ${liveFxState.source}\nClick to refresh.`;
+    }
+}
+
+// Get the current live FX rate (or null if never fetched).
+// Public-ish: read by Payables register + Dashboard OEM card.
+function getLiveFxRate() {
+    if (liveFxState && typeof liveFxState.rate === 'number') return liveFxState.rate;
+    return null;
+}
+function getLiveFxStateForUI() {
+    return liveFxState ? { ...liveFxState } : null;
+}
+
+// Try the FX APIs in order. Returns {rate, source} on success or throws.
+async function _tryFetchFxFromApis() {
+    if (typeof window === 'undefined' || !window.__TAURI__) {
+        throw new Error('Tauri runtime not available (not running in the app)');
+    }
+    const invoke = window.__TAURI__.core
+        ? window.__TAURI__.core.invoke
+        : window.__TAURI__.invoke;
+    if (!invoke) throw new Error('Tauri invoke API not found');
+
+    const errors = [];
+    for (const api of FX_API_LIST) {
+        try {
+            const text = await invoke('fetch_fx_rate', { url: api.url });
+            const json = JSON.parse(text);
+            const rate = api.parse(json);
+            if (typeof rate === 'number' && isFinite(rate) && rate > 0) {
+                return { rate, source: api.source };
+            }
+            errors.push(`${api.source}: unrecognised response`);
+        } catch (e) {
+            errors.push(`${api.source}: ${e.toString().slice(0, 100)}`);
+        }
+    }
+    throw new Error('All FX APIs failed:\n' + errors.join('\n'));
+}
+
+// Button click handler — fetch + persist + refresh dependent UIs.
+async function fetchLiveFxRate() {
+    const btn = document.getElementById('fxFetchBtn');
+    const label = document.getElementById('fxBtnLabel');
+    if (btn) btn.disabled = true;
+    if (label) label.textContent = 'Fetching…';
+
+    try {
+        const { rate, source } = await _tryFetchFxFromApis();
+        liveFxState = {
+            rate: Math.round(rate * 1000) / 1000,  // 3-decimal precision
+            fetchedAt: new Date().toISOString(),
+            source: source
+        };
+        saveLiveFxState();
+        refreshFxWidgetUI();
+        // Refresh dependent UI surfaces if their data is currently visible
+        if (typeof renderARApPage === 'function') {
+            try { renderARApPage(); } catch (_) {}
+        }
+        if (typeof renderBusinessSnapshot === 'function') {
+            try { renderBusinessSnapshot(); } catch (_) {}
+        }
+    } catch (e) {
+        console.warn('FX fetch failed:', e);
+        // Show error briefly without wiping existing rate
+        const meta = document.getElementById('fxRateMeta');
+        if (meta) {
+            const original = meta.textContent;
+            meta.textContent = 'fetch failed';
+            meta.style.color = 'var(--danger)';
+            setTimeout(() => {
+                meta.style.color = '';
+                refreshFxWidgetUI();
+            }, 3500);
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+/* ======================================================================
+   End of 8BD Live FX module
+   ====================================================================== */
+
+
 document.addEventListener('DOMContentLoaded', () => {
     // Load saved FY Basis preference BEFORE any rendering so the first paint
     // uses the user's preferred bucketing mode.
     if (typeof loadFyBasis === 'function') loadFyBasis();
+    // 8BD — Load saved FX rate from localStorage and paint the widget.
+    if (typeof loadLiveFxState === 'function') {
+        try { loadLiveFxState(); } catch (e) { console.warn('FX state load:', e); }
+    }
     addClientPORow(); 
     initOemMaster(); 
     initClientMaster();
@@ -41297,6 +41622,26 @@ function renderARApPage() {
     let apToReceive = 0, apToReceiveCount = 0; let apInvoiced = 0, apInvoicedCount = 0; let apOverdue = 0, apOverdueCount = 0; let apSettled = 0, apSettledCount = 0; let dpoSum = 0, dpoCount = 0; let totalFxPl = 0;
     const apAgingBuckets = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apAgingCounts = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apClientBuckets = {};
 
+    // 8BD — Live FX repricing for OUTSTANDING foreign-OEM AP rows.
+    // For unpaid USD-denominated rows, recompute cycleCostINR at today's
+    // fetched rate (if available). Stash the original invoice-date INR in
+    // r._inrAtInvoiceRate for the per-row tooltip. SETTLED rows are never
+    // touched — their settlement INR is final and audit-locked.
+    const _liveFx_apReprice = (typeof getLiveFxRate === 'function') ? getLiveFxRate() : null;
+    if (_liveFx_apReprice && _liveFx_apReprice > 0) {
+        apRecords.forEach(r => {
+            if (r.status === 'SETTLED') return;
+            if ((r.costCurrency || 'USD') === 'INR') return;
+            const usd = Number(r.cycleCostUSD) || 0;
+            if (usd <= 0) return;
+            r._inrAtInvoiceRate = r.cycleCostINR;  // preserve original
+            r._fxAtInvoiceRate  = r.effFX;
+            r.cycleCostINR      = usd * _liveFx_apReprice;
+            r._inrIsLiveFx      = true;
+            r._liveFxRate       = _liveFx_apReprice;
+        });
+    }
+
     apRecords.forEach(r => {
         const key = `${r.client} — ${r.product}`;
         if (!apClientBuckets[key]) apClientBuckets[key] = { client: r.client, product: r.product, notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0, settled: 0 };
@@ -41430,7 +41775,7 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${r.oem ? getOemDisplayHtml(r.oem) : '—'}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleCostINR)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${r.oem ? getOemDisplayHtml(r.oem) : '—'}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(r.cycleCostINR)}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }

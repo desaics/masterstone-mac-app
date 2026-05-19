@@ -1302,6 +1302,49 @@ fn check_file_exists(path: String) -> serde_json::Value {
 }
 
 // ============================================================================
+// Phase 8BD — fetch_fx_rate: HTTP GET against a free FX API to retrieve a
+// current USD:INR rate. Bypasses the WebView CORS restrictions that block
+// direct browser fetches from JavaScript to most public FX APIs.
+//
+// The JS side passes the full URL (so we can try several APIs in priority
+// order and stay agnostic to which one is up); this command just makes the
+// raw request and returns the response body text. Caller parses the JSON
+// per-API since each has a different response shape.
+//
+// 10-second timeout; covers network errors, slow APIs, and offline cases
+// without hanging the UI. Uses rustls (pure Rust TLS) — no system OpenSSL.
+// ============================================================================
+#[tauri::command]
+async fn fetch_fx_rate(url: String) -> Result<String, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Empty URL".to_string());
+    }
+    // Whitelist scheme — only http(s) allowed
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return Err("URL must use http:// or https:// scheme".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Masterstone-CRM/1.0 (FX fetch)")
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+    let response = client
+        .get(trimmed)
+        .send()
+        .await
+        .map_err(|e| format!("network error: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} from server", status.as_u16()));
+    }
+    response
+        .text()
+        .await
+        .map_err(|e| format!("read body: {}", e))
+}
+
+// ============================================================================
 // Phase 8AV — open_pdf_dataurl: open an in-memory PDF in the OS default viewer.
 //
 // Signed invoice PDFs are stored as base64 data URLs inside SQLite (no file
@@ -2897,6 +2940,8 @@ pub fn run() {
             // Phase 8BA: existence probe for the broken-link sweeper —
             // see check_file_exists definition for rationale.
             check_file_exists,
+            // Phase 8BD: HTTP fetch for live USD:INR rate (bypasses WebView CORS).
+            fetch_fx_rate,
             // Phase 8AV: open in-memory PDF (base64 dataUrl) in OS default
             // viewer. Used by signed-invoice paperclip pins — invoice
             // attachments live in SQLite as base64, not on disk, so the

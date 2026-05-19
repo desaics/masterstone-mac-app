@@ -23,3 +23,8 @@ chrono = "0.4"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+# Phase 8BD — reqwest for the FX fetch command (Tauri WebView can't make
+# CORS-restricted browser fetches to free FX APIs; Rust-side HTTP bypasses
+# that). rustls-tls is the pure-Rust TLS implementation — avoids needing
+# system OpenSSL on the build machine (matters for macOS CI runner).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
