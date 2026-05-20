@@ -10352,6 +10352,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <label>Due Date</label>
         <input type="date" id="conPayDueDate">
       </div>
+      <div style="grid-column: 1 / -1;">
+        <label>Invoice OneDrive Link <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional — hyperlinks the invoice no. in the CA Export)</span></label>
+        <input type="text" id="conPayInvoiceLink" placeholder="https://onedrive.live.com/... or paste the share link to the invoice PDF">
+      </div>
     </div>
   </div>
 
@@ -38794,6 +38798,10 @@ function consultantPaymentBlank() {
         paymentReference: '',
         status: 'Pending',
         notes: '',
+        // 8BD.2 — OneDrive link to the consultant's invoice PDF. When set,
+        // the CA Export Payments sheet hyperlinks the INVOICE NO. cell to it
+        // (same treatment as OEM AP invoices).
+        link: '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
     };
@@ -39125,6 +39133,7 @@ function openConsultantPaymentForm(id, presetConsultantId) {
         val('conPayInvoiceDate', rec.invoiceDate);
         val('conPayInvoiceNumber', rec.invoiceNumber);
         val('conPayDueDate', rec.dueDate);
+        val('conPayInvoiceLink', rec.link || '');
         val('conPaySubtotal', rec.subtotal);
         const gstCb = document.getElementById('conPayGstApplicable');
         if (gstCb) gstCb.checked = !!rec.gstApplicable;
@@ -39151,6 +39160,7 @@ function openConsultantPaymentForm(id, presetConsultantId) {
         val('conPayInvoiceDate', '');
         val('conPayInvoiceNumber', '');
         val('conPayDueDate', '');
+        val('conPayInvoiceLink', '');
         val('conPaySubtotal', '0');
         const gstCb = document.getElementById('conPayGstApplicable');
         if (gstCb) {
@@ -39272,6 +39282,7 @@ function saveConsultantPaymentFromForm() {
     rec.invoiceDate = invoiceDate;
     rec.invoiceNumber = (document.getElementById('conPayInvoiceNumber').value || '').trim();
     rec.dueDate = document.getElementById('conPayDueDate').value || '';
+    rec.link = (document.getElementById('conPayInvoiceLink').value || '').trim();
     rec.subtotal = parseFloat(document.getElementById('conPaySubtotal').value) || 0;
     rec.gstApplicable = document.getElementById('conPayGstApplicable').checked;
     rec.gstAmount = rec.gstApplicable ? (parseFloat(document.getElementById('conPayGstAmount').value) || 0) : 0;
@@ -39339,6 +39350,8 @@ function duplicateLastConsultantPayment() {
     document.getElementById('conPayInvoiceDate').value = '';
     document.getElementById('conPayInvoiceNumber').value = '';
     document.getElementById('conPayDueDate').value = '';
+    const _cpLinkEl = document.getElementById('conPayInvoiceLink');
+    if (_cpLinkEl) _cpLinkEl.value = '';
     document.getElementById('conPayStatus').value = 'Pending';
     document.getElementById('conPayPaidDate').value = '';
     document.getElementById('conPayPaidDateWrap').style.display = 'none';
@@ -40301,8 +40314,10 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
                 'PAYMENT DATE': _caExportToDate(p.paidDate)
             };
             rows.push(row);
-            // Consultant payments don't currently have a `link` field, so no hyperlinks here.
-            // If link gets added to consultantPaymentBlank in future, change this to read p.link.
+            // 8BD.2 — consultant payments now carry a `link` (OneDrive URL).
+            // Mirror the OEM AP behaviour so hyperlinks flow if this builder
+            // is ever wired into the live export path.
+            if (p.link) hyperlinks.push({ rowIndex: rows.length, url: p.link });
         });
     }
 
