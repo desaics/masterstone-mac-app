@@ -40739,9 +40739,24 @@ async function generateCaExport() {
         XLSX.writeFile(wb, fname);
 
         setStatus(`Generated. Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows.`, false);
+        // 8BD.1 — clear download confirmation via the standard toast (the inline
+        // status span is easy to miss). Names the file so the user knows what
+        // to look for in their Downloads folder.
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(
+                `<i class="fas fa-check-circle" style="color:var(--success);"></i> CA report downloaded — <strong>${fname}</strong><br><span style="font-size:11.5px; color:var(--text-dim);">Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows · check your Downloads folder</span>`,
+                5000
+            );
+        }
     } catch (e) {
         console.error('CA Export failed:', e);
         setStatus('Export failed: ' + (e && e.message ? e.message : 'unknown error'), true);
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(
+                `<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> CA report export failed<br><span style="font-size:11.5px; color:var(--text-dim);">${(e && e.message ? e.message : 'unknown error')}</span>`,
+                5000
+            );
+        }
     }
 }
 
