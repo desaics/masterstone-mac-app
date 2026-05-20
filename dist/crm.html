@@ -9924,6 +9924,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <select id="arFyFilter" onchange="renderARApPage()" style="width:160px;"><option value="ALL">All Years</option></select>
           <select id="arClientFilter" onchange="renderARApPage()" style="width:180px;"><option value="ALL">All Clients</option></select>
           <div id="fyBasisToggleArAp"></div>
+          <div id="arGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on Receivables figures"><i id="arGstIcon" class="far fa-square"></i> GST (18%)</div>
+          <div id="arTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) deduction on Receivables figures"><i id="arTdsIcon" class="far fa-square"></i> TDS (10%)</div>
           <button class="btn btn-ghost btn-sm" onclick="renderARApPage()"><i class="fas fa-sync-alt"></i> Refresh</button>
         </div>
       </div>
@@ -9964,6 +9966,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           </div>
           <select id="arStatusFilter" onchange="renderARApPage()" style="width:180px;">
             <option value="ALL">All Statuses</option>
+            <option value="ISSUED">Issued</option>
             <option value="PENDING">Pending to Raise</option>
             <option value="INVOICED">Invoiced &amp; Awaiting</option>
             <option value="OVERDUE">Overdue</option>
@@ -17860,6 +17863,9 @@ function loadSettings() {
         syncPair('bsGstIcon', 'bsGstToggle', showGST);
         syncPair('tdsIcon',   'tdsToggle',   showTDS);
         syncPair('bsTdsIcon', 'bsTdsToggle', showTDS);
+        // Phase 8BE — Receivables-tab mirror buttons.
+        syncPair('arGstIcon', 'arGstToggle', showGST);
+        syncPair('arTdsIcon', 'arTdsToggle', showTDS);
     } catch (e) { /* non-fatal — toggles just default to off */ }
 }
 
@@ -17886,6 +17892,11 @@ function toggleTax(type) {
         var bsGstBtn  = document.getElementById('bsGstToggle');
         if (bsGstIcon) bsGstIcon.className = showGST ? 'fas fa-check-square' : 'far fa-square';
         if (bsGstBtn)  bsGstBtn.classList.toggle('active', showGST);
+        // Phase 8BE — Receivables-tab mirror buttons share the global tax state.
+        var arGstIcon = document.getElementById('arGstIcon');
+        var arGstBtn  = document.getElementById('arGstToggle');
+        if (arGstIcon) arGstIcon.className = showGST ? 'fas fa-check-square' : 'far fa-square';
+        if (arGstBtn)  arGstBtn.classList.toggle('active', showGST);
     } else {
         showTDS = !showTDS;
         document.getElementById('tdsIcon').className = showTDS ? 'fas fa-check-square' : 'far fa-square';
@@ -17894,6 +17905,11 @@ function toggleTax(type) {
         var bsTdsBtn  = document.getElementById('bsTdsToggle');
         if (bsTdsIcon) bsTdsIcon.className = showTDS ? 'fas fa-check-square' : 'far fa-square';
         if (bsTdsBtn)  bsTdsBtn.classList.toggle('active', showTDS);
+        // Phase 8BE — Receivables-tab mirror buttons share the global tax state.
+        var arTdsIcon = document.getElementById('arTdsIcon');
+        var arTdsBtn  = document.getElementById('arTdsToggle');
+        if (arTdsIcon) arTdsIcon.className = showTDS ? 'fas fa-check-square' : 'far fa-square';
+        if (arTdsBtn)  arTdsBtn.classList.toggle('active', showTDS);
     }
     // 8U item #11: persist the new toggle state so it survives reloads.
     persistTaxToggleState();
@@ -17902,6 +17918,12 @@ function toggleTax(type) {
     if (typeof renderBusinessSnapshot === 'function') {
         var bsTab = document.getElementById('businessSnapshotTab');
         if (bsTab && !bsTab.classList.contains('hidden')) renderBusinessSnapshot();
+    }
+    // Phase 8BE — re-render the Receivables (Invoices) tab if it's active so the
+    // GST/TDS view applies live to AR stat cards, aging, client-aging, and the register.
+    if (typeof renderARApPage === 'function') {
+        var invTab = document.getElementById('invoicesTab');
+        if (invTab && !invTab.classList.contains('hidden')) renderARApPage();
     }
 }
 
@@ -41323,6 +41345,17 @@ function renderARApPage() {
 
     let arRecords = []; let apRecords = [];
 
+    // Phase 8BE — keep the Receivables GST/TDS toggle buttons in sync with the
+    // global tax state whenever this tab renders (handles arriving from another tab).
+    try {
+        var _arGstIc = document.getElementById('arGstIcon'); var _arGstBt = document.getElementById('arGstToggle');
+        if (_arGstIc) _arGstIc.className = showGST ? 'fas fa-check-square' : 'far fa-square';
+        if (_arGstBt) _arGstBt.classList.toggle('active', !!showGST);
+        var _arTdsIc = document.getElementById('arTdsIcon'); var _arTdsBt = document.getElementById('arTdsToggle');
+        if (_arTdsIc) _arTdsIc.className = showTDS ? 'fas fa-check-square' : 'far fa-square';
+        if (_arTdsBt) _arTdsBt.classList.toggle('active', !!showTDS);
+    } catch (e) { /* non-fatal */ }
+
     contracts.forEach((c, cIdx) => {
         if (!c.billingYears) return;
         // Per-side client gates — evaluated separately for AR and AP rows.
@@ -41548,6 +41581,17 @@ function renderARApPage() {
         }
     });
 
+    // Phase 8BE — GST/TDS view toggle for the whole Receivables tab, mirroring the
+    // Business Snapshot via bsApplyTax (GST = +18%, TDS = -10% on the AR side).
+    // bsApplyTax is linear in amount, so taxing each accumulator equals taxing every
+    // contributing line. Applied to the pre-tax contract-schedule figures only — the
+    // top invk_* KPI cards are tax-inclusive actual-invoice totals and are intentionally
+    // NOT re-taxed. collRate (a ratio) and DSO (days) are tax-invariant, so left as-is.
+    const _arTax = (a) => (typeof bsApplyTax === 'function') ? bsApplyTax(a, 'AR') : (Number(a) || 0);
+    arToRaise = _arTax(arToRaise); arAwaiting = _arTax(arAwaiting); arOverdue = _arTax(arOverdue); arCollected = _arTax(arCollected);
+    Object.keys(arAgingBuckets).forEach(b => { arAgingBuckets[b] = _arTax(arAgingBuckets[b]); });
+    Object.keys(arClientBuckets).forEach(cn => { const _cb = arClientBuckets[cn]; ['notdue','0_30','31_60','61_90','90plus','collected','total'].forEach(k => { _cb[k] = _arTax(_cb[k]); }); });
+
     const dso = dsoCount > 0 ? Math.round(dsoSum / dsoCount) : 0; const collRate = (totalInvoiced + totalCollected) > 0 ? (totalCollected / (totalInvoiced + totalCollected)) * 100 : 0;
     document.getElementById('ar_toRaise').innerText = fmt(arToRaise); document.getElementById('ar_toRaiseCount').innerText = `${arToRaiseCount} cycles`;
     document.getElementById('ar_awaiting').innerText = fmt(arAwaiting); document.getElementById('ar_awaitingCount').innerText = `${arAwaitingCount} invoices`;
@@ -41578,7 +41622,7 @@ function renderARApPage() {
 
     const arRegisterBody = document.getElementById('arRegisterBody');
     if (arRegisterBody) {
-        const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
+        const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'PAID'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
         // 8U item #9: aging filter — only meaningful for invoiced/overdue records
         // (PAID and PENDING aren't in any aging bucket per renderARApPage's own
         // aggregation logic above). Mirrors the aging-card semantics so filter
@@ -41607,7 +41651,7 @@ function renderARApPage() {
                     arTotalEl.style.display = 'none';
                 } else {
                     let arTotal = 0;
-                    filteredAR.forEach(r => { arTotal += (r.cycleRev || 0); });
+                    filteredAR.forEach(r => { arTotal += _arTax(r.cycleRev || 0); });
                     const inrPart = '₹' + Number(arTotal).toLocaleString('en-IN', {maximumFractionDigits: 0});
                     const unit = (arStatusVal === 'PENDING') ? 'cycle' : 'invoice';
                     const label = filteredAR.length === 1 ? unit : (unit + 's');
@@ -41644,7 +41688,7 @@ function renderARApPage() {
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
                 ? `${getClientDisplayHtml(r.client)}<div style="font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; font-style:italic;">via ${pEsc(r.sourcedViaResellerKey)}</div>`
                 : getClientDisplayHtml(r.client);
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${getProductDisplayHtml(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(r.cycleRev)}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${getProductDisplayHtml(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--accent-cyan); font-weight:500; text-decoration:none;" title="Open client invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--accent-cyan); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td>${linkedInvCell}</td><td style="text-align:right; font-weight:600;">${fmt(_arTax(r.cycleRev))}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         arRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
