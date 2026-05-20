@@ -10083,6 +10083,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           </div>
           <select id="apStatusFilter" onchange="renderARApPage()" style="width:180px;">
             <option value="ALL">All Statuses</option>
+            <option value="ISSUED">Issued</option>
             <option value="PENDING">OEM Invoice Awaited</option>
             <option value="INVOICED">Received & Unpaid</option>
             <option value="OVERDUE">Overdue</option>
@@ -41737,7 +41738,7 @@ function renderARApPage() {
         // Bug fix #20b — "Received & Unpaid" filter now also surfaces OVERDUE
         // rows. An overdue invoice is by definition received and unpaid (just
         // past its due date), so it should appear under this filter too.
-        const filteredAP_byStatus = apStatusVal === 'ALL' ? apRecords.slice() : apRecords.filter(r => { if (apStatusVal === 'PENDING') return r.status === 'PENDING'; if (apStatusVal === 'INVOICED') return r.status === 'INVOICED' || r.status === 'OVERDUE'; if (apStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (apStatusVal === 'SETTLED') return r.status === 'SETTLED'; return true; });
+        const filteredAP_byStatus = apStatusVal === 'ALL' ? apRecords.slice() : apRecords.filter(r => { if (apStatusVal === 'PENDING') return r.status === 'PENDING'; if (apStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'SETTLED'; if (apStatusVal === 'INVOICED') return r.status === 'INVOICED' || r.status === 'OVERDUE'; if (apStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (apStatusVal === 'SETTLED') return r.status === 'SETTLED'; return true; });
         // 8U item #9: aging filter on AP — same convention as AR (only meaningful
         // for INVOICED + OVERDUE; SETTLED and PENDING are excluded from buckets).
         const filteredAP = apAgingVal === 'ALL'
