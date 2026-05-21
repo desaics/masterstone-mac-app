@@ -10108,9 +10108,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <thead><tr>
             <th>Due Date</th>
             <th>Client / Contract</th>
-            <th>OEM</th>
-            <th>Cycle</th>
-            <th>Linked PO</th>
             <th>OEM Invoice #</th>
             <th>Invoice Date</th>
             <th style="text-align:right;">Vendor Amt (Orig)</th>
@@ -10119,6 +10116,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <th>Days O/S</th>
             <th>Payment Date</th>
             <th>Status</th>
+            <th>Cycle</th>
+            <th>Linked PO</th>
             <th style="text-align:right;">Action</th>
           </tr></thead>
           <tbody id="apRegisterBody"></tbody>
@@ -28597,6 +28596,13 @@ function autoLinkPOToApCycle(po) {
         target = { cIdx, yIdx: y };
         break;
     }
+    // Phase 8BG #2A — fallback: if every cycle is already invoiced (common in the
+    // transfer-pricing flow where the OEM invoice arrives before the PO is issued),
+    // still link the earliest cycle rather than linking nothing. One PO per contract,
+    // so this is unambiguous.
+    if (!target && contract.billingYears.length > 0) {
+        target = { cIdx, yIdx: 0 };
+    }
     if (target) {
         po.linkedApCycles = [target];
     }
@@ -28605,10 +28611,19 @@ function autoLinkPOToApCycle(po) {
 // Look up the PO (if any) linked to a given AP cycle (cIdx, yIdx)
 function findPOForApCycle(cIdx, yIdx) {
     if (typeof purchaseOrders === 'undefined') return null;
-    return purchaseOrders.find(po => {
+    // Primary: a PO that explicitly links this exact AP cycle.
+    const explicit = purchaseOrders.find(po => {
         if (!Array.isArray(po.linkedApCycles)) return false;
         return po.linkedApCycles.some(l => parseInt(l.cIdx) === parseInt(cIdx) && parseInt(l.yIdx) === parseInt(yIdx));
-    }) || null;
+    });
+    if (explicit) return explicit;
+    // Phase 8BG #2B — fallback: no explicit cycle-level link, but a PO is linked to
+    // this cycle's contract. One OEM PO per contract, so a single contract-linked PO
+    // is unambiguous — surface it. (If somehow >1 PO is linked to the contract, stay
+    // safe and show nothing rather than guess.)
+    const contractPOs = purchaseOrders.filter(po => (po.linkedContractIdx !== undefined && po.linkedContractIdx !== null && po.linkedContractIdx !== '' && parseInt(po.linkedContractIdx) === parseInt(cIdx)));
+    if (contractPOs.length === 1) return contractPOs[0];
+    return null;
 }
 
 /* ============= END PO PDF + AP INTEGRATION ============= */
@@ -41850,9 +41865,9 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${r.oem ? getOemDisplayHtml(r.oem) : '—'}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(r.cycleCostINR)}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(r.cycleCostINR)}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
-        apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="14" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
+        apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
 }
 
