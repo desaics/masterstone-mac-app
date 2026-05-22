@@ -10048,6 +10048,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <select id="apFyFilter" onchange="renderARApPage()" style="width:160px;"><option value="ALL">All Years</option></select>
         <select id="apClientFilter" onchange="renderARApPage()" style="width:180px;"><option value="ALL">All Clients</option></select>
         <select id="apOemFilter" onchange="renderARApPage()" style="width:150px;"><option value="ALL">All OEMs</option></select>
+        <button id="apAnalyticsToggleBtn" class="btn btn-ghost btn-sm" onclick="toggleApAnalytics()" title="Hide the overview & aging cards for a bigger register"><i class="fas fa-chevron-up"></i> Hide analytics</button>
         <button class="btn btn-ghost btn-sm" onclick="renderARApPage()"><i class="fas fa-sync-alt"></i> Refresh</button>
       </div>
     </div>
@@ -10055,6 +10056,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <div id="apSection">
+    <div id="apAnalyticsTop">
     <div class="kpi-section-title">Payables Overview</div>
     <div class="stat-grid-6">
       <div class="stat-card"><div class="stat-label">OEM Invoice Awaited</div><div class="stat-val" id="ap_toReceive" style="color:var(--warning);">₹0</div><div style="font-size:11px;color:var(--text-dim);margin-top:4px;" id="ap_toReceiveCount">0 cycles</div></div>
@@ -10074,6 +10076,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div class="aging-bucket-card" data-aging="61_90" onclick="setApAgingFilter('61_90')" style="border-top:3px solid var(--warning);"><div class="aging-bucket-lbl">61–90 Days</div><div class="aging-bucket-val" id="apAge_61_90" style="color:var(--warning);">₹0</div><div class="aging-bucket-count" id="apAge_61_90Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="90plus" onclick="setApAgingFilter('90plus')" style="border-top:3px solid var(--danger);"><div class="aging-bucket-lbl">90+ Days (Critical)</div><div class="aging-bucket-val" id="apAge_90plus" style="color:var(--danger);">₹0</div><div class="aging-bucket-count" id="apAge_90plusCount">0 invoices</div></div>
     </div>
+    </div><!-- end #apAnalyticsTop -->
 
     <div class="card" style="margin-bottom:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
@@ -10105,7 +10108,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div class="table-scroll-wrap">
         <table id="apRegisterTable">
-          <thead><tr>
+          <thead><tr id="apRegisterHeadRow">
             <th>Due Date</th>
             <th>Client / Contract</th>
             <th>OEM Invoice #</th>
@@ -10125,7 +10128,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:24px; border-top:3px solid var(--warning);">
+    <div id="apAgingClientCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--warning);">
       <h3 style="margin:0 0 16px 0; border:none; padding:0;"><i class="fas fa-table" style="color:var(--warning);"></i> AP Aging by Client / Contract</h3>
       <div class="table-scroll-wrap table-scroll-wrap-sm">
         <table id="apAgingClientTable">
@@ -41340,6 +41343,82 @@ function getInvoiceDueDate(invoiceDateStr, paymentTermsDays) {
     return d;
 }
 
+// Phase 8BH — Payables analytics collapse. Single toggle hides the Payables
+// Overview + AP Aging Analysis block (#apAnalyticsTop) and the AP Aging by
+// Client/Contract card (#apAgingClientCard) to give the AP register more room.
+// State persists in localStorage. Cards still render when hidden (just display:none)
+// so no calculation paths are affected.
+var __MS_AP_ANALYTICS_KEY = 'ms_ap_analytics_collapsed_v1';
+function applyApAnalyticsCollapsed() {
+    var collapsed = false;
+    try { collapsed = localStorage.getItem(__MS_AP_ANALYTICS_KEY) === '1'; } catch (e) {}
+    var top = document.getElementById('apAnalyticsTop');
+    var card = document.getElementById('apAgingClientCard');
+    var btn = document.getElementById('apAnalyticsToggleBtn');
+    if (top)  top.style.display  = collapsed ? 'none' : '';
+    if (card) card.style.display = collapsed ? 'none' : '';
+    if (btn)  btn.innerHTML = collapsed
+        ? '<i class="fas fa-chevron-down"></i> Show analytics'
+        : '<i class="fas fa-chevron-up"></i> Hide analytics';
+}
+function toggleApAnalytics() {
+    var collapsed = false;
+    try { collapsed = localStorage.getItem(__MS_AP_ANALYTICS_KEY) === '1'; } catch (e) {}
+    try { localStorage.setItem(__MS_AP_ANALYTICS_KEY, collapsed ? '0' : '1'); } catch (e) {}
+    applyApAnalyticsCollapsed();
+}
+
+// Phase 8BH — AP register sort. Click a header to sort; click again to flip
+// direction. State persists in localStorage. Sort is applied to the already
+// filtered rows just before render, so it respects the active status/aging filters.
+var __MS_AP_SORT_KEY = 'ms_ap_sort_v1';
+function getApSort() {
+    try { var s = JSON.parse(localStorage.getItem(__MS_AP_SORT_KEY) || 'null'); if (s && s.key) return s; } catch (e) {}
+    return { key: null, dir: 'asc' };
+}
+function setApSort(key) {
+    var cur = getApSort();
+    var dir = (cur.key === key && cur.dir === 'asc') ? 'desc' : 'asc';
+    if (cur.key === key && cur.dir === 'desc') { key = null; dir = 'asc'; } // third click clears
+    try { localStorage.setItem(__MS_AP_SORT_KEY, JSON.stringify({ key: key, dir: dir })); } catch (e) {}
+    renderARApPage();
+}
+// Comparator value extractor for a given sort key on an AP record (r) + its invoice (inv).
+function __apSortVal(r, key) {
+    var inv = (r.invoices && r.invoices[0]) ? r.invoices[0] : {};
+    switch (key) {
+        case 'due':      { var d = r.hasInvoice ? r.invoiceDueDate : r.dueDate; return (d && d.getTime && !isNaN(d.getTime())) ? d.getTime() : 0; }
+        case 'client':   return (String(r.client || '') + ' ' + String(r.product || '')).toLowerCase();
+        case 'oemInv':   return String(inv.invNo || '').toLowerCase();
+        case 'invDate':  return inv.date ? (new Date(inv.date).getTime() || 0) : -Infinity;
+        case 'vendor':   return Number(r.cycleCostUSD || 0);
+        case 'inr':      return Number(r.cycleCostINR || 0);
+        case 'days':     return Number(r.hasInvoice ? (r.invoiceDaysOverdue || 0) : -Infinity);
+        case 'payDate':  return inv.payDate ? (new Date(inv.payDate).getTime() || 0) : -Infinity;
+        case 'status':   return String(r.status || '').toLowerCase();
+        case 'cycle':    return Number(r.cycle || 0);
+        default:         return 0;
+    }
+}
+function __apApplySort(rows) {
+    var s = getApSort();
+    if (!s.key) return rows;
+    var mult = s.dir === 'desc' ? -1 : 1;
+    return rows.slice().sort(function (a, b) {
+        var va = __apSortVal(a, s.key), vb = __apSortVal(b, s.key);
+        if (va < vb) return -1 * mult;
+        if (va > vb) return 1 * mult;
+        return 0;
+    });
+}
+// Build a sortable <th> with arrow indicator.
+function __apTh(key, label, alignRight) {
+    var s = getApSort();
+    var arrow = s.key === key ? (s.dir === 'asc' ? ' <i class="fas fa-caret-up"></i>' : ' <i class="fas fa-caret-down"></i>') : '';
+    var style = 'cursor:pointer; user-select:none;' + (alignRight ? ' text-align:right;' : '');
+    return '<th style="' + style + '" onclick="setApSort(\'' + key + '\')" title="Sort by ' + label + '">' + label + arrow + '</th>';
+}
+
 function renderARApPage() {
     // Bug fix #18 — AR and AP filters are independent. Read each side's
     // FY + Client value separately, then gate AR-record vs AP-record creation
@@ -41794,6 +41873,27 @@ function renderARApPage() {
 
     const apRegisterBody = document.getElementById('apRegisterBody');
     if (apRegisterBody) {
+        // Phase 8BH — build the sortable header (arrows reflect current sort).
+        // FX Rate, Linked PO, and Action are not sortable.
+        try {
+            const apHead = document.getElementById('apRegisterHeadRow');
+            if (apHead && typeof __apTh === 'function') {
+                apHead.innerHTML =
+                    __apTh('due', 'Due Date') +
+                    __apTh('client', 'Client / Contract') +
+                    __apTh('oemInv', 'OEM Invoice #') +
+                    __apTh('invDate', 'Invoice Date') +
+                    __apTh('vendor', 'Vendor Amt (Orig)', true) +
+                    '<th style="text-align:right;">FX Rate</th>' +
+                    __apTh('inr', 'Amount (INR)', true) +
+                    __apTh('days', 'Days O/S') +
+                    __apTh('payDate', 'Payment Date') +
+                    __apTh('status', 'Status') +
+                    __apTh('cycle', 'Cycle') +
+                    '<th>Linked PO</th>' +
+                    '<th style="text-align:right;">Action</th>';
+            }
+        } catch (e) { console.warn('AP sortable header:', e); }
         // Bug fix #20b — "Received & Unpaid" filter now also surfaces OVERDUE
         // rows. An overdue invoice is by definition received and unpaid (just
         // past its due date), so it should appear under this filter too.
@@ -41812,6 +41912,10 @@ function renderARApPage() {
             const tb = (db && !isNaN(db.getTime())) ? db.getTime() : Infinity;
             return ta - tb; // ascending — oldest/most-overdue at the top
         });
+        // Phase 8BH — apply the user's chosen column sort (if any) on top of the
+        // default due-date order. Operates on filteredAP so it respects the active
+        // status/aging filters. Persisted in ms_ap_sort_v1.
+        const filteredAPsorted = (typeof __apApplySort === 'function') ? __apApplySort(filteredAP) : filteredAP;
 
         // 8AA item #3: Compute Selected Total card. Hidden when filter=ALL or no rows.
         // Shows INR total + USD total for any foreign-currency invoices + invoice count.
@@ -41842,7 +41946,7 @@ function renderARApPage() {
             }
         } catch (e) { console.warn('AP filter total render:', e); }
 
-        const rows = filteredAP.map(r => {
+        const rows = filteredAPsorted.map(r => {
             const inv = r.invoices[0] || {};
             const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : r.status === 'OVERDUE' ? '<span class="badge warn">OVERDUE</span>' : '<span class="badge pending">AWAITED</span>';
             let daysDisplay;
@@ -41869,6 +41973,8 @@ function renderARApPage() {
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
+    // Phase 8BH — re-assert the analytics collapse state on every Payables render.
+    if (typeof applyApAnalyticsCollapsed === 'function') applyApAnalyticsCollapsed();
 }
 
 function populateClientSummaryFilters() {
