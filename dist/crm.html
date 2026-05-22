@@ -7215,7 +7215,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 
   <div id="backupTab" class="hidden">
-    <div class="page-header"><h2>System Controls & Data Management</h2></div>
+    <div class="dashboard-sticky-top">
+      <div class="page-header" style="margin-bottom:0;"><h2><i class="fas fa-gear" style="color:var(--accent-cyan); margin-right:8px;"></i> System Controls &amp; Data Management</h2></div>
+    </div>
 
     <!-- #14 Batch 5 — 5-way sub-tab navigation. Each card below has a data-syscat
          attribute that determines which sub-tab it belongs to. The toggle
@@ -10186,8 +10188,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
      Invoice numbers are hyperlinked to OneDrive URLs where the `link` field
      is populated on the source record. -->
 <div id="caExportTab" class="hidden">
-    <div class="tab-header">
-        <h2><i class="fas fa-file-export" style="color:var(--accent-cyan);"></i> CA Export</h2>
+    <div class="dashboard-sticky-top">
+        <div class="page-header" style="margin-bottom:0;">
+            <h2><i class="fas fa-file-export" style="color:var(--accent-cyan); margin-right:8px;"></i> CA Export</h2>
+        </div>
     </div>
     <div class="card" style="max-width:780px;">
         <p style="font-size:13px; color:var(--text-dim); margin-top:0; line-height:1.5;">
@@ -10230,11 +10234,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
 <!-- ===================== Phase 8BK — Documents (Templates) module ===================== -->
 <div id="documentsTab" class="hidden">
-  <div class="page-header" style="margin-bottom:14px;">
-    <h2><i class="fas fa-file-lines" style="color:var(--accent-cyan); margin-right:8px;"></i> Documents</h2>
-    <button class="btn btn-primary" onclick="openTemplateEditor(null)"><i class="fas fa-plus"></i> New Template</button>
+  <div class="dashboard-sticky-top">
+    <div class="page-header" style="margin-bottom:0;">
+      <h2><i class="fas fa-file-lines" style="color:var(--accent-cyan); margin-right:8px;"></i> Documents</h2>
+      <button class="btn btn-primary" onclick="openTemplateEditor(null)"><i class="fas fa-plus"></i> New Template</button>
+    </div>
   </div>
-  <p style="color:var(--text-dim); font-size:13px; margin:-6px 0 18px 0;">Save reusable document templates (authorization letters, declarations, certificates, etc.). Use <code>{{Field Name}}</code> markers for the parts that change each time — you'll be prompted to fill them, then preview and print/save as PDF on your letterhead.</p>
+  <p style="color:var(--text-dim); font-size:13px; margin:0 0 18px 0;">Save reusable document templates (authorization letters, declarations, certificates, etc.). Use <code>{{Field Name}}</code> markers for the parts that change each time — you'll be prompted to fill them, then preview and print/save as PDF on your letterhead.</p>
 
   <!-- LIBRARY LIST -->
   <div id="tplLibraryView">
