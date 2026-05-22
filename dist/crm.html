@@ -10298,6 +10298,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <h3 id="tplFillTitle" style="margin:0; border:none; padding:0;"><i class="fas fa-pen-to-square"></i> Fill Template</h3>
       <div style="display:flex; gap:10px;">
         <button class="btn btn-ghost btn-sm" onclick="closeTemplateFill()"><i class="fas fa-arrow-left"></i> Back to Library</button>
+        <button class="btn btn-primary btn-sm" onclick="printTemplate()"><i class="fas fa-print"></i> Print / Save as PDF</button>
       </div>
     </div>
     <div style="display:grid; grid-template-columns: 380px 1fr; gap:18px; align-items:start;">
@@ -42700,6 +42701,85 @@ function __msUpdateFillPreview() {
     var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
     if (!t) { page.innerHTML = ''; return; }
     page.innerHTML = __msRenderDocHtml(t.body, __msFillValues, true);
+}
+
+// ---- Phase 8BM3 — letterhead output + print/save-as-PDF ---------------
+// Builds the full HTML page for a filled template, mirroring the PO/Proposal/
+// Invoice letterhead pattern: A4 (794x1123), letterhead image at z-index 1 when
+// companyProfile.letterheadDataUrl is set (content layer padded 140/50/50/120 to
+// clear the letterhead), else a plain-margin layout. Output mode (previewMode
+// false) so unfilled fields render blank, not highlighted.
+function __msBuildTemplatePageHtml(t, values) {
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    var docBody = __msRenderDocHtml(t.body, values, false);
+    var hasLetterhead = !!cp.letterheadDataUrl;
+
+    var contentInner =
+        '<div style="font-size:13px; line-height:1.65; color:#1a1a1a;">' + docBody + '</div>';
+
+    var pdfContent;
+    if (hasLetterhead) {
+        pdfContent =
+            '<div id="pdf-content" style="font-family:\'Helvetica Neue\', Helvetica, Arial, sans-serif; color:#1a1a1a; background:#ffffff; position:relative; width:794px; height:1123px; margin:0 auto; box-sizing:border-box; overflow:hidden;">' +
+                '<img src="' + cp.letterheadDataUrl + '" alt="Letterhead" style="position:absolute; top:0; left:0; width:794px; height:1123px; z-index:1; object-fit:cover; pointer-events:none;">' +
+                '<div style="position:relative; z-index:2; padding:140px 50px 60px 120px;">' + contentInner + '</div>' +
+            '</div>';
+    } else {
+        pdfContent =
+            '<div id="pdf-content" style="font-family:\'Helvetica Neue\', Helvetica, Arial, sans-serif; color:#1a1a1a; background:#ffffff; position:relative; width:794px; min-height:1123px; margin:0 auto; box-sizing:border-box; padding:64px 72px;">' + contentInner + '</div>';
+    }
+
+    var titleName = pEsc(t.name || 'Document');
+    return '<!DOCTYPE html>\n<html><head>\n' +
+        '<title>' + titleName + '</title>\n' +
+        '<style>\n' +
+        ':root { --glass-panel:#ffffff; --detail-bg:#f4f3ef; --text-main:#14140f; --text-dim:#74716a; }\n' +
+        '@media print {\n' +
+        '  *, *::before, *::after { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }\n' +
+        '  body { margin:0 !important; padding:0 !important; background:#ffffff !important; }\n' +
+        '  #toolbar { display:none !important; }\n' +
+        '  #container { padding:0 !important; max-width:none !important; margin:0 !important; }\n' +
+        '  #container > div { box-shadow:none !important; }\n' +
+        '  @page { margin:' + (hasLetterhead ? '0' : '12mm') + '; size:A4; }\n' +
+        '}\n' +
+        'body { margin:0; padding:0; background:#e9eaec; font-family:Helvetica, Arial, sans-serif; }\n' +
+        '#toolbar { position:sticky; top:0; z-index:100; background:#1f2937; color:#fff; padding:12px 20px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15); }\n' +
+        '#toolbar button { background:#614b8a; color:#fff; border:none; padding:8px 18px; font-size:13px; border-radius:4px; cursor:pointer; font-weight:600; margin-left:8px; }\n' +
+        '#toolbar button.secondary { background:#4b5563; }\n' +
+        '#container { padding:20px; max-width:900px; margin:0 auto; }\n' +
+        '#container > div { box-shadow:0 2px 10px rgba(0,0,0,0.1); }\n' +
+        '</style>\n</head><body>\n' +
+        '<div id="toolbar">' +
+            '<div style="font-size:14px;">' + titleName + '</div>' +
+            '<div><button class="secondary" onclick="window.close()">Close</button>' +
+            '<button onclick="window.print()">Print / Save as PDF</button></div>' +
+        '</div>\n' +
+        '<div id="container">' + pdfContent + '</div>\n' +
+        '</body></html>';
+}
+
+function printTemplate() {
+    var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
+    if (!t) { __msToast('Template not found', 'error'); return; }
+    // Soft nudge if letterhead isn't configured (still allows plain output).
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    if (!cp.letterheadDataUrl) {
+        if (!confirm('No letterhead image is configured in System Controls, so this will print on a plain page. Continue?')) return;
+    }
+    var fullHtml = __msBuildTemplatePageHtml(t, __msFillValues);
+    var docTitle = (t.name || 'Document');
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    if (hasTauri && typeof printHtml === 'function') {
+        printHtml(fullHtml, docTitle);
+        return;
+    }
+    // Standalone-browser fallbacks (mirror previewPOPDF).
+    if (typeof openPreviewInPageModal === 'function') {
+        openPreviewInPageModal(fullHtml, { headerLabel: 'Save as PDF', subtitle: pEsc(t.name || ''), autoPrint: false });
+        return;
+    }
+    var w = window.open('', '_blank', 'width=900,height=1000');
+    if (w) { w.document.write(fullHtml); w.document.close(); }
 }
 function __msFmtDateShort(ts) {
     if (!ts) return '—';
