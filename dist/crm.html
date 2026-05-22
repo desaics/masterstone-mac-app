@@ -10298,7 +10298,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             • Line starting with <code>- </code> = bullet point<br>
             • <code>{{Field Name}}</code> = a blank you fill in each time<br>
             • <code>{{signature}}</code> = your digital signature/stamp here<br>
-            • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)
+            • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)<br>
+            • <code>{{space}}</code> = a blank line of vertical space (stack for more)
           </div>
         </div>
       </div>
@@ -42624,7 +42625,7 @@ function __msDetectFields(body) {
     while ((m = re.exec(String(body || ''))) !== null) {
         var name = m[1].trim();
         // {{signature}} and {{blank signature}} are reserved placement markers, not fillable fields.
-        if (name.toLowerCase() === 'signature' || name.toLowerCase() === 'blank signature') continue;
+        if (name.toLowerCase() === 'signature' || name.toLowerCase() === 'blank signature' || name.toLowerCase() === 'space') continue;
         if (name && !seen[name.toLowerCase()]) { seen[name.toLowerCase()] = 1; out.push(name); }
     }
     return out;
@@ -42653,6 +42654,9 @@ function __msSubstitute(body, values, previewMode) {
     return String(body || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, function (_, raw) {
         var name = raw.trim();
         var key = name.toLowerCase();
+        // {{space}} — a deliberate vertical gap (~one blank line), stackable.
+        // Emitted as a dedicated sentinel handled by the line parser.
+        if (key === 'space') return '\u0002SP\u0002';
         var val = values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : '';
         if (val !== '' && val != null) return String(val);
         // empty
@@ -42667,13 +42671,30 @@ function __msRenderDocHtml(body, values, previewMode) {
     var i = 0;
     function emitPlaceholders(s) {
         // Replace placeholder sentinels with styled spans (after inline format).
-        return s.replace(/\u0001PH\u0001([^\u0001]*)\u0001\/PH\u0001/g, function (_, name) {
+        s = s.replace(/\u0001PH\u0001([^\u0001]*)\u0001\/PH\u0001/g, function (_, name) {
             return '<span style="background:#fff3bf; color:#8a6d00; border-radius:3px; padding:0 4px; font-style:italic;">' + __msEscHtml(name) + '</span>';
         });
+        // Any inline {{space}} sentinels left inside a paragraph become a small inline gap.
+        s = s.replace(/\u0002SP\u0002/g, '<span style="display:inline-block; width:18px;"></span>');
+        return s;
+    }
+    // A line is a "spacer line" if, with sentinels removed, it's empty but it
+    // did contain at least one {{space}} sentinel. Each sentinel = ~18px gap.
+    function spacerCount(s) {
+        var m = s.match(/\u0002SP\u0002/g);
+        var rest = s.replace(/\u0002SP\u0002/g, '').trim();
+        return rest === '' && m ? m.length : 0;
     }
     while (i < lines.length) {
         var line = lines[i];
         var trimmed = line.trim();
+        // Spacer-only line ({{space}} on its own line, possibly stacked) → gap div.
+        var sc = spacerCount(line);
+        if (sc > 0) {
+            html.push('<div style="height:' + (sc * 18) + 'px;"></div>');
+            i++;
+            continue;
+        }
         // Bullet group
         if (/^-\s+/.test(trimmed)) {
             var items = [];
@@ -42687,9 +42708,9 @@ function __msRenderDocHtml(body, values, previewMode) {
         }
         // Blank line = spacer between paragraphs (skip; paragraphs handle spacing)
         if (trimmed === '') { i++; continue; }
-        // Gather a paragraph: consecutive non-blank, non-bullet lines become <br>-joined
+        // Gather a paragraph: consecutive non-blank, non-bullet, non-spacer lines become <br>-joined
         var paraLines = [];
-        while (i < lines.length && lines[i].trim() !== '' && !/^-\s+/.test(lines[i].trim())) {
+        while (i < lines.length && lines[i].trim() !== '' && !/^-\s+/.test(lines[i].trim()) && spacerCount(lines[i]) === 0) {
             paraLines.push(emitPlaceholders(__msInlineFmt(lines[i])));
             i++;
         }
