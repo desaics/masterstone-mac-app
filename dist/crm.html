@@ -42671,6 +42671,12 @@ function __msSubstitute(body, values, previewMode) {
     });
 }
 function __msRenderDocHtml(body, values, previewMode) {
+    // Joined form (used by the live preview).
+    return __msRenderDocBlocks(body, values, previewMode).join('\n');
+}
+// Returns an ARRAY of top-level block HTML strings (paragraphs, lists, spacers).
+// Used both by __msRenderDocHtml (joined) and by the print paginator (as chunks).
+function __msRenderDocBlocks(body, values, previewMode) {
     var substituted = __msSubstitute(body, values, previewMode);
     var lines = substituted.split(/\r?\n/);
     var html = [];
@@ -42722,7 +42728,7 @@ function __msRenderDocHtml(body, values, previewMode) {
         }
         html.push('<p style="margin:0 0 12px 0;">' + paraLines.join('<br>') + '</p>');
     }
-    return html.join('\n');
+    return html;
 }
 
 // ---- Phase 8BN — signature & stamp block ------------------------------
@@ -42794,6 +42800,33 @@ function __msRenderFullDoc(body, values, previewMode, includeSig, includeStamp) 
         return before + sigBlock + after;
     }
     return __msRenderDocHtml(bodyStr, values, previewMode) + sigBlock;
+}
+
+// Phase 8BR — chunked variant for the print paginator. Returns an ARRAY of
+// block HTML strings (each becomes a .page-chunk). The signature/stamp (or
+// blank-signature) block is one atomic chunk so it never splits across pages.
+function __msRenderFullDocChunks(body, values, includeSig, includeStamp) {
+    var bodyStr = String(body || '');
+    var blankRe = /\{\{\s*blank\s+signature\s*\}\}/i;
+    if (blankRe.test(bodyStr)) {
+        var bparts = bodyStr.split(blankRe);
+        var chunks = __msRenderDocBlocks(bparts[0], values, false);
+        chunks.push(__msBlankSignatureBlockHtml(false));
+        chunks = chunks.concat(__msRenderDocBlocks(bparts.slice(1).join(''), values, false));
+        return chunks;
+    }
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+    var markerRe = /\{\{\s*signature\s*\}\}/i;
+    if (markerRe.test(bodyStr)) {
+        var parts = bodyStr.split(markerRe);
+        var out = __msRenderDocBlocks(parts[0], values, false);
+        if (sigBlock) out.push(sigBlock);
+        out = out.concat(__msRenderDocBlocks(parts.slice(1).join(''), values, false));
+        return out;
+    }
+    var blocks = __msRenderDocBlocks(bodyStr, values, false);
+    if (sigBlock) blocks.push(sigBlock);
+    return blocks;
 }
 
 // ---- Phase 8BM2 — fill flow ------------------------------------------
@@ -42899,50 +42932,92 @@ function __msBuildTemplatePageHtml(t, values) {
     var stampEl = document.getElementById('tplIncludeStamp');
     var includeSig = sigEl ? sigEl.checked : true;
     var includeStamp = stampEl ? stampEl.checked : true;
-    var docBody = __msRenderFullDoc(t.body, values, false, includeSig, includeStamp);
     var hasLetterhead = !!cp.letterheadDataUrl;
-
-    var contentInner =
-        '<div style="font-size:13px; line-height:1.65; color:#1a1a1a;">' + docBody + '</div>';
-
-    var pdfContent;
-    if (hasLetterhead) {
-        pdfContent =
-            '<div id="pdf-content" style="font-family:\'Helvetica Neue\', Helvetica, Arial, sans-serif; color:#1a1a1a; background:#ffffff; position:relative; width:794px; height:1123px; margin:0 auto; box-sizing:border-box; overflow:hidden;">' +
-                '<img src="' + cp.letterheadDataUrl + '" alt="Letterhead" style="position:absolute; top:0; left:0; width:794px; height:1123px; z-index:1; object-fit:cover; pointer-events:none;">' +
-                '<div style="position:relative; z-index:2; padding:140px 50px 60px 120px;">' + contentInner + '</div>' +
-            '</div>';
-    } else {
-        pdfContent =
-            '<div id="pdf-content" style="font-family:\'Helvetica Neue\', Helvetica, Arial, sans-serif; color:#1a1a1a; background:#ffffff; position:relative; width:794px; min-height:1123px; margin:0 auto; box-sizing:border-box; padding:64px 72px;">' + contentInner + '</div>';
-    }
-
+    var lhUrl = cp.letterheadDataUrl || '';
     var titleName = pEsc(t.name || 'Document');
-    return '<!DOCTYPE html>\n<html><head>\n' +
-        '<title>' + titleName + '</title>\n' +
-        '<style>\n' +
-        ':root { --glass-panel:#ffffff; --detail-bg:#f4f3ef; --text-main:#14140f; --text-dim:#74716a; }\n' +
-        '@media print {\n' +
-        '  *, *::before, *::after { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }\n' +
-        '  body { margin:0 !important; padding:0 !important; background:#ffffff !important; }\n' +
-        '  #toolbar { display:none !important; }\n' +
-        '  #container { padding:0 !important; max-width:none !important; margin:0 !important; }\n' +
-        '  #container > div { box-shadow:none !important; }\n' +
-        '  @page { margin:' + (hasLetterhead ? '0' : '12mm') + '; size:A4; }\n' +
-        '}\n' +
-        'body { margin:0; padding:0; background:#e9eaec; font-family:Helvetica, Arial, sans-serif; }\n' +
+
+    // Phase 8BR — proposal-style JS pagination (the 8S/8T technique). Content is
+    // emitted as discrete .page-chunk blocks; an inline paginator fills A4 pages
+    // one at a time, repeating the letterhead on every page, so long documents
+    // (e.g. with the signature/stamp block) flow onto extra pages instead of
+    // being clipped by a fixed-height single page.
+    var chunks = __msRenderFullDocChunks(t.body, values, includeSig, includeStamp);
+    var sourceChunks = chunks.map(function (c) {
+        return '<div class="page-chunk">' + c + '</div>';
+    }).join('\n');
+
+    // Content padding: with letterhead, clear the header/footer art; without, normal margins.
+    var contentPad = hasLetterhead ? '36mm 18mm 24mm 32mm' : '18mm 18mm 18mm 18mm';
+
+    var css =
+        '* { -webkit-print-color-adjust:exact; print-color-adjust:exact; box-sizing:border-box; }\n' +
+        'html, body { margin:0; padding:0; }\n' +
+        'body { font-family:\'Helvetica Neue\', Helvetica, Arial, sans-serif; color:#1a1a1a; font-size:13px; line-height:1.6; background:#e9eaec; }\n' +
         '#toolbar { position:sticky; top:0; z-index:100; background:#1f2937; color:#fff; padding:12px 20px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15); }\n' +
         '#toolbar button { background:#614b8a; color:#fff; border:none; padding:8px 18px; font-size:13px; border-radius:4px; cursor:pointer; font-weight:600; margin-left:8px; }\n' +
         '#toolbar button.secondary { background:#4b5563; }\n' +
-        '#container { padding:20px; max-width:900px; margin:0 auto; }\n' +
-        '#container > div { box-shadow:0 2px 10px rgba(0,0,0,0.1); }\n' +
-        '</style>\n</head><body>\n' +
+        '#ms-doc-source { display:none; }\n' +
+        '.ms-doc-page { position:relative; width:210mm; height:297mm; overflow:hidden; page-break-after:always; background:#fff; }\n' +
+        '.ms-doc-page:last-child { page-break-after:auto; }\n' +
+        '.ms-doc-page-letterhead { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:fill; z-index:0; pointer-events:none; user-select:none; }\n' +
+        '.ms-doc-page-content { position:relative; z-index:1; padding:' + contentPad + '; }\n' +
+        '.page-chunk { margin:0; }\n' +
+        '@media screen {\n' +
+        '  #ms-doc-pages { padding:20px 0; }\n' +
+        '  .ms-doc-page { margin:0 auto 14px auto; box-shadow:0 2px 12px rgba(0,0,0,0.15); }\n' +
+        '}\n' +
+        '@media print {\n' +
+        '  @page { size:A4; margin:0; }\n' +
+        '  body { background:#fff; }\n' +
+        '  #toolbar { display:none !important; }\n' +
+        '  .ms-doc-page { margin:0; box-shadow:none; }\n' +
+        '}\n';
+
+    var lhImgTag = hasLetterhead ? '<img id="ms-doc-letterhead-src" src="' + lhUrl + '" alt="" style="display:none;">' : '';
+
+    var script =
+        '(function(){\n' +
+        '  var PAGE_HEIGHT_PX = 1115;\n' +
+        '  function paginate(){\n' +
+        '    var source = document.getElementById("ms-doc-source");\n' +
+        '    var container = document.getElementById("ms-doc-pages");\n' +
+        '    var lhEl = document.getElementById("ms-doc-letterhead-src");\n' +
+        '    if (!source || !container) return;\n' +
+        '    var lhUrl = lhEl ? lhEl.src : "";\n' +
+        '    container.innerHTML = "";\n' +
+        '    var chunks = [];\n' +
+        '    var node = source.firstElementChild;\n' +
+        '    while (node) { if (node.classList && node.classList.contains("page-chunk")) chunks.push(node); node = node.nextElementSibling; }\n' +
+        '    if (chunks.length === 0) return;\n' +
+        '    function createPage(){\n' +
+        '      var page = document.createElement("div"); page.className = "ms-doc-page";\n' +
+        '      if (lhUrl) { var img = document.createElement("img"); img.className = "ms-doc-page-letterhead"; img.src = lhUrl; img.alt = ""; page.appendChild(img); }\n' +
+        '      var content = document.createElement("div"); content.className = "ms-doc-page-content"; page.appendChild(content);\n' +
+        '      container.appendChild(page); return { page: page, content: content };\n' +
+        '    }\n' +
+        '    var current = createPage();\n' +
+        '    for (var i = 0; i < chunks.length; i++) {\n' +
+        '      var clone = chunks[i].cloneNode(true); current.content.appendChild(clone);\n' +
+        '      if (current.content.scrollHeight > PAGE_HEIGHT_PX) {\n' +
+        '        if (current.content.children.length > 1) { current.content.removeChild(clone); current = createPage(); current.content.appendChild(clone); }\n' +
+        '      }\n' +
+        '    }\n' +
+        '  }\n' +
+        '  if (document.readyState === "complete") paginate(); else window.addEventListener("load", paginate);\n' +
+        '  window.addEventListener("beforeprint", paginate);\n' +
+        '})();\n';
+
+    return '<!DOCTYPE html>\n<html><head>\n<meta charset="utf-8">\n<title>' + titleName + '</title>\n' +
+        '<style>\n' + css + '</style>\n</head><body>\n' +
         '<div id="toolbar">' +
             '<div style="font-size:14px;">' + titleName + '</div>' +
             '<div><button class="secondary" onclick="window.close()">Close</button>' +
             '<button onclick="window.print()">Print / Save as PDF</button></div>' +
         '</div>\n' +
-        '<div id="container">' + pdfContent + '</div>\n' +
+        lhImgTag +
+        '<div id="ms-doc-source">\n' + sourceChunks + '\n</div>\n' +
+        '<div id="ms-doc-pages"></div>\n' +
+        '<scr' + 'ipt>' + script + '<' + '/scr' + 'ipt>\n' +
         '</body></html>';
 }
 
