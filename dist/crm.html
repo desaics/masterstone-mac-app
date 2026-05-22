@@ -9926,11 +9926,13 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <div id="fyBasisToggleArAp"></div>
           <div id="arGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on Receivables figures"><i id="arGstIcon" class="far fa-square"></i> GST (18%)</div>
           <div id="arTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) deduction on Receivables figures"><i id="arTdsIcon" class="far fa-square"></i> TDS (10%)</div>
+          <button id="arAnalyticsToggleBtn" class="btn btn-ghost btn-sm" onclick="toggleArAnalytics()" title="Hide the overview & aging cards for a bigger register"><i class="fas fa-chevron-up"></i> Hide analytics</button>
           <button class="btn btn-ghost btn-sm" onclick="renderARApPage()"><i class="fas fa-sync-alt"></i> Refresh</button>
         </div>
       </div>
     </div>
   <div id="arSection">
+    <div id="arAnalyticsTop">
     <div class="kpi-section-title">Receivables Overview</div>
     <div class="stat-grid-6" id="arKpiGrid">
       <div class="stat-card"><div class="stat-label">Invoices to Raise</div><div class="stat-val" id="ar_toRaise" style="color:var(--warning);">₹0</div><div style="font-size:11px;color:var(--text-dim);margin-top:4px;" id="ar_toRaiseCount">0 cycles</div></div>
@@ -9951,6 +9953,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div class="aging-bucket-card" data-aging="61_90" onclick="setArAgingFilter('61_90')" style="border-top:3px solid var(--warning);"><div class="aging-bucket-lbl">61–90 Days</div><div class="aging-bucket-val" id="arAge_61_90" style="color:var(--warning);">₹0</div><div class="aging-bucket-count" id="arAge_61_90Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="90plus" onclick="setArAgingFilter('90plus')" style="border-top:3px solid var(--danger);"><div class="aging-bucket-lbl">90+ Days (Critical)</div><div class="aging-bucket-val" id="arAge_90plus" style="color:var(--danger);">₹0</div><div class="aging-bucket-count" id="arAge_90plusCount">0 invoices</div></div>
     </div>
+    </div><!-- end #arAnalyticsTop -->
 
     <div class="card" style="margin-bottom:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
@@ -9987,7 +9990,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div class="table-scroll-wrap">
         <table id="arRegisterTable">
-          <thead><tr>
+          <thead><tr id="arRegisterHeadRow">
             <th>Due Date</th>
             <th>Client</th>
             <th>Product / OEM</th>
@@ -10006,7 +10009,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:24px; border-top:3px solid var(--accent-cyan);">
+    <div id="arAgingClientCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--accent-cyan);">
       <h3 style="margin:0 0 16px 0; border:none; padding:0;"><i class="fas fa-table" style="color:var(--accent-cyan);"></i> Receivables Aging by Client</h3>
       <div class="table-scroll-wrap table-scroll-wrap-sm">
         <table id="arAgingClientTable">
@@ -41343,6 +41346,80 @@ function getInvoiceDueDate(invoiceDateStr, paymentTermsDays) {
     return d;
 }
 
+// Phase 8BI — Receivables analytics collapse (mirror of the Payables 8BH version).
+// Single toggle hides the Receivables Overview + Aging Analysis block
+// (#arAnalyticsTop) and the Receivables Aging by Client card (#arAgingClientCard).
+// State persists in localStorage. Cards still render when hidden (display:none) so
+// no calculation paths are affected.
+var __MS_AR_ANALYTICS_KEY = 'ms_ar_analytics_collapsed_v1';
+function applyArAnalyticsCollapsed() {
+    var collapsed = false;
+    try { collapsed = localStorage.getItem(__MS_AR_ANALYTICS_KEY) === '1'; } catch (e) {}
+    var top = document.getElementById('arAnalyticsTop');
+    var card = document.getElementById('arAgingClientCard');
+    var btn = document.getElementById('arAnalyticsToggleBtn');
+    if (top)  top.style.display  = collapsed ? 'none' : '';
+    if (card) card.style.display = collapsed ? 'none' : '';
+    if (btn)  btn.innerHTML = collapsed
+        ? '<i class="fas fa-chevron-down"></i> Show analytics'
+        : '<i class="fas fa-chevron-up"></i> Hide analytics';
+}
+function toggleArAnalytics() {
+    var collapsed = false;
+    try { collapsed = localStorage.getItem(__MS_AR_ANALYTICS_KEY) === '1'; } catch (e) {}
+    try { localStorage.setItem(__MS_AR_ANALYTICS_KEY, collapsed ? '0' : '1'); } catch (e) {}
+    applyArAnalyticsCollapsed();
+}
+
+// Phase 8BI — Receivables register sort (mirror of the AP 8BH version).
+var __MS_AR_SORT_KEY = 'ms_ar_sort_v1';
+function getArSort() {
+    try { var s = JSON.parse(localStorage.getItem(__MS_AR_SORT_KEY) || 'null'); if (s && s.key) return s; } catch (e) {}
+    return { key: null, dir: 'asc' };
+}
+function setArSort(key) {
+    var cur = getArSort();
+    var dir = (cur.key === key && cur.dir === 'asc') ? 'desc' : 'asc';
+    if (cur.key === key && cur.dir === 'desc') { key = null; dir = 'asc'; } // third click clears
+    try { localStorage.setItem(__MS_AR_SORT_KEY, JSON.stringify({ key: key, dir: dir })); } catch (e) {}
+    renderARApPage();
+}
+// AR amount sorts on the same taxed value shown in the column, when _arTax exists.
+function __arSortVal(r, key) {
+    var inv = (r.invoices && r.invoices[0]) ? r.invoices[0] : {};
+    var amt = (typeof _arTax === 'function') ? _arTax(r.cycleRev || 0) : (Number(r.cycleRev) || 0);
+    switch (key) {
+        case 'due':      { var d = r.hasInvoice ? r.invoiceDueDate : r.dueDate; return (d && d.getTime && !isNaN(d.getTime())) ? d.getTime() : 0; }
+        case 'client':   return String(r.client || '').toLowerCase();
+        case 'product':  return String(r.product || '').toLowerCase();
+        case 'cycle':    return Number(r.cycle || 0);
+        case 'invNo':    return String(inv.invNo || '').toLowerCase();
+        case 'invDate':  return inv.date ? (new Date(inv.date).getTime() || 0) : -Infinity;
+        case 'inr':      return Number(amt || 0);
+        case 'days':     return Number(r.hasInvoice ? (r.invoiceDaysOverdue || 0) : -Infinity);
+        case 'payDate':  return inv.paidDate ? (new Date(inv.paidDate).getTime() || 0) : -Infinity;
+        case 'status':   return String(r.status || '').toLowerCase();
+        default:         return 0;
+    }
+}
+function __arApplySort(rows) {
+    var s = getArSort();
+    if (!s.key) return rows;
+    var mult = s.dir === 'desc' ? -1 : 1;
+    return rows.slice().sort(function (a, b) {
+        var va = __arSortVal(a, s.key), vb = __arSortVal(b, s.key);
+        if (va < vb) return -1 * mult;
+        if (va > vb) return 1 * mult;
+        return 0;
+    });
+}
+function __arTh(key, label, alignRight) {
+    var s = getArSort();
+    var arrow = s.key === key ? (s.dir === 'asc' ? ' <i class="fas fa-caret-up"></i>' : ' <i class="fas fa-caret-down"></i>') : '';
+    var style = 'cursor:pointer; user-select:none;' + (alignRight ? ' text-align:right;' : '');
+    return '<th style="' + style + '" onclick="setArSort(\'' + key + '\')" title="Sort by ' + label + '">' + label + arrow + '</th>';
+}
+
 // Phase 8BH — Payables analytics collapse. Single toggle hides the Payables
 // Overview + AP Aging Analysis block (#apAnalyticsTop) and the AP Aging by
 // Client/Contract card (#apAgingClientCard) to give the AP register more room.
@@ -41716,6 +41793,26 @@ function renderARApPage() {
 
     const arRegisterBody = document.getElementById('arRegisterBody');
     if (arRegisterBody) {
+        // Phase 8BI — build the sortable AR header (arrows reflect current sort).
+        // Linked Invoice and Action are not sortable.
+        try {
+            const arHead = document.getElementById('arRegisterHeadRow');
+            if (arHead && typeof __arTh === 'function') {
+                arHead.innerHTML =
+                    __arTh('due', 'Due Date') +
+                    __arTh('client', 'Client') +
+                    __arTh('product', 'Product / OEM') +
+                    __arTh('cycle', 'Cycle') +
+                    __arTh('invNo', 'Invoice #') +
+                    __arTh('invDate', 'Invoice Date') +
+                    '<th>Linked Invoice</th>' +
+                    __arTh('inr', 'Amount (INR)', true) +
+                    __arTh('days', 'Days O/S') +
+                    __arTh('payDate', 'Payment Date') +
+                    __arTh('status', 'Status') +
+                    '<th style="text-align:right;">Action</th>';
+            }
+        } catch (e) { console.warn('AR sortable header:', e); }
         const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'PAID'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
         // 8U item #9: aging filter — only meaningful for invoiced/overdue records
         // (PAID and PENDING aren't in any aging bucket per renderARApPage's own
@@ -41733,6 +41830,10 @@ function renderARApPage() {
             const tb = (db && !isNaN(db.getTime())) ? db.getTime() : Infinity;
             return ta - tb; // ascending — oldest/most-overdue at the top
         });
+        // Phase 8BI — apply the user's chosen column sort (if any) on top of the
+        // default due-date order. Operates on filteredAR so it respects the active
+        // status/aging filters. Persisted in ms_ar_sort_v1.
+        const filteredARsorted = (typeof __arApplySort === 'function') ? __arApplySort(filteredAR) : filteredAR;
 
         // Phase 8F item #1: Compute Selected Total card. Hidden when filter=ALL or no rows.
         // AR is INR-only (no foreign-currency split). Unit label adapts to filter:
@@ -41755,7 +41856,7 @@ function renderARApPage() {
             }
         } catch (e) { console.warn('AR filter total render:', e); }
 
-        const rows = filteredAR.map(r => {
+        const rows = filteredARsorted.map(r => {
             const inv = r.invoices[0] || {};
             const statusBadge = r.status === 'PAID' ? '<span class="badge ok">COLLECTED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">INVOICED</span>' : r.status === 'OVERDUE' ? '<span class="badge warn">OVERDUE</span>' : '<span class="badge pending">PENDING</span>';
             let daysDisplay;
@@ -41975,6 +42076,8 @@ function renderARApPage() {
     }
     // Phase 8BH — re-assert the analytics collapse state on every Payables render.
     if (typeof applyApAnalyticsCollapsed === 'function') applyApAnalyticsCollapsed();
+    // Phase 8BI — same for the Receivables analytics collapse.
+    if (typeof applyArAnalyticsCollapsed === 'function') applyArAnalyticsCollapsed();
 }
 
 function populateClientSummaryFilters() {
