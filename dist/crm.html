@@ -7341,7 +7341,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_logoFile" accept="image/png,image/jpeg,image/svg+xml" style="font-size:11px;" onchange="cpHandleLogoUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearLogo()" id="cp_clearLogoBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG / SVG — max 300 KB. Transparent background recommended.</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG / SVG — max 1 MB. Transparent background recommended.</div>
             </div>
             <div>
                 <label>Authorised Signature Image (optional)</label>
@@ -7352,7 +7352,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_signatureFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleSignatureUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearSignature()" id="cp_clearSignatureBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Transparent or var(--glass-panel) background.</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 500 KB. Transparent or var(--glass-panel) background.</div>
             </div>
             <div>
                 <label>Company Stamp Image (optional)</label>
@@ -7363,7 +7363,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_stampFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleStampUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearStamp()" id="cp_clearStampBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 500 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
             </div>
         </div>
 
@@ -7378,7 +7378,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <button class="btn btn-ghost btn-sm" onclick="cpClearLetterhead()" id="cp_clearLetterheadBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
             </div>
             <div style="font-size:10.5px; color:var(--text-dim); margin-top:6px;">
-                <i class="fas fa-info-circle"></i> Upload a <strong>full-page A4 letterhead image</strong> (PNG or JPG — max 800 KB). For best results use A4 portrait at 150-300 DPI. When set, proposal PDFs will render content over this letterhead and the GSTIN/PAN/logo shown at the top of the PDF will be suppressed (since they're expected to be baked into the letterhead).
+                <i class="fas fa-info-circle"></i> Upload a <strong>full-page A4 letterhead image</strong> (PNG or JPG — max 2 MB). For best results use A4 portrait at 150-300 DPI. When set, proposal PDFs will render content over this letterhead and the GSTIN/PAN/logo shown at the top of the PDF will be suppressed (since they're expected to be baked into the letterhead).
                 <br><br>
                 <strong>Tip:</strong> If your letterhead is a Word document or PDF, open it, export as PNG/JPG at A4 size, then upload the exported image here.
             </div>
@@ -11224,7 +11224,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="flex:1;">
           <input type="file" id="irnQrImageFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="handleIrnQrImageUpload(this)">
           <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px; line-height:1.5;">
-            PNG or JPG, ideally 200×200 px or larger. Max 200 KB.
+            PNG or JPG, ideally 200×200 px or larger. Max 500 KB.
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onclick="clearIrnQrImage()" style="margin-top:6px; padding:2px 8px; font-size:10.5px; color:var(--danger);"><i class="fas fa-times"></i> Remove</button>
         </div>
@@ -15709,8 +15709,8 @@ function cpOnGstinInput() {
 function cpHandleLogoUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 300 * 1024) {
-        alert("Logo file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 300 KB.");
+    if (file.size > 1024 * 1024) {
+        alert("Logo file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 1 MB.");
         input.value = '';
         return;
     }
@@ -15736,8 +15736,8 @@ function cpClearLogo() {
 function cpHandleSignatureUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 150 * 1024) {
-        alert("Signature file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 150 KB.");
+    if (file.size > 500 * 1024) {
+        alert("Signature file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
         input.value = '';
         return;
     }
@@ -15766,8 +15766,8 @@ function cpClearSignature() {
 function cpHandleStampUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 200 * 1024) {
-        alert("Stamp file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 200 KB.");
+    if (file.size > 500 * 1024) {
+        alert("Stamp file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
         input.value = '';
         return;
     }
@@ -15807,8 +15807,8 @@ function cpRenderStampPreview() {
 function cpHandleLetterheadUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 800 * 1024) {
-        alert("Letterhead file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 800 KB.\n\nTip: export your letterhead as A4 at 150 DPI (not 600) to keep file size manageable.");
+    if (file.size > 2 * 1024 * 1024) {
+        alert("Letterhead file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 2 MB.\n\nTip: export your letterhead as A4 at 150 DPI (not 600) to keep file size manageable.");
         input.value = '';
         return;
     }
@@ -32385,8 +32385,8 @@ function _renderIrnQrPreview(dataUrl) {
 function handleIrnQrImageUpload(inputEl) {
     if (!inputEl.files || !inputEl.files[0]) return;
     const file = inputEl.files[0];
-    if (file.size > 200 * 1024) {
-        alert("QR image is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 200 KB.");
+    if (file.size > 500 * 1024) {
+        alert("QR image is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
         inputEl.value = '';
         return;
     }
