@@ -42493,6 +42493,18 @@ var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
 var __msEditingTemplateId = null;  // id being edited, or null for new
 
+// Phase 8BL fix — showActionToast lives inside the macAppShim() IIFE and is NOT
+// global, so calling it from these top-level functions threw a ReferenceError
+// that aborted duplicate/delete BEFORE the re-render line (data saved, screen
+// not refreshed until a tab round-trip). This wrapper calls it only if reachable
+// and never throws, so the re-render always runs.
+function __msToast(text, kind) {
+    try {
+        if (typeof showActionToast === 'function') { showActionToast(text, kind); return; }
+        if (typeof window !== 'undefined' && typeof window.showActionToast === 'function') { window.showActionToast(text, kind); return; }
+    } catch (e) { /* never let a toast failure break the action */ }
+}
+
 function __msLoadTemplates() {
     if (__msTemplates !== null) return __msTemplates;
     var arr = [];
@@ -42546,7 +42558,7 @@ function openTemplateEditor(id) {
     var bodyEl = document.getElementById('tplBody');
     if (id) {
         var t = __msLoadTemplates().find(function (x) { return x.id === id; });
-        if (!t) { showActionToast('Template not found', 'error'); return; }
+        if (!t) { __msToast('Template not found', 'error'); return; }
         if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen"></i> Edit Template';
         if (nameEl) nameEl.value = t.name || '';
         if (catEl) catEl.value = t.category || '';
@@ -42586,8 +42598,8 @@ function saveTemplateFromEditor() {
     var name = (nameEl ? nameEl.value : '').trim();
     var category = (catEl ? catEl.value : '').trim();
     var body = bodyEl ? bodyEl.value : '';
-    if (!name) { showActionToast('Please enter a template name', 'error'); if (nameEl) nameEl.focus(); return; }
-    if (!body.trim()) { showActionToast('Please enter the document body', 'error'); if (bodyEl) bodyEl.focus(); return; }
+    if (!name) { __msToast('Please enter a template name', 'error'); if (nameEl) nameEl.focus(); return; }
+    if (!body.trim()) { __msToast('Please enter the document body', 'error'); if (bodyEl) bodyEl.focus(); return; }
     var list = __msLoadTemplates();
     var now = Date.now();
     if (__msEditingTemplateId) {
@@ -42597,7 +42609,7 @@ function saveTemplateFromEditor() {
         list.push({ id: __msTplId(), name: name, category: category, body: body, createdAt: now, updatedAt: now });
     }
     __msPersistTemplates();
-    showActionToast('Template saved', 'success');
+    __msToast('Template saved', 'success');
     showTemplateLibrary();
 }
 function duplicateTemplate(id) {
@@ -42607,13 +42619,8 @@ function duplicateTemplate(id) {
     var now = Date.now();
     list.push({ id: __msTplId(), name: (t.name || 'Template') + ' (Copy)', category: t.category || '', body: t.body || '', createdAt: now, updatedAt: now });
     __msPersistTemplates();
-    showActionToast('Template duplicated', 'success');
-    // Phase 8BL — defer the re-render to the next tick. The inline onclick fires
-    // from inside the <tbody> we overwrite; in WKWebView a synchronous innerHTML
-    // replace during that dispatch can defer the repaint until the next reflow
-    // (which is why a tab round-trip "fixed" it). setTimeout(0) lets the click
-    // unwind first, then renders against a settled DOM.
-    setTimeout(renderTemplateLibrary, 0);
+    __msToast('Template duplicated', 'success');
+    renderTemplateLibrary();
 }
 function deleteTemplate(id) {
     var list = __msLoadTemplates();
@@ -42622,9 +42629,10 @@ function deleteTemplate(id) {
     if (!confirm('Delete template "' + (t.name || '') + '"? This cannot be undone.')) return;
     __msTemplates = list.filter(function (x) { return x.id !== id; });
     __msPersistTemplates();
-    showActionToast('Template deleted', 'success');
-    // Phase 8BL — defer re-render to next tick (see duplicateTemplate note).
-    setTimeout(renderTemplateLibrary, 0);
+    __msToast('Template deleted', 'success');
+    // Phase 8BL — re-render directly (the real cause was a ReferenceError from the
+    // out-of-scope toast aborting before this line; now fixed via __msToast).
+    renderTemplateLibrary();
 }
 
 // ---- Library render --------------------------------------------------
