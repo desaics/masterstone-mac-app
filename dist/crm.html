@@ -7352,6 +7352,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 </div>
                 <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Transparent or var(--glass-panel) background.</div>
             </div>
+            <div>
+                <label>Company Stamp Image (optional)</label>
+                <div class="cp-signature-preview" id="cp_stampPreview">
+                    <span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">No stamp uploaded</span>
+                </div>
+                <div class="cp-file-input-row">
+                    <input type="file" id="cp_stampFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleStampUpload(this)">
+                    <button class="btn btn-ghost btn-sm" onclick="cpClearStamp()" id="cp_clearStampBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
+                </div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
+            </div>
         </div>
 
         <!-- Letterhead (Phase 2 T3.1) -->
@@ -10306,6 +10317,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div class="card" style="margin:0;">
         <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:12px;">Fill in the blanks</div>
         <div id="tplFillForm"></div>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Signature &amp; stamp</div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:6px; cursor:pointer;">
+            <input type="checkbox" id="tplIncludeSignature" checked onchange="__msUpdateFillPreview()"> Include signature
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+            <input type="checkbox" id="tplIncludeStamp" checked onchange="__msUpdateFillPreview()"> Include stamp
+          </label>
+          <div id="tplSigStampHint" style="font-size:10.5px; color:var(--text-dim); margin-top:8px;"></div>
+        </div>
       </div>
       <!-- LIVE PREVIEW -->
       <div class="card" style="margin:0;">
@@ -12771,7 +12792,7 @@ function initCompanyProfile() {
         addressLine1: '', addressLine2: '', city: '', state: '', pincode: '', country: 'India',
         phone: '', email: '', website: '',
         bankName: '', bankBranch: '', bankAccountNumber: '', bankIFSC: '', bankAccountHolder: '',
-        signatoryName: '', signatoryDesignation: '', signatureImageDataUrl: '',
+        signatoryName: '', signatoryDesignation: '', signatureImageDataUrl: '', stampImageDataUrl: '',
         proposalPrefix: 'MS-PROP-', proposalNextNumber: 1001,
         poPrefix: 'MS-PO-', poNextNumber: 1001,
         invoicePrefix: 'MS-INV-', invoiceNextNumber: 1001,
@@ -15477,6 +15498,7 @@ function cpLoadForm() {
     // Logo preview
     cpRenderLogoPreview();
     cpRenderSignaturePreview();
+    cpRenderStampPreview();
     cpRenderLetterheadPreview();
     cpRenderStatusBanner();
     cpIsDirty = false;
@@ -15727,6 +15749,49 @@ function cpClearSignature() {
     if (fileEl) fileEl.value = '';
     cpRenderSignaturePreview();
     cpMarkDirty();
+}
+
+// Phase 8BN — Company Stamp (round stamp image) upload/clear/preview.
+// Stored on companyProfile.stampImageDataUrl, persisting via the same
+// company-profile save + attachment path as signature/logo/letterhead.
+function cpHandleStampUpload(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 200 * 1024) {
+        alert("Stamp file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 200 KB.");
+        input.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        companyProfile.stampImageDataUrl = e.target.result;
+        cpRenderStampPreview();
+        cpMarkDirty();
+    };
+    reader.onerror = () => { alert("Unable to read stamp file."); };
+    reader.readAsDataURL(file);
+}
+
+function cpClearStamp() {
+    if (!confirm("Remove the stamp image?")) return;
+    companyProfile.stampImageDataUrl = '';
+    const fileEl = document.getElementById('cp_stampFile');
+    if (fileEl) fileEl.value = '';
+    cpRenderStampPreview();
+    cpMarkDirty();
+}
+
+function cpRenderStampPreview() {
+    const preview = document.getElementById('cp_stampPreview');
+    const clearBtn = document.getElementById('cp_clearStampBtn');
+    if (!preview) return;
+    if (companyProfile.stampImageDataUrl) {
+        preview.innerHTML = `<img src="${companyProfile.stampImageDataUrl}" alt="Stamp" style="max-height:90px; max-width:90px; object-fit:contain;">`;
+        if (clearBtn) clearBtn.style.display = 'inline-flex';
+    } else {
+        preview.innerHTML = '<span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">No stamp uploaded</span>';
+        if (clearBtn) clearBtn.style.display = 'none';
+    }
 }
 
 // ===== Letterhead upload (Phase 2 T3.1) =====
@@ -42556,6 +42621,8 @@ function __msDetectFields(body) {
     var re = /\{\{\s*([^}]+?)\s*\}\}/g, m;
     while ((m = re.exec(String(body || ''))) !== null) {
         var name = m[1].trim();
+        // {{signature}} is a reserved placement marker, not a fillable field.
+        if (name.toLowerCase() === 'signature') continue;
         if (name && !seen[name.toLowerCase()]) { seen[name.toLowerCase()] = 1; out.push(name); }
     }
     return out;
@@ -42629,6 +42696,49 @@ function __msRenderDocHtml(body, values, previewMode) {
     return html.join('\n');
 }
 
+// ---- Phase 8BN — signature & stamp block ------------------------------
+// Builds the signature + stamp HTML using companyProfile.signatureImageDataUrl
+// and .stampImageDataUrl, gated by the two fill-view checkboxes. forPrint=true
+// uses slightly larger images for the PDF; preview uses the same layout.
+function __msSignatureBlockHtml(includeSig, includeStamp) {
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    var hasSig = includeSig && !!cp.signatureImageDataUrl;
+    var hasStamp = includeStamp && !!cp.stampImageDataUrl;
+    if (!hasSig && !hasStamp) return '';
+    var sigCol = '';
+    if (hasSig) {
+        sigCol =
+            '<img src="' + cp.signatureImageDataUrl + '" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; display:block; margin-bottom:4px;">' +
+            '<div style="border-top:1px solid #1a1a1a; width:180px; padding-top:3px; font-size:12px; color:#1a1a1a;">' +
+                (cp.signatoryName ? __msEscHtml(cp.signatoryName) : '') +
+                (cp.signatoryDesignation ? '<div style="font-size:11px; color:#555;">' + __msEscHtml(cp.signatoryDesignation) + '</div>' : '') +
+            '</div>';
+    }
+    var stampCol = hasStamp
+        ? '<img src="' + cp.stampImageDataUrl + '" alt="Stamp" style="max-height:100px; max-width:100px; object-fit:contain;">'
+        : '';
+    return '<div style="margin-top:36px; display:flex; align-items:flex-end; gap:40px;">' +
+        (sigCol ? '<div>' + sigCol + '</div>' : '') +
+        (stampCol ? '<div>' + stampCol + '</div>' : '') +
+    '</div>';
+}
+
+// Renders the full document (body + signature/stamp). The signature block
+// replaces a {{signature}} marker if present, else appends at the end.
+function __msRenderFullDoc(body, values, previewMode, includeSig, includeStamp) {
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+    var bodyStr = String(body || '');
+    var markerRe = /\{\{\s*signature\s*\}\}/i;
+    if (markerRe.test(bodyStr)) {
+        // Split at the marker, render each part, place the block between.
+        var parts = bodyStr.split(markerRe);
+        var before = __msRenderDocHtml(parts[0], values, previewMode);
+        var after = __msRenderDocHtml(parts.slice(1).join(''), values, previewMode);
+        return before + sigBlock + after;
+    }
+    return __msRenderDocHtml(bodyStr, values, previewMode) + sigBlock;
+}
+
 // ---- Phase 8BM2 — fill flow ------------------------------------------
 var __msFillTemplateId = null;
 var __msFillValues = {};   // keyed by field-name.toLowerCase()
@@ -42700,7 +42810,24 @@ function __msUpdateFillPreview() {
     if (!page) return;
     var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
     if (!t) { page.innerHTML = ''; return; }
-    page.innerHTML = __msRenderDocHtml(t.body, __msFillValues, true);
+    var sigEl = document.getElementById('tplIncludeSignature');
+    var stampEl = document.getElementById('tplIncludeStamp');
+    var includeSig = sigEl ? sigEl.checked : true;
+    var includeStamp = stampEl ? stampEl.checked : true;
+    page.innerHTML = __msRenderFullDoc(t.body, __msFillValues, true, includeSig, includeStamp);
+    __msUpdateSigStampHint();
+}
+// Hint under the checkboxes when the chosen image isn't uploaded yet.
+function __msUpdateSigStampHint() {
+    var hint = document.getElementById('tplSigStampHint');
+    if (!hint) return;
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    var sigEl = document.getElementById('tplIncludeSignature');
+    var stampEl = document.getElementById('tplIncludeStamp');
+    var msgs = [];
+    if (sigEl && sigEl.checked && !cp.signatureImageDataUrl) msgs.push('No signature image uploaded — add one in System Controls.');
+    if (stampEl && stampEl.checked && !cp.stampImageDataUrl) msgs.push('No stamp image uploaded — add one in System Controls.');
+    hint.innerHTML = msgs.length ? '<span style="color:var(--warning);">' + msgs.join('<br>') + '</span>' : '';
 }
 
 // ---- Phase 8BM3 — letterhead output + print/save-as-PDF ---------------
@@ -42711,7 +42838,11 @@ function __msUpdateFillPreview() {
 // false) so unfilled fields render blank, not highlighted.
 function __msBuildTemplatePageHtml(t, values) {
     var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
-    var docBody = __msRenderDocHtml(t.body, values, false);
+    var sigEl = document.getElementById('tplIncludeSignature');
+    var stampEl = document.getElementById('tplIncludeStamp');
+    var includeSig = sigEl ? sigEl.checked : true;
+    var includeStamp = stampEl ? stampEl.checked : true;
+    var docBody = __msRenderFullDoc(t.body, values, false, includeSig, includeStamp);
     var hasLetterhead = !!cp.letterheadDataUrl;
 
     var contentInner =
@@ -43014,6 +43145,7 @@ function __msSeedTemplateData() {
 '**For Masterstone LLP**\n\n' +
 '{{Signatory Name}}\n' +
 'Partner\n\n' +
+'{{signature}}\n\n' +
 'Enclosed:\n' +
 '- Purchase Invoices\n' +
 '- Purchase Orders\n' +
