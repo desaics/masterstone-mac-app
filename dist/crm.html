@@ -4826,7 +4826,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         'ms_pipeline_view_v1': true,
         'ms_proposals_view_v1': true,
         'ms_schema_meta_v1': true,
-        'ms_migration_4A_state_v1': true
+        'ms_migration_4A_state_v1': true,
+        // Phase 8BK — Documents (Templates) module. Routed through the generic
+        // storage_save_setting command (key + value), so it persists to SQLite
+        // and round-trips on boot via storage_load_all with no lib.rs change.
+        'ms_templates_v1': true
     };
 
     // ------------------------------------------------------------------------
@@ -6311,13 +6315,18 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <!-- 8YZ — Consultants module: tracks payments to consultants/freelancers
        who serve across clients. Not PO-driven, not client-linked. -->
   <div class="nav-item" title="Consultants" onclick="showTab('consultantsTab')"><i class="fas fa-user-tie"></i> Consultants</div>
-  <!-- 8BC — CA Export: monthly GST-filing-style Excel for the CA. Two sheets
-       (Sales + Payments), exact column layout matching pre-CRM Master file. -->
-  <div class="nav-item" title="CA Export" onclick="showTab('caExportTab')"><i class="fas fa-file-export"></i> CA Export</div>
   <!-- Bug fix #27 — Cleanup: removed hidden arApTab nav fallback. Original removal in #13 Batch 3B; transitional stub no longer needed. -->
 
   <div class="nav-section-header">Insights</div>
   <div class="nav-item" title="Client Summary" onclick="showTab('clientSummaryTab')"><i class="fas fa-user-circle"></i> Client Summary</div>
+
+  <!-- Phase 8BK — Tools section: utilities that aren't tied to CRM data flow.
+       CA Export moved here from Finance; Documents is the new template module. -->
+  <div class="nav-section-header">Tools</div>
+  <div class="nav-item" title="Documents" onclick="showTab('documentsTab')"><i class="fas fa-file-lines"></i> Documents</div>
+  <!-- 8BC — CA Export: monthly GST-filing-style Excel for the CA. Two sheets
+       (Sales + Payments), exact column layout matching pre-CRM Master file. -->
+  <div class="nav-item" title="CA Export" onclick="showTab('caExportTab')"><i class="fas fa-file-export"></i> CA Export</div>
 
   <div class="nav-section-header">Admin</div>
   <div class="nav-item" title="System Controls" onclick="showTab('backupTab')"><i class="fas fa-cog"></i> System Controls</div>
@@ -10207,6 +10216,83 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     </div>
 </div>
 <!-- ===================== /8BC ===================== -->
+
+<!-- ===================== Phase 8BK — Documents (Templates) module ===================== -->
+<div id="documentsTab" class="hidden">
+  <div class="page-header" style="margin-bottom:14px;">
+    <h2><i class="fas fa-file-lines" style="color:var(--accent-cyan); margin-right:8px;"></i> Documents</h2>
+    <button class="btn btn-primary" onclick="openTemplateEditor(null)"><i class="fas fa-plus"></i> New Template</button>
+  </div>
+  <p style="color:var(--text-dim); font-size:13px; margin:-6px 0 18px 0;">Save reusable document templates (authorization letters, declarations, certificates, etc.). Use <code>{{Field Name}}</code> markers for the parts that change each time — you'll be prompted to fill them, then preview and print/save as PDF on your letterhead.</p>
+
+  <!-- LIBRARY LIST -->
+  <div id="tplLibraryView">
+    <div class="card" style="margin-bottom:24px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open"></i> Template Library</h3>
+        <input id="tplSearch" type="text" placeholder="Search templates…" oninput="renderTemplateLibrary()" style="width:220px; padding:7px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+      </div>
+      <div class="table-scroll-wrap">
+        <table id="tplLibraryTable">
+          <thead><tr>
+            <th>Template Name</th>
+            <th>Category</th>
+            <th>Fields</th>
+            <th>Last Edited</th>
+            <th style="text-align:right;">Actions</th>
+          </tr></thead>
+          <tbody id="tplLibraryBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDITOR (hidden until New/Edit) -->
+  <div id="tplEditorView" style="display:none;">
+    <div class="card" style="margin-bottom:24px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
+        <h3 id="tplEditorTitle" style="margin:0; border:none; padding:0;"><i class="fas fa-pen"></i> New Template</h3>
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-ghost btn-sm" onclick="closeTemplateEditor()"><i class="fas fa-arrow-left"></i> Back to Library</button>
+          <button class="btn btn-primary btn-sm" onclick="saveTemplateFromEditor()"><i class="fas fa-save"></i> Save Template</button>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-bottom:14px;">
+        <div>
+          <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Template Name</label>
+          <input id="tplName" type="text" placeholder="e.g. Authorization Letter" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+        </div>
+        <div>
+          <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Category <span style="opacity:0.6;">(optional)</span></label>
+          <input id="tplCategory" type="text" placeholder="e.g. Customs, Compliance, Certificates" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+        </div>
+      </div>
+
+      <div style="margin-bottom:6px;">
+        <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Document Body</label>
+        <textarea id="tplBody" spellcheck="true" placeholder="Type the document text here. Use {{Field Name}} for parts that change, e.g.:&#10;&#10;Date: {{Date}}&#10;&#10;To,&#10;{{Addressee}}&#10;&#10;**Subject line in bold**&#10;&#10;We hereby authorize…" style="width:100%; min-height:340px; padding:12px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; line-height:1.55; font-family:'SF Mono', Menlo, Consolas, monospace; resize:vertical;" oninput="tplRefreshDetectedFields()"></textarea>
+      </div>
+
+      <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; margin-top:10px;">
+        <div style="flex:1 1 280px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px; padding:10px 14px;">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:6px;">Detected fields</div>
+          <div id="tplDetectedFields" style="font-size:12.5px; color:var(--text-main); line-height:1.7;">None yet — add <code>{{Field Name}}</code> markers in the body.</div>
+        </div>
+        <div style="flex:1 1 280px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px; padding:10px 14px;">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:6px;">Formatting tips</div>
+          <div style="font-size:12px; color:var(--text-dim); line-height:1.7;">
+            • Blank line = new paragraph<br>
+            • <code>**text**</code> = <strong>bold</strong><br>
+            • Line starting with <code>- </code> = bullet point<br>
+            • <code>{{Field Name}}</code> = a blank you fill in each time
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ===================== /Phase 8BK Documents ===================== -->
 
 <div id="consultantsTab" class="hidden">
 
@@ -17958,7 +18044,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -17981,6 +18067,12 @@ function showTab(tab) {
 
     if(tab === 'businessSnapshotTab') {
         if (typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot();
+    }
+
+    // Phase 8BK — Documents (Templates) module: always return to the library
+    // view on tab open, and render it.
+    if (tab === 'documentsTab') {
+        if (typeof showTemplateLibrary === 'function') showTemplateLibrary();
     }
 
     // 8YZ — Consultants tab: render the register sub-tab on open. Resets to
@@ -42387,6 +42479,279 @@ function renderClientSummary() {
 
     // Render expansion-pipeline card (open prospects for this client)
     try { if (typeof renderClientExpansionPipeline === 'function') renderClientExpansionPipeline(selectedClient); } catch (e) { console.warn("Expansion pipeline render:", e); }
+}
+
+// =====================================================================
+// Phase 8BK — Documents (Templates) module
+// Stores reusable document templates in localStorage key ms_templates_v1
+// (settings-routed, persists to SQLite + round-trips on boot, no lib.rs change).
+// Phase 1 = library + create/edit/duplicate/delete. Fill/preview/print land
+// in later phases. Placeholders are written inline as double-brace markers and
+// auto-detected; the user maintains no separate field list.
+// =====================================================================
+var MS_TEMPLATES_KEY = 'ms_templates_v1';
+var __msTemplates = null;          // in-memory cache: array of template objects
+var __msEditingTemplateId = null;  // id being edited, or null for new
+
+function __msLoadTemplates() {
+    if (__msTemplates !== null) return __msTemplates;
+    var arr = [];
+    try {
+        var raw = localStorage.getItem(MS_TEMPLATES_KEY);
+        if (raw) { var p = JSON.parse(raw); if (Array.isArray(p)) arr = p; }
+    } catch (e) { console.warn('templates load:', e); arr = []; }
+    __msTemplates = arr;
+    return __msTemplates;
+}
+function __msPersistTemplates() {
+    try { localStorage.setItem(MS_TEMPLATES_KEY, JSON.stringify(__msTemplates || [])); }
+    catch (e) { console.warn('templates persist:', e); }
+}
+function __msTplId() {
+    return 'tpl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+// Extract unique {{Field}} names from a body string, in first-seen order.
+function __msDetectFields(body) {
+    var out = [], seen = {};
+    var re = /\{\{\s*([^}]+?)\s*\}\}/g, m;
+    while ((m = re.exec(String(body || ''))) !== null) {
+        var name = m[1].trim();
+        if (name && !seen[name.toLowerCase()]) { seen[name.toLowerCase()] = 1; out.push(name); }
+    }
+    return out;
+}
+function __msFmtDateShort(ts) {
+    if (!ts) return '—';
+    try { var d = new Date(ts); if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); }
+    catch (e) { return '—'; }
+}
+
+// ---- View switching --------------------------------------------------
+function showTemplateLibrary() {
+    __msMaybeSeedTemplates();
+    var lib = document.getElementById('tplLibraryView');
+    var ed = document.getElementById('tplEditorView');
+    if (lib) lib.style.display = '';
+    if (ed) ed.style.display = 'none';
+    renderTemplateLibrary();
+}
+function openTemplateEditor(id) {
+    __msEditingTemplateId = id || null;
+    var lib = document.getElementById('tplLibraryView');
+    var ed = document.getElementById('tplEditorView');
+    var titleEl = document.getElementById('tplEditorTitle');
+    var nameEl = document.getElementById('tplName');
+    var catEl = document.getElementById('tplCategory');
+    var bodyEl = document.getElementById('tplBody');
+    if (id) {
+        var t = __msLoadTemplates().find(function (x) { return x.id === id; });
+        if (!t) { showActionToast('Template not found', 'error'); return; }
+        if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen"></i> Edit Template';
+        if (nameEl) nameEl.value = t.name || '';
+        if (catEl) catEl.value = t.category || '';
+        if (bodyEl) bodyEl.value = t.body || '';
+    } else {
+        if (titleEl) titleEl.innerHTML = '<i class="fas fa-plus"></i> New Template';
+        if (nameEl) nameEl.value = '';
+        if (catEl) catEl.value = '';
+        if (bodyEl) bodyEl.value = '';
+    }
+    if (lib) lib.style.display = 'none';
+    if (ed) ed.style.display = '';
+    tplRefreshDetectedFields();
+}
+function closeTemplateEditor() { showTemplateLibrary(); }
+
+// ---- Editor: live field detection -----------------------------------
+function tplRefreshDetectedFields() {
+    var bodyEl = document.getElementById('tplBody');
+    var box = document.getElementById('tplDetectedFields');
+    if (!box) return;
+    var fields = __msDetectFields(bodyEl ? bodyEl.value : '');
+    if (fields.length === 0) {
+        box.innerHTML = 'None yet — add <code>{{Field Name}}</code> markers in the body.';
+        return;
+    }
+    box.innerHTML = fields.map(function (f) {
+        return '<span style="display:inline-block; background:var(--hover-bg); border:1px solid var(--glass-border); border-radius:12px; padding:2px 10px; margin:2px 4px 2px 0; font-size:11.5px;">' + pEsc(f) + '</span>';
+    }).join('');
+}
+
+// ---- Save / duplicate / delete ---------------------------------------
+function saveTemplateFromEditor() {
+    var nameEl = document.getElementById('tplName');
+    var catEl = document.getElementById('tplCategory');
+    var bodyEl = document.getElementById('tplBody');
+    var name = (nameEl ? nameEl.value : '').trim();
+    var category = (catEl ? catEl.value : '').trim();
+    var body = bodyEl ? bodyEl.value : '';
+    if (!name) { showActionToast('Please enter a template name', 'error'); if (nameEl) nameEl.focus(); return; }
+    if (!body.trim()) { showActionToast('Please enter the document body', 'error'); if (bodyEl) bodyEl.focus(); return; }
+    var list = __msLoadTemplates();
+    var now = Date.now();
+    if (__msEditingTemplateId) {
+        var t = list.find(function (x) { return x.id === __msEditingTemplateId; });
+        if (t) { t.name = name; t.category = category; t.body = body; t.updatedAt = now; }
+    } else {
+        list.push({ id: __msTplId(), name: name, category: category, body: body, createdAt: now, updatedAt: now });
+    }
+    __msPersistTemplates();
+    showActionToast('Template saved', 'success');
+    showTemplateLibrary();
+}
+function duplicateTemplate(id) {
+    var list = __msLoadTemplates();
+    var t = list.find(function (x) { return x.id === id; });
+    if (!t) return;
+    var now = Date.now();
+    list.push({ id: __msTplId(), name: (t.name || 'Template') + ' (Copy)', category: t.category || '', body: t.body || '', createdAt: now, updatedAt: now });
+    __msPersistTemplates();
+    showActionToast('Template duplicated', 'success');
+    renderTemplateLibrary();
+}
+function deleteTemplate(id) {
+    var list = __msLoadTemplates();
+    var t = list.find(function (x) { return x.id === id; });
+    if (!t) return;
+    if (!confirm('Delete template "' + (t.name || '') + '"? This cannot be undone.')) return;
+    __msTemplates = list.filter(function (x) { return x.id !== id; });
+    __msPersistTemplates();
+    showActionToast('Template deleted', 'success');
+    renderTemplateLibrary();
+}
+
+// ---- Library render --------------------------------------------------
+function renderTemplateLibrary() {
+    var body = document.getElementById('tplLibraryBody');
+    if (!body) return;
+    var list = __msLoadTemplates().slice();
+    var q = (document.getElementById('tplSearch') || {}).value || '';
+    q = q.trim().toLowerCase();
+    if (q) {
+        list = list.filter(function (t) {
+            return (String(t.name || '').toLowerCase().indexOf(q) !== -1) ||
+                   (String(t.category || '').toLowerCase().indexOf(q) !== -1);
+        });
+    }
+    list.sort(function (a, b) { return String(a.name || '').toLowerCase() < String(b.name || '').toLowerCase() ? -1 : 1; });
+    if (list.length === 0) {
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-dim);">No templates yet. Click <strong>New Template</strong> to create one.</td></tr>';
+        return;
+    }
+    body.innerHTML = list.map(function (t) {
+        var fields = __msDetectFields(t.body);
+        var fieldsLabel = fields.length === 0 ? '<span style="color:var(--text-dim);">none</span>'
+            : '<span title="' + pEsc(fields.join(', ')) + '">' + fields.length + ' field' + (fields.length === 1 ? '' : 's') + '</span>';
+        return '<tr>' +
+            '<td><strong>' + pEsc(t.name || '') + '</strong></td>' +
+            '<td>' + (t.category ? pEsc(t.category) : '<span style="color:var(--text-dim);">—</span>') + '</td>' +
+            '<td>' + fieldsLabel + '</td>' +
+            '<td>' + __msFmtDateShort(t.updatedAt || t.createdAt) + '</td>' +
+            '<td style="text-align:right; white-space:nowrap;">' +
+                '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + t.id + '\')" title="Edit"><i class="fas fa-pen"></i></button> ' +
+                '<button class="btn btn-ghost btn-sm" onclick="duplicateTemplate(\'' + t.id + '\')" title="Duplicate"><i class="fas fa-copy"></i></button> ' +
+                '<button class="btn btn-ghost btn-sm" onclick="deleteTemplate(\'' + t.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>' +
+            '</td>' +
+        '</tr>';
+    }).join('');
+}
+
+// ---- First-run seeding -----------------------------------------------
+// Seeds the four sample templates the first time the module is opened on a
+// store that has never held templates. A sentinel flag prevents re-seeding
+// after the user deletes them all (so deletions stick).
+function __msMaybeSeedTemplates() {
+    var list = __msLoadTemplates();
+    var seeded = false;
+    try { seeded = localStorage.getItem('ms_templates_seeded_v1') === '1'; } catch (e) {}
+    if (seeded || list.length > 0) return;
+    var now = Date.now();
+    __msTemplates = __msSeedTemplateData().map(function (s) {
+        return { id: __msTplId(), name: s.name, category: s.category, body: s.body, createdAt: now, updatedAt: now };
+    });
+    __msPersistTemplates();
+    try { localStorage.setItem('ms_templates_seeded_v1', '1'); } catch (e) {}
+}
+function __msSeedTemplateData() {
+    return [
+        {
+            name: 'Authorization Letter (FedEx KYC)',
+            category: 'Customs',
+            body:
+'Date: {{Date}}\n\n' +
+'To,\n' +
+'FedEx Express Transportation and Supply Chain Services (India) Pvt. Ltd.\n' +
+'Boomerang, Unit 801, 8th Floor, A-Wing\n' +
+'Chandivali Farm Road, Andheri (E)\n' +
+'Mumbai - 400072\n\n' +
+'**Authorization with Know Your Customer document**\n\n' +
+'We hereby authorize FedEx Express Transportation and Supply Chain Services (India) Pvt. Ltd., Federal Express Corporation and their affiliates (together hereinafter "FedEx", which expression shall include their respective holding companies and their customs clearance agents), to:\n\n' +
+'- Act as our authorized courier and/or agent to do all necessary acts on our behalf for customs clearance including filing of documents, declarations and Bills of Entry/ Shipping Bills for clearance of all import and export shipments consigned to or by us from time to time through the courier, express or formal customs clearance mode.\n' +
+'- File documents for import or export customs clearance of shipments based on the declaration and information regarding the shipments provided to FedEx by us or in the absence of the same, the information for import shipments provided to FedEx by the consignors for delivery in India.\n\n' +
+'This authorization shall remain valid until revoked in writing and acknowledged by FedEx in writing and shall cover all our shipments sent by or addressed to our various offices / branches in India. This authorization may be produced and presented before any customs station in India as a formal authorization to your company for customs clearance of our shipments by you or your authorized agents.\n\n' +
+'Our IEC number is {{IEC Number}}.\n\n' +
+'We/ I duly declare that the above document is the true copy and verifiable with original KYC document if called upon by customs / government authorities.\n\n' +
+'Name: {{Authorized Signatory Name}}\n' +
+'Sign/Stamped by Authorized Signatory'
+        },
+        {
+            name: 'Board Resolution (Appointment of Authorised Signatory)',
+            category: 'Compliance',
+            body:
+'**RESOLUTION - APPOINTMENT OF AUTHORISED SIGNATORY**\n\n' +
+'Date: {{Date}}\n\n' +
+'IT WAS NOTED, that {{Signatory Name}} had indicated his willingness to act as authorised signatory of the Company.\n\n' +
+'IT WAS THEREFORE RESOLVED that {{Signatory Name}} be and is hereby appointed as authorised signatory of the Company for all with effect from {{Effective Date}}.\n\n' +
+'FURTHER RESOLVED, that {{Signatory Name}} is, hereby authorized to do and perform any and all such acts, including execution of any and all documents and certificates, as said person shall deem necessary or advisable, to carry out the purposes of the foregoing resolutions and all proceedings (including inspection, adjudication, appeal etc) arising from such SCN No. {{SCN Number}}.\n\n' +
+'_____________________________\n' +
+'{{Partner 1 Name}} – Designated Partner (Director)\n\n' +
+'_____________________________\n' +
+'{{Partner 2 Name}} – Designated Partner (Director)'
+        },
+        {
+            name: 'Installation Certificate (Darktrace)',
+            category: 'Certificates',
+            body:
+'**Installation Certificate for {{Product}}**\n\n' +
+'This is to certify that the {{Product}} Appliance has been successfully installed and the initial configuration has been completed.\n\n' +
+'The licenses for the {{License Name}} have been applied and are valid until {{License Expiry}}. The appliances are functioning as expected. The deployment details are listed below:\n\n' +
+'**Deployment Details**\n\n' +
+'**Master Appliance**\n\n' +
+'- Hostname: {{Master Hostname}}\n' +
+'- IP Address: {{Master IP}}\n' +
+'- Appliance OS Code: {{Master OS Code}}\n' +
+'- Installed On: {{Master Installed On}}\n' +
+'- License Expiry: {{License Expiry}}\n' +
+'- Antigena Network Enabled: {{Antigena Enabled}}\n' +
+'- Antigena Network License Expiry: {{Antigena Expiry}}\n\n' +
+'**Probe Appliance**\n\n' +
+'- Hostname: {{Probe Hostname}}\n' +
+'- IP Address: {{Probe IP}}\n' +
+'- Appliance OS Code: {{Probe OS Code}}\n' +
+'- Installed On: {{Probe Installed On}}\n' +
+'- License Expiry: {{License Expiry}}\n\n' +
+'**Installation Verified On**: {{Verified On}}'
+        },
+        {
+            name: 'Software Implementation Declaration',
+            category: 'Certificates',
+            body:
+'**Software Implementation Declaration**\n\n' +
+'Date: {{Date}}\n\n' +
+'To,\n' +
+'**{{Addressee}}**\n\n' +
+'This is to certify that Masterstone LLP has purchased software through invoice number {{Invoice Numbers}} from {{OEM Name}} and has been successfully implemented at {{End Client}}.\n\n' +
+'Also enclosed with this declaration are the documents confirming the implementation of the software.\n\n' +
+'**For Masterstone LLP**\n\n' +
+'{{Signatory Name}}\n' +
+'Partner\n\n' +
+'Enclosed:\n' +
+'- Purchase Invoices\n' +
+'- Purchase Orders\n' +
+'- Sales Invoices'
+        }
+    ];
 }
 </script>
 </body>
