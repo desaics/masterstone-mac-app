@@ -10296,7 +10296,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             • Blank line = new paragraph<br>
             • <code>**text**</code> = <strong>bold</strong><br>
             • Line starting with <code>- </code> = bullet point<br>
-            • <code>{{Field Name}}</code> = a blank you fill in each time
+            • <code>{{Field Name}}</code> = a blank you fill in each time<br>
+            • <code>{{signature}}</code> = your digital signature/stamp here<br>
+            • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)
           </div>
         </div>
       </div>
@@ -42621,8 +42623,8 @@ function __msDetectFields(body) {
     var re = /\{\{\s*([^}]+?)\s*\}\}/g, m;
     while ((m = re.exec(String(body || ''))) !== null) {
         var name = m[1].trim();
-        // {{signature}} is a reserved placement marker, not a fillable field.
-        if (name.toLowerCase() === 'signature') continue;
+        // {{signature}} and {{blank signature}} are reserved placement markers, not fillable fields.
+        if (name.toLowerCase() === 'signature' || name.toLowerCase() === 'blank signature') continue;
         if (name && !seen[name.toLowerCase()]) { seen[name.toLowerCase()] = 1; out.push(name); }
     }
     return out;
@@ -42700,6 +42702,22 @@ function __msRenderDocHtml(body, values, previewMode) {
 // Builds the signature + stamp HTML using companyProfile.signatureImageDataUrl
 // and .stampImageDataUrl, gated by the two fill-view checkboxes. forPrint=true
 // uses slightly larger images for the PDF; preview uses the same layout.
+// Phase 8BO — blank (manual) signature block: empty space to physically sign,
+// a signature line, and the printed name/designation underneath. No image, no
+// stamp. In preview the gap is hinted with a dashed outline; in print it's blank.
+function __msBlankSignatureBlockHtml(previewMode) {
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    var gapStyle = 'height:70px;' + (previewMode ? ' border:1px dashed #c9b870; border-radius:4px; background:rgba(255,243,191,0.25);' : '');
+    var gapInner = previewMode ? '<span style="font-size:10px; color:#a08a3a; font-style:italic; padding:4px 6px; display:inline-block;">space to sign</span>' : '';
+    return '<div style="margin-top:36px;">' +
+        '<div style="width:200px;' + gapStyle + '">' + gapInner + '</div>' +
+        '<div style="border-top:1px solid #1a1a1a; width:200px; padding-top:3px; margin-top:2px; font-size:12px; color:#1a1a1a;">' +
+            (cp.signatoryName ? __msEscHtml(cp.signatoryName) : '') +
+            (cp.signatoryDesignation ? '<div style="font-size:11px; color:#555;">' + __msEscHtml(cp.signatoryDesignation) + '</div>' : '') +
+        '</div>' +
+    '</div>';
+}
+
 function __msSignatureBlockHtml(includeSig, includeStamp) {
     var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     var hasSig = includeSig && !!cp.signatureImageDataUrl;
@@ -42723,14 +42741,26 @@ function __msSignatureBlockHtml(includeSig, includeStamp) {
     '</div>';
 }
 
-// Renders the full document (body + signature/stamp). The signature block
-// replaces a {{signature}} marker if present, else appends at the end.
+// Renders the full document (body + signature/stamp).
+// Precedence:
+//  - If {{blank signature}} is present, the document is FULLY MANUAL: a blank
+//    sign-here space at that spot, and NO digital signature or stamp anywhere
+//    (the include checkboxes are ignored for this document).
+//  - Else if {{signature}} is present, the digital signature/stamp block renders
+//    at that spot.
+//  - Else the digital block (if any) appends at the end.
 function __msRenderFullDoc(body, values, previewMode, includeSig, includeStamp) {
-    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
     var bodyStr = String(body || '');
+    var blankRe = /\{\{\s*blank\s+signature\s*\}\}/i;
+    if (blankRe.test(bodyStr)) {
+        var bparts = bodyStr.split(blankRe);
+        var bBefore = __msRenderDocHtml(bparts[0], values, previewMode);
+        var bAfter = __msRenderDocHtml(bparts.slice(1).join(''), values, previewMode);
+        return bBefore + __msBlankSignatureBlockHtml(previewMode) + bAfter;
+    }
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
     var markerRe = /\{\{\s*signature\s*\}\}/i;
     if (markerRe.test(bodyStr)) {
-        // Split at the marker, render each part, place the block between.
         var parts = bodyStr.split(markerRe);
         var before = __msRenderDocHtml(parts[0], values, previewMode);
         var after = __msRenderDocHtml(parts.slice(1).join(''), values, previewMode);
