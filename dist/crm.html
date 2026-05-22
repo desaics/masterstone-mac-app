@@ -41813,7 +41813,7 @@ function renderARApPage() {
                     '<th style="text-align:right;">Action</th>';
             }
         } catch (e) { console.warn('AR sortable header:', e); }
-        const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'PAID'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
+        const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'PAID'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED' || r.status === 'OVERDUE'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
         // 8U item #9: aging filter — only meaningful for invoiced/overdue records
         // (PAID and PENDING aren't in any aging bucket per renderARApPage's own
         // aggregation logic above). Mirrors the aging-card semantics so filter
