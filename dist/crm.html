@@ -10291,6 +10291,33 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
     </div>
   </div>
+
+  <!-- FILL & PREVIEW (hidden until "Use") -->
+  <div id="tplFillView" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
+      <h3 id="tplFillTitle" style="margin:0; border:none; padding:0;"><i class="fas fa-pen-to-square"></i> Fill Template</h3>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeTemplateFill()"><i class="fas fa-arrow-left"></i> Back to Library</button>
+      </div>
+    </div>
+    <div style="display:grid; grid-template-columns: 380px 1fr; gap:18px; align-items:start;">
+      <!-- FORM -->
+      <div class="card" style="margin:0;">
+        <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:12px;">Fill in the blanks</div>
+        <div id="tplFillForm"></div>
+      </div>
+      <!-- LIVE PREVIEW -->
+      <div class="card" style="margin:0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle);">Live preview</div>
+          <div style="font-size:11px; color:var(--text-dim);"><i class="fas fa-circle-info"></i> Letterhead &amp; print arrive in the next update</div>
+        </div>
+        <div style="background:#e9eaec; border:1px solid var(--glass-border); border-radius:6px; padding:24px; max-height:70vh; overflow:auto;">
+          <div id="tplPreviewPage" style="background:#ffffff; color:#1a1a1a; width:100%; max-width:720px; margin:0 auto; padding:48px 56px; box-shadow:0 2px 14px rgba(0,0,0,0.18); font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:14px; line-height:1.6; min-height:400px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 <!-- ===================== /Phase 8BK Documents ===================== -->
 
@@ -42532,6 +42559,148 @@ function __msDetectFields(body) {
     }
     return out;
 }
+
+// ---- Phase 8BM2 — document renderer ----------------------------------
+// Converts a template body + field values into clean HTML.
+// Conventions: blank line = paragraph break; line starting with "- " = bullet;
+// **text** = bold. {{Field}} → its value, or a highlighted placeholder when the
+// value is empty (only highlighted in preview mode). Output-ready: Phase 3 reuses
+// this to build the letterhead print page (with previewMode=false).
+function __msEscHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+// Inline formatting: escape, then apply **bold**.
+function __msInlineFmt(text) {
+    var esc = __msEscHtml(text);
+    // **bold** — non-greedy, no nesting
+    esc = esc.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+    return esc;
+}
+// Substitute {{Field}} markers with values. In previewMode, empty values render
+// as a visible highlighted chip; in output mode, empty values render as blank.
+function __msSubstitute(body, values, previewMode) {
+    return String(body || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, function (_, raw) {
+        var name = raw.trim();
+        var key = name.toLowerCase();
+        var val = values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : '';
+        if (val !== '' && val != null) return String(val);
+        // empty
+        if (previewMode) return '\u0001PH\u0001' + name + '\u0001/PH\u0001'; // sentinel, styled after escape
+        return '';
+    });
+}
+function __msRenderDocHtml(body, values, previewMode) {
+    var substituted = __msSubstitute(body, values, previewMode);
+    var lines = substituted.split(/\r?\n/);
+    var html = [];
+    var i = 0;
+    function emitPlaceholders(s) {
+        // Replace placeholder sentinels with styled spans (after inline format).
+        return s.replace(/\u0001PH\u0001([^\u0001]*)\u0001\/PH\u0001/g, function (_, name) {
+            return '<span style="background:#fff3bf; color:#8a6d00; border-radius:3px; padding:0 4px; font-style:italic;">' + __msEscHtml(name) + '</span>';
+        });
+    }
+    while (i < lines.length) {
+        var line = lines[i];
+        var trimmed = line.trim();
+        // Bullet group
+        if (/^-\s+/.test(trimmed)) {
+            var items = [];
+            while (i < lines.length && /^-\s+/.test(lines[i].trim())) {
+                var itemText = lines[i].trim().replace(/^-\s+/, '');
+                items.push('<li style="margin:2px 0;">' + emitPlaceholders(__msInlineFmt(itemText)) + '</li>');
+                i++;
+            }
+            html.push('<ul style="margin:8px 0 8px 22px; padding:0;">' + items.join('') + '</ul>');
+            continue;
+        }
+        // Blank line = spacer between paragraphs (skip; paragraphs handle spacing)
+        if (trimmed === '') { i++; continue; }
+        // Gather a paragraph: consecutive non-blank, non-bullet lines become <br>-joined
+        var paraLines = [];
+        while (i < lines.length && lines[i].trim() !== '' && !/^-\s+/.test(lines[i].trim())) {
+            paraLines.push(emitPlaceholders(__msInlineFmt(lines[i])));
+            i++;
+        }
+        html.push('<p style="margin:0 0 12px 0;">' + paraLines.join('<br>') + '</p>');
+    }
+    return html.join('\n');
+}
+
+// ---- Phase 8BM2 — fill flow ------------------------------------------
+var __msFillTemplateId = null;
+var __msFillValues = {};   // keyed by field-name.toLowerCase()
+
+function openTemplateFill(id) {
+    var t = __msLoadTemplates().find(function (x) { return x.id === id; });
+    if (!t) { __msToast('Template not found', 'error'); return; }
+    __msFillTemplateId = id;
+    __msFillValues = {};
+    var lib = document.getElementById('tplLibraryView');
+    var ed = document.getElementById('tplEditorView');
+    var fill = document.getElementById('tplFillView');
+    if (lib) lib.style.display = 'none';
+    if (ed) ed.style.display = 'none';
+    if (fill) fill.style.display = '';
+    var titleEl = document.getElementById('tplFillTitle');
+    if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen-to-square"></i> ' + pEsc(t.name || 'Fill Template');
+    __msBuildFillForm(t);
+    __msUpdateFillPreview();
+}
+function closeTemplateFill() { __msFillTemplateId = null; showTemplateLibrary(); }
+
+function __msBuildFillForm(t) {
+    var formEl = document.getElementById('tplFillForm');
+    if (!formEl) return;
+    var fields = __msDetectFields(t.body);
+    if (fields.length === 0) {
+        formEl.innerHTML = '<div style="color:var(--text-dim); font-size:13px;">This template has no fillable fields — it will print as-is. Use the preview on the right.</div>';
+        return;
+    }
+    formEl.innerHTML = fields.map(function (f) {
+        var key = f.toLowerCase();
+        var isDate = /date|expiry|on\b/.test(key) && /date|expiry|installed|verified/.test(key);
+        var safeKeyAttr = pEsc(key);
+        var control;
+        if (isDate) {
+            control = '<div style="display:flex; gap:6px; align-items:center;">' +
+                '<input type="text" id="tplf_' + safeKeyAttr + '" data-key="' + safeKeyAttr + '" oninput="__msOnFillInput(this)" placeholder="e.g. 27/06/2021" style="flex:1; padding:7px 9px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">' +
+                '<button class="btn btn-ghost btn-sm" type="button" onclick="__msFillToday(\'' + safeKeyAttr + '\')" title="Insert today\'s date">Today</button>' +
+                '</div>';
+        } else {
+            var isLong = /address|addressee|invoice|notes|details|enclos/.test(key);
+            if (isLong) {
+                control = '<textarea id="tplf_' + safeKeyAttr + '" data-key="' + safeKeyAttr + '" oninput="__msOnFillInput(this)" rows="2" placeholder="" style="width:100%; padding:7px 9px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px; resize:vertical; font-family:inherit;"></textarea>';
+            } else {
+                control = '<input type="text" id="tplf_' + safeKeyAttr + '" data-key="' + safeKeyAttr + '" oninput="__msOnFillInput(this)" placeholder="" style="width:100%; padding:7px 9px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">';
+            }
+        }
+        return '<div style="margin-bottom:12px;">' +
+            '<label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">' + pEsc(f) + '</label>' +
+            control +
+        '</div>';
+    }).join('');
+}
+function __msOnFillInput(el) {
+    var key = el.getAttribute('data-key');
+    if (key == null) return;
+    __msFillValues[key] = el.value;
+    __msUpdateFillPreview();
+}
+function __msFillToday(key) {
+    var d = new Date();
+    var s = ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
+    var el = document.getElementById('tplf_' + key);
+    if (el) { el.value = s; __msFillValues[key] = s; __msUpdateFillPreview(); }
+}
+function __msUpdateFillPreview() {
+    var page = document.getElementById('tplPreviewPage');
+    if (!page) return;
+    var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
+    if (!t) { page.innerHTML = ''; return; }
+    page.innerHTML = __msRenderDocHtml(t.body, __msFillValues, true);
+}
 function __msFmtDateShort(ts) {
     if (!ts) return '—';
     try { var d = new Date(ts); if (isNaN(d.getTime())) return '—';
@@ -42544,8 +42713,10 @@ function showTemplateLibrary() {
     __msMaybeSeedTemplates();
     var lib = document.getElementById('tplLibraryView');
     var ed = document.getElementById('tplEditorView');
+    var fill = document.getElementById('tplFillView');
     if (lib) lib.style.display = '';
     if (ed) ed.style.display = 'none';
+    if (fill) fill.style.display = 'none';
     renderTemplateLibrary();
 }
 function openTemplateEditor(id) {
@@ -42571,6 +42742,8 @@ function openTemplateEditor(id) {
     }
     if (lib) lib.style.display = 'none';
     if (ed) ed.style.display = '';
+    var _fillV = document.getElementById('tplFillView');
+    if (_fillV) _fillV.style.display = 'none';
     tplRefreshDetectedFields();
 }
 function closeTemplateEditor() { showTemplateLibrary(); }
@@ -42663,6 +42836,7 @@ function renderTemplateLibrary() {
             '<td>' + fieldsLabel + '</td>' +
             '<td>' + __msFmtDateShort(t.updatedAt || t.createdAt) + '</td>' +
             '<td style="text-align:right; white-space:nowrap;">' +
+                '<button class="btn btn-primary btn-sm" onclick="openTemplateFill(\'' + t.id + '\')" title="Fill & preview"><i class="fas fa-pen-to-square"></i> Use</button> ' +
                 '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + t.id + '\')" title="Edit"><i class="fas fa-pen"></i></button> ' +
                 '<button class="btn btn-ghost btn-sm" onclick="duplicateTemplate(\'' + t.id + '\')" title="Duplicate"><i class="fas fa-copy"></i></button> ' +
                 '<button class="btn btn-ghost btn-sm" onclick="deleteTemplate(\'' + t.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>' +
