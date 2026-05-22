@@ -42608,7 +42608,12 @@ function duplicateTemplate(id) {
     list.push({ id: __msTplId(), name: (t.name || 'Template') + ' (Copy)', category: t.category || '', body: t.body || '', createdAt: now, updatedAt: now });
     __msPersistTemplates();
     showActionToast('Template duplicated', 'success');
-    renderTemplateLibrary();
+    // Phase 8BL — defer the re-render to the next tick. The inline onclick fires
+    // from inside the <tbody> we overwrite; in WKWebView a synchronous innerHTML
+    // replace during that dispatch can defer the repaint until the next reflow
+    // (which is why a tab round-trip "fixed" it). setTimeout(0) lets the click
+    // unwind first, then renders against a settled DOM.
+    setTimeout(renderTemplateLibrary, 0);
 }
 function deleteTemplate(id) {
     var list = __msLoadTemplates();
@@ -42618,7 +42623,8 @@ function deleteTemplate(id) {
     __msTemplates = list.filter(function (x) { return x.id !== id; });
     __msPersistTemplates();
     showActionToast('Template deleted', 'success');
-    renderTemplateLibrary();
+    // Phase 8BL — defer re-render to next tick (see duplicateTemplate note).
+    setTimeout(renderTemplateLibrary, 0);
 }
 
 // ---- Library render --------------------------------------------------
