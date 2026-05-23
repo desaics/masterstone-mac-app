@@ -4830,7 +4830,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         // Phase 8BK — Documents (Templates) module. Routed through the generic
         // storage_save_setting command (key + value), so it persists to SQLite
         // and round-trips on boot via storage_load_all with no lib.rs change.
-        'ms_templates_v1': true
+        'ms_templates_v1': true,
+        // Phase 8BT — Generated Documents (filled template instances assigned to
+        // a client or "Other"). Same settings-routed pattern; no lib.rs change.
+        'ms_generated_docs_v1': true
     };
 
     // ------------------------------------------------------------------------
@@ -7341,7 +7344,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_logoFile" accept="image/png,image/jpeg,image/svg+xml" style="font-size:11px;" onchange="cpHandleLogoUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearLogo()" id="cp_clearLogoBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG / SVG — max 1 MB. Transparent background recommended.</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG / SVG — max 300 KB. Transparent background recommended.</div>
             </div>
             <div>
                 <label>Authorised Signature Image (optional)</label>
@@ -7352,7 +7355,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_signatureFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleSignatureUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearSignature()" id="cp_clearSignatureBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 500 KB. Transparent or var(--glass-panel) background.</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Transparent or var(--glass-panel) background.</div>
             </div>
             <div>
                 <label>Company Stamp Image (optional)</label>
@@ -7363,7 +7366,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <input type="file" id="cp_stampFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleStampUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearStamp()" id="cp_clearStampBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 500 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
             </div>
         </div>
 
@@ -7378,7 +7381,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <button class="btn btn-ghost btn-sm" onclick="cpClearLetterhead()" id="cp_clearLetterheadBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
             </div>
             <div style="font-size:10.5px; color:var(--text-dim); margin-top:6px;">
-                <i class="fas fa-info-circle"></i> Upload a <strong>full-page A4 letterhead image</strong> (PNG or JPG — max 2 MB). For best results use A4 portrait at 150-300 DPI. When set, proposal PDFs will render content over this letterhead and the GSTIN/PAN/logo shown at the top of the PDF will be suppressed (since they're expected to be baked into the letterhead).
+                <i class="fas fa-info-circle"></i> Upload a <strong>full-page A4 letterhead image</strong> (PNG or JPG — max 800 KB). For best results use A4 portrait at 150-300 DPI. When set, proposal PDFs will render content over this letterhead and the GSTIN/PAN/logo shown at the top of the PDF will be suppressed (since they're expected to be baked into the letterhead).
                 <br><br>
                 <strong>Tip:</strong> If your letterhead is a Word document or PDF, open it, export as PNG/JPG at A4 size, then upload the exported image here.
             </div>
@@ -10349,6 +10352,40 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
     </div>
   </div>
+
+  <!-- ===================== Phase 8BT — Generated Documents ===================== -->
+  <div id="genDocsSection" class="card" style="margin-top:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
+      <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-tree" style="color:var(--purple);"></i> Generated Documents</h3>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <select id="genDocFilterClient" onchange="renderGeneratedDocs()" style="padding:7px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+          <option value="">All clients</option>
+        </select>
+        <select id="genDocFilterStatus" onchange="renderGeneratedDocs()" style="padding:7px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="issued">Issued</option>
+        </select>
+        <input id="genDocSearch" type="text" placeholder="Search documents…" oninput="renderGeneratedDocs()" style="width:200px; padding:7px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+      </div>
+    </div>
+    <p style="color:var(--text-dim); font-size:12.5px; margin:0 0 14px 0;">Documents you generated from a template and chose to save. Assign each to a client (or mark as <strong>Other</strong>). Once printed, signed and scanned, use <strong>Mark Issued</strong> to attach the signed PDF — the issued copy then becomes the version stored and available for export bundles.</p>
+    <div class="table-scroll-wrap">
+      <table id="genDocsTable">
+        <thead><tr>
+          <th>Document</th>
+          <th>Client / For</th>
+          <th>Created</th>
+          <th>Status</th>
+          <th style="text-align:right;">Actions</th>
+        </tr></thead>
+        <tbody id="genDocsBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <!-- Hidden file input reused for issued-PDF upload (browser file input path) -->
+  <input type="file" id="genDocIssuedInput" accept="application/pdf" style="display:none;" onchange="onGenDocIssuedFilePicked(this)">
+  <!-- =================== /Phase 8BT — Generated Documents =================== -->
 </div>
 <!-- ===================== /Phase 8BK Documents ===================== -->
 
@@ -11224,7 +11261,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="flex:1;">
           <input type="file" id="irnQrImageFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="handleIrnQrImageUpload(this)">
           <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px; line-height:1.5;">
-            PNG or JPG, ideally 200×200 px or larger. Max 500 KB.
+            PNG or JPG, ideally 200×200 px or larger. Max 200 KB.
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onclick="clearIrnQrImage()" style="margin-top:6px; padding:2px 8px; font-size:10.5px; color:var(--danger);"><i class="fas fa-times"></i> Remove</button>
         </div>
@@ -12623,6 +12660,7 @@ const ALL_MS_STORAGE_KEYS = [
     'ms_consultants_v1',         // Consultant master records
     'ms_consultant_payments_v1', // Consultant payment ledger
     'ms_schema_meta_v1',         // The schema stamp itself
+    'ms_generated_docs_v1',      // Phase 8BT — Generated document instances (filled templates, client-assigned, issuable)
     'ms_theme'                   // Light/dark theme preference
 ];
 
@@ -15709,8 +15747,8 @@ function cpOnGstinInput() {
 function cpHandleLogoUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 1024 * 1024) {
-        alert("Logo file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 1 MB.");
+    if (file.size > 300 * 1024) {
+        alert("Logo file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 300 KB.");
         input.value = '';
         return;
     }
@@ -15736,8 +15774,8 @@ function cpClearLogo() {
 function cpHandleSignatureUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) {
-        alert("Signature file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
+    if (file.size > 150 * 1024) {
+        alert("Signature file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 150 KB.");
         input.value = '';
         return;
     }
@@ -15766,8 +15804,8 @@ function cpClearSignature() {
 function cpHandleStampUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) {
-        alert("Stamp file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
+    if (file.size > 200 * 1024) {
+        alert("Stamp file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 200 KB.");
         input.value = '';
         return;
     }
@@ -15807,8 +15845,8 @@ function cpRenderStampPreview() {
 function cpHandleLetterheadUpload(input) {
     const file = input.files && input.files[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-        alert("Letterhead file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 2 MB.\n\nTip: export your letterhead as A4 at 150 DPI (not 600) to keep file size manageable.");
+    if (file.size > 800 * 1024) {
+        alert("Letterhead file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 800 KB.\n\nTip: export your letterhead as A4 at 150 DPI (not 600) to keep file size manageable.");
         input.value = '';
         return;
     }
@@ -32385,8 +32423,8 @@ function _renderIrnQrPreview(dataUrl) {
 function handleIrnQrImageUpload(inputEl) {
     if (!inputEl.files || !inputEl.files[0]) return;
     const file = inputEl.files[0];
-    if (file.size > 500 * 1024) {
-        alert("QR image is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 500 KB.");
+    if (file.size > 200 * 1024) {
+        alert("QR image is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 200 KB.");
         inputEl.value = '';
         return;
     }
@@ -42591,6 +42629,259 @@ function renderClientSummary() {
 // in later phases. Placeholders are written inline as double-brace markers and
 // auto-detected; the user maintains no separate field list.
 // =====================================================================
+// ===================== Phase 8BT — Generated Documents =====================
+// Tracked instances of filled templates. Settings-routed key (no lib.rs change).
+// Record: { id, templateId, templateName, clientKey, clientName, isOther,
+//   otherNote, fieldValues, includeSignature, includeStamp,
+//   status:'draft'|'issued', issuedAttachmentId, createdAt, issuedAt }
+var MS_GENDOCS_KEY = 'ms_generated_docs_v1';
+var __msGenDocs = null;          // in-memory cache: array
+var __msGenDocPendingTpl = null; // template awaiting the save-modal decision
+
+function __msLoadGenDocs() {
+    if (__msGenDocs !== null) return __msGenDocs;
+    var arr = [];
+    try {
+        var raw = localStorage.getItem(MS_GENDOCS_KEY);
+        if (raw) { var p = JSON.parse(raw); if (Array.isArray(p)) arr = p; }
+    } catch (e) { console.warn('gendocs load:', e); arr = []; }
+    __msGenDocs = arr;
+    return __msGenDocs;
+}
+function __msPersistGenDocs() {
+    try { localStorage.setItem(MS_GENDOCS_KEY, JSON.stringify(__msGenDocs || [])); }
+    catch (e) { console.warn('gendocs persist:', e); }
+}
+function __msGenDocId() {
+    return 'gdoc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+// ---- Save flow (ask-me-each-time) -------------------------------------
+// Called from printTemplate(). Opens a small modal to assign a client (or
+// mark Other + note). If the user cancels, nothing is saved.
+function __msMaybeSaveGeneratedDoc(t) {
+    if (!t) return;
+    __msGenDocPendingTpl = t;
+    // Build client <option> list from clientMaster (keyed by name).
+    var opts = '<option value="">— Select a client —</option>';
+    try {
+        if (typeof clientMaster === 'object' && clientMaster) {
+            var names = Object.keys(clientMaster).sort(function (a, b) {
+                return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+            });
+            names.forEach(function (n) { opts += '<option value="' + pEsc(n) + '">' + pEsc(n) + '</option>'; });
+        }
+    } catch (e) {}
+    opts += '<option value="__OTHER__">Other (not client-specific)…</option>';
+    var modal = document.getElementById('genDocSaveModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'genDocSaveModal';
+        modal.style.cssText = 'position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center;';
+        document.body.appendChild(modal);
+    }
+    modal.innerHTML =
+        '<div style="background:var(--card-bg,#1e1e24); color:var(--text-main,#eee); border:1px solid var(--glass-border,#444); border-radius:10px; width:440px; max-width:92vw; padding:22px 24px; box-shadow:0 10px 40px rgba(0,0,0,0.5);">' +
+            '<h3 style="margin:0 0 6px 0; border:none; padding:0; font-size:16px;"><i class="fas fa-folder-plus" style="color:var(--purple);"></i> Save to Generated Documents?</h3>' +
+            '<p style="font-size:12.5px; color:var(--text-dim); margin:0 0 16px 0;">Track <strong>' + pEsc(t.name || 'this document') + '</strong> so you can mark it Issued later and include it in export bundles.</p>' +
+            '<label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Assign to client</label>' +
+            '<select id="genDocSaveClient" onchange="__msGenDocSaveClientChanged()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; margin-bottom:12px;">' + opts + '</select>' +
+            '<div id="genDocSaveOtherWrap" style="display:none; margin-bottom:12px;">' +
+                '<label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Details (what is this for?)</label>' +
+                '<input id="genDocSaveOtherNote" type="text" placeholder="e.g. FedEx customs authorisation" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">' +
+            '</div>' +
+            '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:6px;">' +
+                '<button class="btn btn-ghost btn-sm" onclick="__msGenDocSaveCancel()">Don\'t save</button>' +
+                '<button class="btn btn-primary btn-sm" onclick="__msGenDocSaveConfirm()"><i class="fas fa-save"></i> Save</button>' +
+            '</div>' +
+        '</div>';
+    modal.style.display = 'flex';
+}
+function __msGenDocSaveClientChanged() {
+    var sel = document.getElementById('genDocSaveClient');
+    var wrap = document.getElementById('genDocSaveOtherWrap');
+    if (!sel || !wrap) return;
+    wrap.style.display = (sel.value === '__OTHER__') ? '' : 'none';
+}
+function __msGenDocSaveCancel() {
+    var modal = document.getElementById('genDocSaveModal');
+    if (modal) modal.style.display = 'none';
+    __msGenDocPendingTpl = null;
+}
+function __msGenDocSaveConfirm() {
+    var t = __msGenDocPendingTpl;
+    if (!t) { __msGenDocSaveCancel(); return; }
+    var sel = document.getElementById('genDocSaveClient');
+    var val = sel ? sel.value : '';
+    var isOther = (val === '__OTHER__');
+    var otherNote = '';
+    if (isOther) {
+        otherNote = (document.getElementById('genDocSaveOtherNote') || {}).value || '';
+        otherNote = otherNote.trim();
+        if (!otherNote) { alert('Please enter a short detail for this "Other" document, or pick a client.'); return; }
+    } else if (!val) {
+        alert('Please select a client, or choose "Other".'); return;
+    }
+    var rec = {
+        id: __msGenDocId(),
+        templateId: t.id || null,
+        templateName: t.name || 'Document',
+        clientKey: isOther ? '' : cmKey(val),
+        clientName: isOther ? '' : val,
+        isOther: isOther,
+        otherNote: otherNote,
+        fieldValues: JSON.parse(JSON.stringify(__msFillValues || {})),
+        includeSignature: !!(document.getElementById('tplIncludeSignature') || {}).checked,
+        includeStamp: !!(document.getElementById('tplIncludeStamp') || {}).checked,
+        status: 'draft',
+        issuedAttachmentId: null,
+        createdAt: new Date().toISOString(),
+        issuedAt: null
+    };
+    var list = __msLoadGenDocs();
+    list.push(rec);
+    __msPersistGenDocs();
+    __msGenDocSaveCancel();
+    if (typeof showProspectToast === 'function') {
+        showProspectToast('<i class="fas fa-folder-plus" style="color:var(--success);"></i> Saved <strong>' + pEsc(rec.templateName) + '</strong> to Generated Documents.', 4500);
+    }
+    if (typeof renderGeneratedDocs === 'function') renderGeneratedDocs();
+}
+
+// ---- Render the lower-half table --------------------------------------
+function __msGenDocPopulateClientFilter() {
+    var sel = document.getElementById('genDocFilterClient');
+    if (!sel) return;
+    var cur = sel.value;
+    var list = __msLoadGenDocs();
+    var names = {};
+    list.forEach(function (d) { if (d.clientName) names[d.clientName] = 1; });
+    var html = '<option value="">All clients</option>';
+    Object.keys(names).sort().forEach(function (n) { html += '<option value="' + pEsc(n) + '">' + pEsc(n) + '</option>'; });
+    html += '<option value="__OTHER__">Other / non-client</option>';
+    sel.innerHTML = html;
+    if (cur) sel.value = cur;
+}
+function renderGeneratedDocs() {
+    var body = document.getElementById('genDocsBody');
+    if (!body) return;
+    __msGenDocPopulateClientFilter();
+    var list = __msLoadGenDocs().slice();
+    var fc = (document.getElementById('genDocFilterClient') || {}).value || '';
+    var fs = (document.getElementById('genDocFilterStatus') || {}).value || '';
+    var q = ((document.getElementById('genDocSearch') || {}).value || '').trim().toLowerCase();
+    if (fc === '__OTHER__') list = list.filter(function (d) { return d.isOther; });
+    else if (fc) list = list.filter(function (d) { return d.clientName === fc; });
+    if (fs) list = list.filter(function (d) { return (d.status || 'draft') === fs; });
+    if (q) list = list.filter(function (d) {
+        return (String(d.templateName || '').toLowerCase().indexOf(q) !== -1) ||
+               (String(d.clientName || '').toLowerCase().indexOf(q) !== -1) ||
+               (String(d.otherNote || '').toLowerCase().indexOf(q) !== -1);
+    });
+    list.sort(function (a, b) { return String(b.createdAt || '') < String(a.createdAt || '') ? -1 : 1; });
+    if (list.length === 0) {
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-dim);">No generated documents yet. Fill a template and choose <strong>Save</strong> when prompted.</td></tr>';
+        return;
+    }
+    body.innerHTML = list.map(function (d) {
+        var who = d.isOther
+            ? '<span style="color:var(--text-dim);"><i class="fas fa-tag"></i> Other: </span>' + pEsc(d.otherNote || '—')
+            : pEsc(d.clientName || '—');
+        var issued = (d.status === 'issued');
+        var statusBadge = issued
+            ? '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(46,160,67,0.18); color:var(--success,#3fb950); font-size:11.5px; font-weight:600;">Issued</span>'
+            : '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(150,150,150,0.18); color:var(--text-dim); font-size:11.5px; font-weight:600;">Draft</span>';
+        var actions = '';
+        if (issued) {
+            actions += '<button class="btn btn-primary btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="View issued PDF"><i class="fas fa-file-pdf"></i> View</button> ';
+        } else {
+            actions += '<button class="btn btn-ghost btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="Re-print draft"><i class="fas fa-print"></i> Re-print</button> ';
+            actions += '<button class="btn btn-primary btn-sm" onclick="markGeneratedDocIssued(\'' + d.id + '\')" title="Upload signed/issued PDF"><i class="fas fa-file-upload"></i> Mark Issued</button> ';
+        }
+        actions += '<button class="btn btn-ghost btn-sm" onclick="deleteGeneratedDoc(\'' + d.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>';
+        return '<tr>' +
+            '<td><strong>' + pEsc(d.templateName || 'Document') + '</strong></td>' +
+            '<td>' + who + '</td>' +
+            '<td>' + __msFmtDateShort(d.createdAt) + '</td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td style="text-align:right; white-space:nowrap;">' + actions + '</td>' +
+        '</tr>';
+    }).join('');
+}
+
+// ---- View / re-print --------------------------------------------------
+function viewGeneratedDoc(id) {
+    var d = __msLoadGenDocs().find(function (x) { return x.id === id; });
+    if (!d) { __msToast('Document not found', 'error'); return; }
+    if (d.status === 'issued' && d.issuedAttachmentId) {
+        if (typeof downloadAttachment === 'function') { downloadAttachment(d.issuedAttachmentId); return; }
+        __msToast('Issued PDF viewer unavailable', 'error'); return;
+    }
+    // Draft: rebuild HTML from stored template + field values and print.
+    var t = __msLoadTemplates().find(function (x) { return x.id === d.templateId; });
+    if (!t) { __msToast('Original template no longer exists — cannot re-print draft.', 'error'); return; }
+    var fullHtml = __msBuildTemplatePageHtml(t, d.fieldValues || {});
+    var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    if (hasTauri && typeof printHtml === 'function') { printHtml(fullHtml, d.templateName || 'Document'); return; }
+    if (typeof openPreviewInPageModal === 'function') {
+        openPreviewInPageModal(fullHtml, { headerLabel: 'Save as PDF', subtitle: pEsc(d.templateName || ''), autoPrint: false }); return;
+    }
+    var w = window.open('', '_blank', 'width=900,height=1000');
+    if (w) { w.document.write(fullHtml); w.document.close(); }
+}
+
+// ---- Mark Issued (browser file input → addAttachment) -----------------
+var __msGenDocIssuingId = null;
+function markGeneratedDocIssued(id) {
+    __msGenDocIssuingId = id;
+    var input = document.getElementById('genDocIssuedInput');
+    if (input) { input.value = ''; input.click(); }
+}
+function onGenDocIssuedFilePicked(input) {
+    var id = __msGenDocIssuingId;
+    __msGenDocIssuingId = null;
+    if (!input || !input.files || !input.files[0]) return;
+    var file = input.files[0];
+    var d = __msLoadGenDocs().find(function (x) { return x.id === id; });
+    if (!d) { __msToast('Document not found', 'error'); return; }
+    if (typeof addAttachment !== 'function') { __msToast('Attachment system unavailable', 'error'); return; }
+    addAttachment('gendoc', d.id, file, 'Issued: ' + (d.templateName || 'Document'), function (rec) {
+        d.issuedAttachmentId = rec.id;
+        d.status = 'issued';
+        d.issuedAt = new Date().toISOString();
+        __msPersistGenDocs();
+        if (typeof showProspectToast === 'function') {
+            showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> <strong>' + pEsc(d.templateName || 'Document') + '</strong> marked Issued.', 4500);
+        }
+        renderGeneratedDocs();
+    });
+    input.value = '';
+}
+
+// ---- Delete -----------------------------------------------------------
+function deleteGeneratedDoc(id) {
+    var list = __msLoadGenDocs();
+    var d = list.find(function (x) { return x.id === id; });
+    if (!d) return;
+    if (!confirm('Delete this generated document' + (d.status === 'issued' ? ' and its issued PDF' : '') + '? This cannot be undone.')) return;
+    // Remove the issued attachment if present.
+    if (d.issuedAttachmentId && typeof attEntityKey === 'function') {
+        try {
+            var key = attEntityKey('gendoc', d.id);
+            if (attachments[key]) {
+                attachments[key] = attachments[key].filter(function (a) { return a.id !== d.issuedAttachmentId; });
+                if (attachments[key].length === 0) delete attachments[key];
+                if (typeof saveAttachments === 'function') saveAttachments();
+            }
+        } catch (e) {}
+    }
+    __msGenDocs = list.filter(function (x) { return x.id !== id; });
+    __msPersistGenDocs();
+    if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-trash"></i> Generated document deleted.', 3500);
+    renderGeneratedDocs();
+}
+// =================== /Phase 8BT — Generated Documents ===================
+
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
 var __msEditingTemplateId = null;  // id being edited, or null for new
@@ -42844,6 +43135,7 @@ function openTemplateFill(id) {
     if (lib) lib.style.display = 'none';
     if (ed) ed.style.display = 'none';
     if (fill) fill.style.display = '';
+    var gd = document.getElementById('genDocsSection'); if (gd) gd.style.display = 'none';
     var titleEl = document.getElementById('tplFillTitle');
     if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen-to-square"></i> ' + pEsc(t.name || 'Fill Template');
     __msBuildFillForm(t);
@@ -43034,15 +43326,17 @@ function printTemplate() {
     var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
     if (hasTauri && typeof printHtml === 'function') {
         printHtml(fullHtml, docTitle);
-        return;
-    }
-    // Standalone-browser fallbacks (mirror previewPOPDF).
-    if (typeof openPreviewInPageModal === 'function') {
+    } else if (typeof openPreviewInPageModal === 'function') {
+        // Standalone-browser fallback (mirror previewPOPDF).
         openPreviewInPageModal(fullHtml, { headerLabel: 'Save as PDF', subtitle: pEsc(t.name || ''), autoPrint: false });
-        return;
+    } else {
+        var w = window.open('', '_blank', 'width=900,height=1000');
+        if (w) { w.document.write(fullHtml); w.document.close(); }
     }
-    var w = window.open('', '_blank', 'width=900,height=1000');
-    if (w) { w.document.write(fullHtml); w.document.close(); }
+    // Phase 8BT — ask-me-each-time: offer to save this as a tracked Generated Document.
+    if (typeof __msMaybeSaveGeneratedDoc === 'function') {
+        __msMaybeSaveGeneratedDoc(t);
+    }
 }
 function __msFmtDateShort(ts) {
     if (!ts) return '—';
@@ -43060,7 +43354,9 @@ function showTemplateLibrary() {
     if (lib) lib.style.display = '';
     if (ed) ed.style.display = 'none';
     if (fill) fill.style.display = 'none';
+    var gd = document.getElementById('genDocsSection'); if (gd) gd.style.display = '';
     renderTemplateLibrary();
+    if (typeof renderGeneratedDocs === 'function') renderGeneratedDocs();
 }
 function openTemplateEditor(id) {
     __msEditingTemplateId = id || null;
@@ -43087,6 +43383,7 @@ function openTemplateEditor(id) {
     if (ed) ed.style.display = '';
     var _fillV = document.getElementById('tplFillView');
     if (_fillV) _fillV.style.display = 'none';
+    var _gd = document.getElementById('genDocsSection'); if (_gd) _gd.style.display = 'none';
     tplRefreshDetectedFields();
 }
 function closeTemplateEditor() { showTemplateLibrary(); }
