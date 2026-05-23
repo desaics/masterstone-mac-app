@@ -10330,6 +10330,22 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:12px;">Fill in the blanks</div>
         <div id="tplFillForm"></div>
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Save to Documents</div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:8px; cursor:pointer;">
+            <input type="checkbox" id="tplTrackDoc" checked onchange="__msTrackToggleChanged()"> Track this document
+          </label>
+          <div id="tplTrackAssignWrap">
+            <label style="display:block; font-size:11.5px; color:var(--text-dim); margin-bottom:4px;">Assign to client</label>
+            <select id="tplTrackClient" onchange="__msTrackAssignChanged()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+              <option value="">— Select a client —</option>
+            </select>
+            <div id="tplTrackOtherWrap" style="display:none; margin-top:8px;">
+              <label style="display:block; font-size:11.5px; color:var(--text-dim); margin-bottom:4px;">Details (what is this for?)</label>
+              <input id="tplTrackOtherNote" type="text" placeholder="e.g. FedEx customs authorisation" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
           <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Signature &amp; stamp</div>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:6px; cursor:pointer;">
             <input type="checkbox" id="tplIncludeSignature" checked onchange="__msUpdateFillPreview()"> Include signature
@@ -42637,7 +42653,6 @@ function renderClientSummary() {
 //   status:'draft'|'issued', issuedAttachmentId, createdAt, issuedAt }
 var MS_GENDOCS_KEY = 'ms_generated_docs_v1';
 var __msGenDocs = null;          // in-memory cache: array
-var __msGenDocPendingTpl = null; // template awaiting the save-modal decision
 
 function __msLoadGenDocs() {
     if (__msGenDocs !== null) return __msGenDocs;
@@ -42657,13 +42672,17 @@ function __msGenDocId() {
     return 'gdoc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
 
-// ---- Save flow (ask-me-each-time) -------------------------------------
-// Called from printTemplate(). Opens a small modal to assign a client (or
-// mark Other + note). If the user cancels, nothing is saved.
-function __msMaybeSaveGeneratedDoc(t) {
-    if (!t) return;
-    __msGenDocPendingTpl = t;
-    // Build client <option> list from clientMaster (keyed by name).
+// ---- Inline save flow (8BU) -------------------------------------------
+// Client assignment now lives inline on the fill screen (no interrupting
+// modal). printTemplate() calls __msSaveGeneratedDocInline(t) AFTER print;
+// __msValidateTrackBeforePrint(t) guards before print when Track is on but
+// nothing is assigned.
+
+// Populate the inline client dropdown on the fill screen. Called from
+// openTemplateFill(). Mirrors clientMaster ordering used elsewhere.
+function __msPopulateTrackClientDropdown() {
+    var sel = document.getElementById('tplTrackClient');
+    if (!sel) return;
     var opts = '<option value="">— Select a client —</option>';
     try {
         if (typeof clientMaster === 'object' && clientMaster) {
@@ -42674,54 +42693,64 @@ function __msMaybeSaveGeneratedDoc(t) {
         }
     } catch (e) {}
     opts += '<option value="__OTHER__">Other (not client-specific)…</option>';
-    var modal = document.getElementById('genDocSaveModal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'genDocSaveModal';
-        modal.style.cssText = 'position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center;';
-        document.body.appendChild(modal);
-    }
-    modal.innerHTML =
-        '<div style="background:var(--card-bg,#1e1e24); color:var(--text-main,#eee); border:1px solid var(--glass-border,#444); border-radius:10px; width:440px; max-width:92vw; padding:22px 24px; box-shadow:0 10px 40px rgba(0,0,0,0.5);">' +
-            '<h3 style="margin:0 0 6px 0; border:none; padding:0; font-size:16px;"><i class="fas fa-folder-plus" style="color:var(--purple);"></i> Save to Generated Documents?</h3>' +
-            '<p style="font-size:12.5px; color:var(--text-dim); margin:0 0 16px 0;">Track <strong>' + pEsc(t.name || 'this document') + '</strong> so you can mark it Issued later and include it in export bundles.</p>' +
-            '<label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Assign to client</label>' +
-            '<select id="genDocSaveClient" onchange="__msGenDocSaveClientChanged()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; margin-bottom:12px;">' + opts + '</select>' +
-            '<div id="genDocSaveOtherWrap" style="display:none; margin-bottom:12px;">' +
-                '<label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Details (what is this for?)</label>' +
-                '<input id="genDocSaveOtherNote" type="text" placeholder="e.g. FedEx customs authorisation" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">' +
-            '</div>' +
-            '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:6px;">' +
-                '<button class="btn btn-ghost btn-sm" onclick="__msGenDocSaveCancel()">Don\'t save</button>' +
-                '<button class="btn btn-primary btn-sm" onclick="__msGenDocSaveConfirm()"><i class="fas fa-save"></i> Save</button>' +
-            '</div>' +
-        '</div>';
-    modal.style.display = 'flex';
+    sel.innerHTML = opts;
 }
-function __msGenDocSaveClientChanged() {
-    var sel = document.getElementById('genDocSaveClient');
-    var wrap = document.getElementById('genDocSaveOtherWrap');
+// Reset the inline track controls to defaults each time a template is opened.
+// Track defaults ON (8BU decision).
+function __msResetTrackControls() {
+    var chk = document.getElementById('tplTrackDoc');
+    if (chk) chk.checked = true;
+    var sel = document.getElementById('tplTrackClient');
+    if (sel) sel.value = '';
+    var note = document.getElementById('tplTrackOtherNote');
+    if (note) note.value = '';
+    __msTrackToggleChanged();
+    __msTrackAssignChanged();
+}
+// Show/hide the assign sub-block when the Track checkbox flips.
+function __msTrackToggleChanged() {
+    var chk = document.getElementById('tplTrackDoc');
+    var wrap = document.getElementById('tplTrackAssignWrap');
+    if (wrap) wrap.style.display = (chk && chk.checked) ? '' : 'none';
+}
+// Show/hide the Other free-text when the client dropdown changes.
+function __msTrackAssignChanged() {
+    var sel = document.getElementById('tplTrackClient');
+    var wrap = document.getElementById('tplTrackOtherWrap');
     if (!sel || !wrap) return;
     wrap.style.display = (sel.value === '__OTHER__') ? '' : 'none';
 }
-function __msGenDocSaveCancel() {
-    var modal = document.getElementById('genDocSaveModal');
-    if (modal) modal.style.display = 'none';
-    __msGenDocPendingTpl = null;
+// Guard run BEFORE print dispatch: if Track is on but nothing is assigned,
+// block with one gentle alert (not a per-print modal). Returns true if OK to
+// proceed, false to abort the print.
+function __msValidateTrackBeforePrint() {
+    var chk = document.getElementById('tplTrackDoc');
+    if (!chk || !chk.checked) return true; // not tracking — free print
+    var sel = document.getElementById('tplTrackClient');
+    var val = sel ? sel.value : '';
+    if (val === '__OTHER__') {
+        var note = ((document.getElementById('tplTrackOtherNote') || {}).value || '').trim();
+        if (!note) { alert('Add a short detail for this "Other" document, pick a client, or untick "Track this document" to print without saving.'); return false; }
+    } else if (!val) {
+        alert('Pick a client to track this document, choose "Other", or untick "Track this document" to print without saving.');
+        return false;
+    }
+    return true;
 }
-function __msGenDocSaveConfirm() {
-    var t = __msGenDocPendingTpl;
-    if (!t) { __msGenDocSaveCancel(); return; }
-    var sel = document.getElementById('genDocSaveClient');
+// Silent save AFTER print dispatch, reading the inline controls. No modal.
+function __msSaveGeneratedDocInline(t) {
+    if (!t) return;
+    var chk = document.getElementById('tplTrackDoc');
+    if (!chk || !chk.checked) return; // not tracking
+    var sel = document.getElementById('tplTrackClient');
     var val = sel ? sel.value : '';
     var isOther = (val === '__OTHER__');
     var otherNote = '';
     if (isOther) {
-        otherNote = (document.getElementById('genDocSaveOtherNote') || {}).value || '';
-        otherNote = otherNote.trim();
-        if (!otherNote) { alert('Please enter a short detail for this "Other" document, or pick a client.'); return; }
+        otherNote = ((document.getElementById('tplTrackOtherNote') || {}).value || '').trim();
+        if (!otherNote) return; // guard already warned; don't save half-data
     } else if (!val) {
-        alert('Please select a client, or choose "Other".'); return;
+        return; // guard already warned
     }
     var rec = {
         id: __msGenDocId(),
@@ -42742,11 +42771,9 @@ function __msGenDocSaveConfirm() {
     var list = __msLoadGenDocs();
     list.push(rec);
     __msPersistGenDocs();
-    __msGenDocSaveCancel();
     if (typeof showProspectToast === 'function') {
-        showProspectToast('<i class="fas fa-folder-plus" style="color:var(--success);"></i> Saved <strong>' + pEsc(rec.templateName) + '</strong> to Generated Documents.', 4500);
+        showProspectToast('<i class="fas fa-folder-plus" style="color:var(--success);"></i> Saved <strong>' + pEsc(rec.templateName) + '</strong> to Generated Documents' + (isOther ? '' : ' for <strong>' + pEsc(rec.clientName) + '</strong>') + '.', 4500);
     }
-    if (typeof renderGeneratedDocs === 'function') renderGeneratedDocs();
 }
 
 // ---- Render the lower-half table --------------------------------------
@@ -43140,6 +43167,8 @@ function openTemplateFill(id) {
     var titleEl = document.getElementById('tplFillTitle');
     if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen-to-square"></i> ' + pEsc(t.name || 'Fill Template');
     __msBuildFillForm(t);
+    if (typeof __msPopulateTrackClientDropdown === 'function') __msPopulateTrackClientDropdown();
+    if (typeof __msResetTrackControls === 'function') __msResetTrackControls();
     __msUpdateFillPreview();
 }
 function closeTemplateFill() { __msFillTemplateId = null; showTemplateLibrary(); }
@@ -43322,6 +43351,8 @@ function printTemplate() {
     if (!cp.letterheadDataUrl) {
         if (!confirm('No letterhead image is configured in System Controls, so this will print on a plain page. Continue?')) return;
     }
+    // 8BU — guard: if Track is on but no client/Other assigned, block before print.
+    if (typeof __msValidateTrackBeforePrint === 'function' && !__msValidateTrackBeforePrint()) return;
     var fullHtml = __msBuildTemplatePageHtml(t, __msFillValues);
     var docTitle = (t.name || 'Document');
     var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
@@ -43334,9 +43365,9 @@ function printTemplate() {
         var w = window.open('', '_blank', 'width=900,height=1000');
         if (w) { w.document.write(fullHtml); w.document.close(); }
     }
-    // Phase 8BT — ask-me-each-time: offer to save this as a tracked Generated Document.
-    if (typeof __msMaybeSaveGeneratedDoc === 'function') {
-        __msMaybeSaveGeneratedDoc(t);
+    // Phase 8BU — silent inline save (client already chosen on the fill screen).
+    if (typeof __msSaveGeneratedDocInline === 'function') {
+        __msSaveGeneratedDocInline(t);
     }
 }
 function __msFmtDateShort(ts) {
