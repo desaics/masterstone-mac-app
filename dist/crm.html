@@ -10441,16 +10441,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <!-- ===== Mode A: Remittance Bundle (per contract/deal) ===== -->
   <div id="docExpRemitSection">
     <div class="card" style="margin-bottom:20px;">
-      <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-handshake"></i> Pick a deal</h3>
+      <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-handshake"></i> Pick an OEM invoice</h3>
       <div style="display:grid; grid-template-columns: 1fr 240px; gap:14px; align-items:end;">
         <div>
-          <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Contract (grouped by OEM)</label>
+          <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">OEM invoice (grouped by OEM)</label>
           <select id="docExpContract" onchange="renderDocExportRemitPreview()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
             <option value="">— Select a contract —</option>
           </select>
         </div>
         <div>
-          <input id="docExpContractSearch" type="text" placeholder="Search by OEM / client / PO…" oninput="populateDocExportContractPicker()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+          <input id="docExpContractSearch" type="text" placeholder="Search by OEM / client / invoice / PO…" oninput="populateDocExportContractPicker()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
         </div>
       </div>
     </div>
@@ -43034,6 +43034,102 @@ function __deExtFromName(name, mime) {
     return '';
 }
 
+// ---- Gather scoped to ONE selected OEM invoice (8BW) -------------------
+// ref = { cIdx, yi, apIdx }  (apIdx === 'L' means the legacy single
+// by.oemInvoiceNo/Link/LocalPath fields on that billing year).
+// Bundle = the selected OEM invoice + the contract's Internal PO + Client
+// PO(s) + matching Sales Invoice(s) + contract attachments + the client's
+// issued Generated Documents (e.g. Software Implementation Declaration).
+function __deGatherForOemInvoice(ref) {
+    var result = { items: [], localChecks: [] };
+    var c = (typeof contracts !== 'undefined') ? contracts[ref.cIdx] : null;
+    if (!c) return result;
+    function push(it) { result.items.push(it); }
+
+    // 1) The SELECTED OEM/purchase invoice (only this one)
+    var by = (Array.isArray(c.billingYears) ? c.billingYears : [])[ref.yi];
+    var sel = null;
+    if (by) {
+        if (ref.apIdx === 'L') {
+            sel = { invNo: by.oemInvoiceNo, link: by.oemInvoiceLink, localPath: by.oemInvoiceLocalPath, date: by.oemInvoiceDate };
+        } else {
+            var aps = Array.isArray(by.apInvoices) ? by.apInvoices : [];
+            sel = aps[parseInt(ref.apIdx)] || null;
+        }
+    }
+    if (sel) {
+        var lab = 'OEM/Purchase Invoice ' + (sel.invNo || sel.oemInvoiceNo || '(unnumbered)');
+        if (sel.localPath) { push({ folder: 'Purchase Invoices (OEM)', kind: 'local', label: lab + ' [SELECTED]', path: sel.localPath, contractTag: c }); result.localChecks.push({ path: sel.localPath }); }
+        else if (sel.link) push({ folder: 'Purchase Invoices (OEM)', kind: 'link', label: lab + ' [SELECTED]', url: sel.link, contractTag: c });
+        else push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' [SELECTED] — no file/link recorded', contractTag: c });
+    }
+
+    // 2) Internal PO (contract-level) + PO-entity attachments for this contract
+    var ilab = 'Internal PO ' + (c.internalPO || '');
+    if (c.internalPOLocalPath) { push({ folder: 'Internal POs', kind: 'local', label: ilab, path: c.internalPOLocalPath, contractTag: c }); result.localChecks.push({ path: c.internalPOLocalPath }); }
+    else if (c.internalPOLink) push({ folder: 'Internal POs', kind: 'link', label: ilab, url: c.internalPOLink, contractTag: c });
+    else if (c.internalPO) push({ folder: 'Internal POs', kind: 'missing', label: ilab + ' — no file/link recorded', contractTag: c });
+    if (typeof purchaseOrders !== 'undefined') {
+        purchaseOrders.forEach(function (po) {
+            if (String(po.linkedContractIdx) !== String(ref.cIdx)) return;
+            var pa = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('po', po.id) : [];
+            pa.forEach(function (a) {
+                if (!a.dataUrl) return;
+                push({ folder: 'Internal POs', kind: 'zip', label: 'PO ' + (po.poNumber || po.id) + ' · ' + (a.filename || 'attachment'), filename: __deSafeName('PO_' + (po.poNumber || po.id) + '_' + (a.filename || 'att')), dataUrl: a.dataUrl, mimeType: a.mimeType, contractTag: c });
+            });
+        });
+    }
+
+    // 3) Client PO(s)
+    var cpos = Array.isArray(c.clientPOs) && c.clientPOs.length ? c.clientPOs : [{ poNo: c.clientPO, poLink: c.clientPOLink, localPath: c.clientPOLocalPath }];
+    cpos.forEach(function (po) {
+        if (!po) return;
+        var lab = 'Client PO ' + (po.poNo || po.poNumber || '');
+        if (po.localPath) { push({ folder: 'Client POs', kind: 'local', label: lab, path: po.localPath, contractTag: c }); result.localChecks.push({ path: po.localPath }); }
+        else if (po.poLink || po.link) push({ folder: 'Client POs', kind: 'link', label: lab, url: po.poLink || po.link, contractTag: c });
+        else if (po.poNo || po.poNumber) push({ folder: 'Client POs', kind: 'missing', label: lab + ' — no file/link recorded', contractTag: c });
+    });
+
+    // 4) Sales invoice(s) — same cycle as the selected OEM invoice, OR untagged
+    if (typeof invoices !== 'undefined') {
+        invoices.forEach(function (inv) {
+            if (String(inv.linkedContractIdx) !== String(ref.cIdx)) return;
+            var cyc = inv.linkedCycleYearIdx;
+            var cycleOk = (cyc === '' || cyc === null || cyc === undefined) || String(cyc) === String(ref.yi);
+            if (!cycleOk) return;
+            var label = 'Sales Invoice ' + (inv.invoiceNumber || inv.id);
+            if (inv.signedPdfAttachmentId) {
+                var atts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('invoice', inv.id) : [];
+                var signed = atts.filter(function (a) { return a.id === inv.signedPdfAttachmentId; })[0];
+                if (signed && signed.dataUrl) push({ folder: 'Sales Invoices', kind: 'zip', label: label + ' (signed)', filename: __deSafeName(label) + (__deExtFromName(signed.filename, signed.mimeType) || '.pdf'), dataUrl: signed.dataUrl, mimeType: signed.mimeType, contractTag: c });
+                else push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — signed PDF referenced but file missing', contractTag: c });
+            } else {
+                push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — no signed PDF uploaded (generate/sign first)', contractTag: c });
+            }
+        });
+    }
+
+    // 5) Contract-level attachments (Other)
+    var catts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('contract', String(ref.cIdx)) : [];
+    catts.forEach(function (a) {
+        if (!a.dataUrl) return;
+        push({ folder: 'Other', kind: 'zip', label: 'Contract attachment · ' + (a.filename || 'file'), filename: __deSafeName(a.filename || 'attachment'), dataUrl: a.dataUrl, mimeType: a.mimeType, contractTag: c });
+    });
+
+    // 6) Issued Generated Documents for this client (Software Implementation Declaration etc.)
+    if (typeof __msLoadGenDocs === 'function') {
+        __msLoadGenDocs().forEach(function (d) {
+            if (d.status !== 'issued' || !d.issuedAttachmentId) return;
+            if (!c.client || d.clientName !== c.client) return;
+            var ga = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('gendoc', d.id) : [];
+            var f = ga.filter(function (a) { return a.id === d.issuedAttachmentId; })[0];
+            if (f && f.dataUrl) push({ folder: 'Generated Docs', kind: 'zip', label: d.templateName + ' (issued)', filename: __deSafeName(d.templateName) + '.pdf', dataUrl: f.dataUrl, mimeType: f.mimeType, contractTag: c });
+        });
+    }
+
+    return result;
+}
+
 // ---- The gather: produce a structured manifest for a single contract ----
 // Returns { folders: { folderName: [ {filename, dataUrl, mimeType} ] },
 //           indexLines: [..], counts: {inZip, links, localFiles, missing} }
@@ -43138,7 +43234,7 @@ function __deGatherForContract(cIdx, opts) {
         var gd = __msLoadGenDocs();
         gd.forEach(function (d) {
             if (d.status !== 'issued' || !d.issuedAttachmentId) return;
-            if (!c.clientName || d.clientName !== c.clientName) return;
+            if (!c.client || d.clientName !== c.client) return;
             var ga = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('gendoc', d.id) : [];
             var f = ga.filter(function (a) { return a.id === d.issuedAttachmentId; })[0];
             if (f && f.dataUrl) push({ folder: 'Generated Docs', kind: 'zip', label: d.templateName + ' (issued)', filename: __deSafeName(d.templateName) + '.pdf', dataUrl: f.dataUrl, mimeType: f.mimeType, contractTag: c });
@@ -43154,24 +43250,38 @@ function populateDocExportContractPicker() {
     if (!sel || typeof contracts === 'undefined') return;
     var q = ((document.getElementById('docExpContractSearch') || {}).value || '').trim().toLowerCase();
     var cur = sel.value;
-    // Build [{idx, oem, client, po, label}], group by OEM.
+    // One row per OEM invoice. value encodes cIdx|yi|apIdx ('L' = legacy single).
     var rows = [];
     contracts.forEach(function (c, i) {
         if (!c) return;
         var oem = (typeof _caExportEffectiveOem === 'function' ? _caExportEffectiveOem(c) : (c.oem || '')) || 'Other / Service';
-        var client = c.clientName || '(no client)';
-        var po = c.internalPO || c.clientPO || '';
-        var label = client + (po ? ' · PO ' + po : '') + (c.product ? ' · ' + c.product : '');
-        var hay = (oem + ' ' + client + ' ' + po + ' ' + (c.product || '')).toLowerCase();
-        if (q && hay.indexOf(q) === -1) return;
-        rows.push({ idx: i, oem: oem, label: label });
+        var client = c.client || '(no client)';
+        var prod = c.product ? ' · ' + c.product : '';
+        var byrs = Array.isArray(c.billingYears) ? c.billingYears : [];
+        byrs.forEach(function (by, yi) {
+            var aps = Array.isArray(by.apInvoices) ? by.apInvoices : [];
+            aps.forEach(function (ap, ai) {
+                var invNo = ap.invNo || ap.oemInvoiceNo || '';
+                if (!invNo && !ap.link && !ap.localPath) return; // skip empty rows
+                var label = 'OEM Inv ' + (invNo || '(unnumbered)') + ' · ' + client + prod;
+                var hay = (oem + ' ' + client + ' ' + invNo + ' ' + (c.internalPO || '') + ' ' + (c.clientPO || '') + ' ' + (c.product || '')).toLowerCase();
+                if (q && hay.indexOf(q) === -1) return;
+                rows.push({ val: i + '|' + yi + '|' + ai, oem: oem, label: label });
+            });
+            // legacy single OEM invoice on the year
+            if (by.oemInvoiceNo && !(Array.isArray(by.apInvoices) && by.apInvoices.length)) {
+                var label2 = 'OEM Inv ' + by.oemInvoiceNo + ' · ' + client + prod;
+                var hay2 = (oem + ' ' + client + ' ' + by.oemInvoiceNo + ' ' + (c.internalPO || '') + ' ' + (c.product || '')).toLowerCase();
+                if (!q || hay2.indexOf(q) !== -1) rows.push({ val: i + '|' + yi + '|L', oem: oem, label: label2 });
+            }
+        });
     });
     rows.sort(function (a, b) {
         if (a.oem.toLowerCase() < b.oem.toLowerCase()) return -1;
         if (a.oem.toLowerCase() > b.oem.toLowerCase()) return 1;
         return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
     });
-    var html = '<option value="">— Select a contract —</option>';
+    var html = '<option value="">— Select an OEM invoice —</option>';
     var lastOem = null;
     rows.forEach(function (r) {
         if (r.oem !== lastOem) {
@@ -43179,11 +43289,23 @@ function populateDocExportContractPicker() {
             html += '<optgroup label="' + pEsc(r.oem) + '">';
             lastOem = r.oem;
         }
-        html += '<option value="' + r.idx + '">' + pEsc(r.label) + '</option>';
+        html += '<option value="' + pEsc(r.val) + '">' + pEsc(r.label) + '</option>';
     });
     if (lastOem !== null) html += '</optgroup>';
+    if (rows.length === 0) html = '<option value="">— No OEM invoices recorded —</option>';
     sel.innerHTML = html;
     if (cur) sel.value = cur;
+}
+
+// Parse a "cIdx|yi|apIdx" picker value into a ref object, or null.
+function __deParseOemRef(val) {
+    if (!val) return null;
+    var parts = String(val).split('|');
+    if (parts.length !== 3) return null;
+    var cIdx = parseInt(parts[0]);
+    var yi = parseInt(parts[1]);
+    if (isNaN(cIdx) || isNaN(yi)) return null;
+    return { cIdx: cIdx, yi: yi, apIdx: parts[2] };
 }
 
 // ---- Render preview/checklist for Mode A ------------------------------
@@ -43191,10 +43313,10 @@ function renderDocExportRemitPreview() {
     var host = document.getElementById('docExpRemitPreview');
     if (!host) return;
     var sel = document.getElementById('docExpContract');
-    var cIdx = sel && sel.value !== '' ? parseInt(sel.value) : null;
-    if (cIdx === null || isNaN(cIdx)) { host.innerHTML = ''; return; }
-    var g = __deGatherForContract(cIdx, {});
-    host.innerHTML = __deRenderPreview(g, { mode: 'remit', cIdx: cIdx });
+    var ref = __deParseOemRef(sel ? sel.value : '');
+    if (!ref) { host.innerHTML = ''; return; }
+    var g = __deGatherForOemInvoice(ref);
+    host.innerHTML = __deRenderPreview(g, { mode: 'remit', oemRef: sel.value });
     __deRunLocalChecks(g);
 }
 
@@ -43215,7 +43337,7 @@ function renderDocExportClientPreview() {
     var combined = { items: [], localChecks: [] };
     if (typeof contracts !== 'undefined') {
         contracts.forEach(function (c, i) {
-            if (!c || c.clientName !== client) return;
+            if (!c || c.client !== client) return;
             if (fyVal !== 'ALL' && !__deContractInFY(c, fyRange)) return;
             var g = __deGatherForContract(i, { typeOn: typeOn });
             g.items.forEach(function (it) { combined.items.push(it); });
@@ -43270,7 +43392,7 @@ function __deRenderPreview(g, ctx) {
         '<strong style="color:var(--accent-cyan,#3ac);">' + links + '</strong> OneDrive links · ' +
         '<strong style="color:var(--warning,#d29922);">' + locals + '</strong> local files · ' +
         '<strong style="color:var(--danger,#f85149);">' + missing + '</strong> missing';
-    var btnAttr = ctx.mode === 'remit' ? ('onclick="downloadDocExportRemit(' + ctx.cIdx + ')"') : 'onclick="downloadDocExportClient()"';
+    var btnAttr = ctx.mode === 'remit' ? ('onclick="downloadDocExportRemit(\'' + (ctx.oemRef || '') + '\')"') : 'onclick="downloadDocExportClient()"';
     var disabled = inZip === 0 ? ' disabled title="Nothing to zip — all items are links/local/missing. The INDEX.txt will still list them."' : '';
     return '<div class="card">' +
         '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap;">' +
@@ -43336,7 +43458,7 @@ function __deDownloadZip(g, opts) {
         var folder = it.folder;
         if (perContract && it.contractTag) {
             var c = it.contractTag;
-            var sub = __deSafeName((c.clientName || 'client') + (c.internalPO ? ' - PO ' + c.internalPO : (c.product ? ' - ' + c.product : '')));
+            var sub = __deSafeName((c.client || 'client') + (c.internalPO ? ' - PO ' + c.internalPO : (c.product ? ' - ' + c.product : '')));
             folder = sub + '/' + folder;
         }
         try {
@@ -43379,19 +43501,29 @@ function __deSaveBlob(blob, filename) {
     }
 }
 
-function downloadDocExportRemit(cIdx) {
-    var c = (typeof contracts !== 'undefined') ? contracts[cIdx] : null;
+function downloadDocExportRemit(refStr) {
+    var ref = __deParseOemRef(refStr);
+    if (!ref) return;
+    var c = (typeof contracts !== 'undefined') ? contracts[ref.cIdx] : null;
     if (!c) return;
-    var g = __deGatherForContract(cIdx, {});
+    var g = __deGatherForOemInvoice(ref);
     var oem = (typeof _caExportEffectiveOem === 'function' ? _caExportEffectiveOem(c) : (c.oem || '')) || 'Service';
+    // Resolve the selected OEM invoice number for header/filename.
+    var by = (Array.isArray(c.billingYears) ? c.billingYears : [])[ref.yi];
+    var invNo = '';
+    if (by) {
+        if (ref.apIdx === 'L') invNo = by.oemInvoiceNo || '';
+        else { var ap = (Array.isArray(by.apInvoices) ? by.apInvoices : [])[parseInt(ref.apIdx)]; invNo = ap ? (ap.invNo || ap.oemInvoiceNo || '') : ''; }
+    }
     var header = [
-        'BUNDLE TYPE: Remittance Bundle (single deal)',
-        'CLIENT:  ' + (c.clientName || '—'),
+        'BUNDLE TYPE: Remittance Bundle (single OEM invoice)',
+        'OEM INVOICE: ' + (invNo || '(unnumbered)'),
+        'CLIENT:  ' + (c.client || '—'),
         'OEM:     ' + oem,
         'PRODUCT: ' + (c.product || '—'),
         'INTERNAL PO: ' + (c.internalPO || '—') + '   CLIENT PO: ' + (c.clientPO || (c.clientPOs && c.clientPOs[0] && c.clientPOs[0].poNo) || '—')
     ];
-    var zipName = __deSafeName('Remittance_' + (c.clientName || 'client') + '_' + oem) + '.zip';
+    var zipName = __deSafeName('Remittance_' + (c.client || 'client') + '_OEMInv_' + (invNo || oem)) + '.zip';
     __deDownloadZip(g, { perContract: false, header: header, zipName: zipName });
 }
 
@@ -43406,7 +43538,7 @@ function downloadDocExportClient() {
     var combined = { items: [], localChecks: [] };
     if (typeof contracts !== 'undefined') {
         contracts.forEach(function (c, i) {
-            if (!c || c.clientName !== client) return;
+            if (!c || c.client !== client) return;
             if (fyVal !== 'ALL' && !__deContractInFY(c, fyRange)) return;
             var g = __deGatherForContract(i, { typeOn: typeOn });
             g.items.forEach(function (it) { combined.items.push(it); });
