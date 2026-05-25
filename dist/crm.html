@@ -43589,6 +43589,7 @@ function initDocExportTab() {
             if (!dateStr) return;
             var d = new Date(dateStr); if (isNaN(d.getTime())) return;
             var m = d.getMonth(); var y = d.getFullYear();
+            if (y < 2000 || y > 2100) return; // 8BW.1 — ignore malformed dates that parse to junk years (e.g. "FY 5-6")
             var fyStart = (m >= 3) ? y : y - 1;
             years[fyStart + '-' + (fyStart + 1)] = 1;
         };
