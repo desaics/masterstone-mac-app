@@ -5802,6 +5802,145 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // ===== Phase 8BX — Upload PDF/image INTO the CRM (stored as attachment) =====
+    // For OEM-invoice rows (entityType 'apinvoice', id=row data-apid) and
+    // client-PO rows (entityType 'clientpo', id=row data-cpoid). The uploaded
+    // file persists via addAttachment → SQLite (survives restart) and the
+    // Document Export packs it. Link/local-path fields are untouched (additive).
+    window.__MS_DOC_UPLOAD_ACCEPT = 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png';
+
+    // Render the "✓ PDF stored / Replace / Remove" status for a row.
+    window.__msRenderDocUploadStatus = function (row, entityType) {
+        if (!row) return;
+        var statusEl = row.querySelector(entityType === 'apinvoice' ? '.ap-upload-status' : '.cpo-upload-status');
+        if (!statusEl) return;
+        var attId = row.getAttribute('data-upload-attid') || '';
+        var idAttr = entityType === 'apinvoice' ? 'data-apid' : 'data-cpoid';
+        var entId = row.getAttribute(idAttr) || '';
+        if (attId) {
+            var nm = '';
+            try {
+                var list = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor(entityType, entId) : [];
+                var rec = list.filter(function (a) { return a.id === attId; })[0];
+                nm = rec ? (rec.filename || 'file') : '(stored)';
+            } catch (e) { nm = '(stored)'; }
+            statusEl.innerHTML = '<span style="color:var(--success,#3fb950);"><i class="fas fa-check-circle"></i> PDF stored: ' + pEsc(nm) + '</span> ' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px;" onclick="window.__msUploadDocFile(this.closest(\'' + (entityType === 'apinvoice' ? '.ap-row' : '.client-po-row') + '\'), \'' + entityType + '\')">Replace</button> ' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px; color:var(--danger);" onclick="window.__msRemoveDocUpload(this.closest(\'' + (entityType === 'apinvoice' ? '.ap-row' : '.client-po-row') + '\'), \'' + entityType + '\')">Remove</button>';
+        } else {
+            statusEl.innerHTML = '<span style="color:var(--text-dim);">No file uploaded into CRM yet (will not be in the zip).</span>';
+        }
+    };
+
+    // Trigger a file pick + upload for a row.
+    window.__msUploadDocFile = function (row, entityType) {
+        if (!row) return;
+        var idAttr = entityType === 'apinvoice' ? 'data-apid' : 'data-cpoid';
+        var entId = row.getAttribute(idAttr) || '';
+        if (!entId) { // assign on the fly if missing
+            entId = (typeof prospectNewId === 'function' ? prospectNewId(entityType) : entityType + '_' + Date.now().toString(36));
+            row.setAttribute(idAttr, entId);
+        }
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = window.__MS_DOC_UPLOAD_ACCEPT;
+        input.style.display = 'none';
+        document.body.appendChild(input);
+        input.onchange = function () {
+            if (!input.files || !input.files[0]) { input.remove(); return; }
+            var file = input.files[0];
+            if (typeof addAttachment !== 'function') { alert('Attachment system unavailable.'); input.remove(); return; }
+            // Remove a previously uploaded file for this row (replace semantics).
+            var oldAtt = row.getAttribute('data-upload-attid') || '';
+            if (oldAtt) { try { window.__msPurgeAttachment(entityType, entId, oldAtt); } catch (e) {} }
+            addAttachment(entityType, entId, file, 'Uploaded ' + entityType + ' document', function (rec) {
+                row.setAttribute('data-upload-attid', rec.id);
+                window.__msRenderDocUploadStatus(row, entityType);
+                if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> PDF stored in CRM. Remember to <strong>Save</strong> the contract.', 5000);
+            });
+            input.remove();
+        };
+        input.click();
+    };
+
+    // Remove an uploaded file from a row.
+    window.__msRemoveDocUpload = function (row, entityType) {
+        if (!row) return;
+        if (!confirm('Remove the uploaded PDF for this row? (The link/path stays.)')) return;
+        var idAttr = entityType === 'apinvoice' ? 'data-apid' : 'data-cpoid';
+        var entId = row.getAttribute(idAttr) || '';
+        var attId = row.getAttribute('data-upload-attid') || '';
+        if (attId) { try { window.__msPurgeAttachment(entityType, entId, attId); } catch (e) {} }
+        row.setAttribute('data-upload-attid', '');
+        window.__msRenderDocUploadStatus(row, entityType);
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-trash"></i> Upload removed. Remember to <strong>Save</strong> the contract.', 4000);
+    };
+
+    // Internal PO (single instance) — upload + status, keyed to contract.
+    window.__msUploadInternalPOFile = function () {
+        var statusEl = document.getElementById('internalPOUploadStatus');
+        if (!statusEl) return;
+        // entityId for internal PO = the contract's index being edited, suffixed.
+        var entId = (typeof currentUniCIdx !== 'undefined' && currentUniCIdx > -1) ? ('c' + currentUniCIdx + '_internalpo') : ('new_internalpo_' + Date.now().toString(36));
+        var input = document.createElement('input');
+        input.type = 'file'; input.accept = window.__MS_DOC_UPLOAD_ACCEPT; input.style.display = 'none';
+        document.body.appendChild(input);
+        input.onchange = function () {
+            if (!input.files || !input.files[0]) { input.remove(); return; }
+            if (typeof addAttachment !== 'function') { alert('Attachment system unavailable.'); input.remove(); return; }
+            var oldAtt = statusEl.getAttribute('data-attid') || '';
+            if (oldAtt) { try { window.__msPurgeAttachment('internalpo', entId, oldAtt); } catch (e) {} }
+            addAttachment('internalpo', entId, input.files[0], 'Uploaded internal PO document', function (rec) {
+                statusEl.setAttribute('data-attid', rec.id);
+                statusEl.setAttribute('data-entid', entId);
+                window.__msRenderInternalPOUploadStatus();
+                if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> PDF stored in CRM. Remember to <strong>Save</strong> the contract.', 5000);
+            });
+            input.remove();
+        };
+        input.click();
+    };
+
+    window.__msRenderInternalPOUploadStatus = function () {
+        var statusEl = document.getElementById('internalPOUploadStatus');
+        if (!statusEl) return;
+        var attId = statusEl.getAttribute('data-attid') || '';
+        var entId = statusEl.getAttribute('data-entid') || ((typeof currentUniCIdx !== 'undefined' && currentUniCIdx > -1) ? ('c' + currentUniCIdx + '_internalpo') : '');
+        if (attId) {
+            var nm = '';
+            try { var list = getAttachmentsFor('internalpo', entId); var rec = list.filter(function (a){return a.id===attId;})[0]; nm = rec ? (rec.filename||'file') : '(stored)'; } catch (e) { nm = '(stored)'; }
+            statusEl.innerHTML = '<span style="color:var(--success,#3fb950);"><i class="fas fa-check-circle"></i> PDF stored: ' + pEsc(nm) + '</span> ' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px;" onclick="window.__msUploadInternalPOFile()">Replace</button> ' +
+                '<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:11px; color:var(--danger);" onclick="window.__msRemoveInternalPOUpload()">Remove</button>';
+        } else {
+            statusEl.innerHTML = '<span style="color:var(--text-dim);">No file uploaded into CRM yet (will not be in the zip).</span>';
+        }
+    };
+
+    window.__msRemoveInternalPOUpload = function () {
+        var statusEl = document.getElementById('internalPOUploadStatus');
+        if (!statusEl) return;
+        if (!confirm('Remove the uploaded PDF for the Internal PO? (The link/path stays.)')) return;
+        var attId = statusEl.getAttribute('data-attid') || '';
+        var entId = statusEl.getAttribute('data-entid') || '';
+        if (attId) { try { window.__msPurgeAttachment('internalpo', entId, attId); } catch (e) {} }
+        statusEl.setAttribute('data-attid', '');
+        window.__msRenderInternalPOUploadStatus();
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-trash"></i> Upload removed. Remember to <strong>Save</strong> the contract.', 4000);
+    };
+
+    // Purge one attachment record from the in-memory map + persist.
+    window.__msPurgeAttachment = function (entityType, entityId, attId) {
+        if (typeof attEntityKey !== 'function' || typeof attachments === 'undefined') return;
+        var key = attEntityKey(entityType, entityId);
+        if (attachments[key]) {
+            attachments[key] = attachments[key].filter(function (a) { return a.id !== attId; });
+            if (attachments[key].length === 0) delete attachments[key];
+            if (typeof saveAttachments === 'function') saveAttachments();
+        }
+    };
+    // ===== /Phase 8BX upload helpers =====
+
     // Phase B-fix-8-D — Returns inline HTML for a small green paperclip icon
     // that opens a local file directly. Used by the AR / AP / PO register
     // rows to surface the local-file affordance without requiring the user
@@ -7046,7 +7185,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <div style="display:flex; gap:6px; align-items:stretch;">
                     <input type="url" id="internalPOLink" placeholder="URL to OEM PO document" style="flex:1;">
                     <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+                    <button type="button" id="internalPOUploadBtn" class="btn btn-ghost btn-sm" onclick="window.__msUploadInternalPOFile()" title="Upload PDF/image into the CRM"><i class="fas fa-file-arrow-up"></i></button>
                 </div>
+                <div id="internalPOUploadStatus" style="font-size:11px; margin:4px 0 0 2px;"></div>
                 <div class="local-file-panel" style="display:none;">
                     <span class="panel-label">Local file:</span>
                     <input type="text" id="internalPOLink__local" placeholder="/path/to/oem-po.pdf (or paste a path)" oninput="window.__msUpdateLocalToggleState(this)">
@@ -18731,20 +18872,25 @@ function generateYearlyInputs() {
 }
 
 // --- MULTIPLE CLIENT PO UI ---
-function addClientPORow(poNo = '', link = '', date = '', localPath = '') {
+function addClientPORow(poNo = '', link = '', date = '', localPath = '', cpoId = '', uploadAttId = '') {
     const container = document.getElementById('clientPOContainer');
     const row = document.createElement('div');
     row.className = 'client-po-row with-local-file';
     row.style.marginBottom = '6px';
+    if (!cpoId) cpoId = (typeof prospectNewId === 'function' ? prospectNewId('cpo') : 'cpo_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6));
+    row.setAttribute('data-cpoid', cpoId);
+    row.setAttribute('data-upload-attid', uploadAttId || '');
 
     row.innerHTML = `
-        <div class="client-po-row-main" style="display:grid; grid-template-columns:1fr 1fr 1fr auto auto; gap:10px; align-items:end;">
+        <div class="client-po-row-main" style="display:grid; grid-template-columns:1fr 1fr 1fr auto auto auto; gap:10px; align-items:end;">
             <div><label>PO No</label><input type="text" class="c-po-no" value="${poNo}"></div>
             <div><label>PO Link</label><input type="url" class="c-po-link" value="${link}" placeholder="Paste URL"></div>
             <div><label>PO Date</label><input type="date" class="c-po-date" value="${date}"></div>
             <button type="button" class="local-file-toggle" style="height:38px;" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+            <button type="button" class="btn btn-ghost btn-sm" style="height:38px; border-radius:6px;" onclick="window.__msUploadDocFile(this.closest('.client-po-row'), 'clientpo')" title="Upload PDF/image into the CRM"><i class="fas fa-file-arrow-up"></i></button>
             <button type="button" class="btn btn-danger btn-sm" style="height:38px; border-radius:6px;" onclick="this.closest('.client-po-row').remove()"><i class="fas fa-trash"></i></button>
         </div>
+        <div class="cpo-upload-status" style="font-size:11px; margin:4px 0 0 2px;"></div>
         <div class="local-file-panel" style="display:none;">
             <span class="panel-label">Local file:</span>
             <input type="text" class="c-po-localpath" placeholder="/path/to/po.pdf (or paste a path)" value="${localPath ? localPath.replace(/"/g, '&quot;') : ''}" oninput="window.__msUpdateLocalToggleState(this)">
@@ -18758,6 +18904,7 @@ function addClientPORow(poNo = '', link = '', date = '', localPath = '') {
         var lp = row.querySelector('.c-po-localpath');
         if (lp) window.__msUpdateLocalToggleState(lp);
     }
+    if (typeof window.__msRenderDocUploadStatus === 'function') window.__msRenderDocUploadStatus(row, 'clientpo');
 }
 
 function updateClientAnalysisCharts(labels, revs, costs, margins, fxs, marginPcts) {
@@ -19731,8 +19878,10 @@ function saveContract() {
         let poDate = row.querySelector('.c-po-date').value;
         let lpEl = row.querySelector('.c-po-localpath');
         let poLocalPath = lpEl ? (lpEl.value || '').trim() : '';
+        let cpoId = row.getAttribute('data-cpoid') || '';
+        let cpoUploadAttId = row.getAttribute('data-upload-attid') || '';
         if(poNo || poLink || poDate || poLocalPath) {
-            newClientPOs.push({ poNo, poLink, poDate, localPath: poLocalPath });
+            newClientPOs.push({ poNo, poLink, poDate, localPath: poLocalPath, cpoId: cpoId, uploadAttId: cpoUploadAttId });
         }
     });
 
@@ -19748,6 +19897,7 @@ function saveContract() {
         internalPO: document.getElementById('internalPO').value,
         internalPOLink: document.getElementById('internalPOLink').value,
         internalPOLocalPath: ((document.getElementById('internalPOLink__local') || {}).value || '').trim(),
+        internalPOUploadAttId: ((document.getElementById('internalPOUploadStatus') || {}).getAttribute && (document.getElementById('internalPOUploadStatus').getAttribute('data-attid') || '')) || '',
         internalPODate: document.getElementById('internalPODate').value,
         
         clientPO: primaryPO.poNo,
@@ -19904,6 +20054,8 @@ function editContract(i) {
     document.getElementById('services').value = c.services || ''; 
     document.getElementById('internalPO').value = c.internalPO || '';
     document.getElementById('internalPOLink').value = c.internalPOLink || '';
+    var _ipoStatus = document.getElementById('internalPOUploadStatus');
+    if (_ipoStatus) { _ipoStatus.setAttribute('data-attid', c.internalPOUploadAttId || ''); if (typeof window.__msRenderInternalPOUploadStatus === 'function') window.__msRenderInternalPOUploadStatus(); }
     var ipoLocalEl = document.getElementById('internalPOLink__local');
     if (ipoLocalEl) {
         ipoLocalEl.value = c.internalPOLocalPath || '';
@@ -19915,7 +20067,7 @@ function editContract(i) {
     const poContainer = document.getElementById('clientPOContainer');
     poContainer.innerHTML = '';
     if(c.clientPOs && c.clientPOs.length > 0) {
-        c.clientPOs.forEach(p => addClientPORow(p.poNo, p.poLink, p.poDate, p.localPath || ''));
+        c.clientPOs.forEach(p => addClientPORow(p.poNo, p.poLink, p.poDate, p.localPath || '', p.cpoId || '', p.uploadAttId || ''));
     } else {
         addClientPORow(c.clientPO || '', c.clientPOLink || '', c.clientPODate || '', c.clientPOLocalPath || '');
     }
@@ -20601,7 +20753,7 @@ function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='', loc
     updateModalSums();
 }
 
-function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='', localPath='') {
+function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='', localPath='', apId='', uploadAttId='') {
     if (!currText) {
         if (currentUniCIdx > -1 && contracts[currentUniCIdx]) {
             currText = contracts[currentUniCIdx].costCurrency === 'INR' ? 'INR' : 'USD';
@@ -20609,12 +20761,15 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
             currText = 'USD';
         }
     }
+    if (!apId) apId = (typeof prospectNewId === 'function' ? prospectNewId('apinv') : 'apinv_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6));
     const container = document.getElementById('apInvoicesContainer');
     const row = document.createElement('div');
     row.className = 'ap-row with-local-file';
     row.style.marginBottom = '6px';
+    row.setAttribute('data-apid', apId);
+    row.setAttribute('data-upload-attid', uploadAttId || '');
     row.innerHTML = `
-        <div class="ap-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 100px 1.2fr 1.5fr auto auto; gap:10px; align-items:center;">
+        <div class="ap-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 100px 1.2fr 1.5fr auto auto auto; gap:10px; align-items:center;">
             <input type="text" class="ap-no" placeholder="OEM Inv #" value="${invNo}" style="font-size:12px; padding:8px;">
             <input type="date" class="ap-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
             <input type="number" class="ap-amt" placeholder="Amt (${currText})" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
@@ -20622,8 +20777,10 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
             <input type="date" class="ap-paydate" value="${payDate}" style="font-size:12px; padding:8px;" title="Date Paid">
             <input type="url" class="ap-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
             <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+            <button type="button" class="ap-upload-btn btn btn-ghost btn-sm" style="padding:8px;" onclick="window.__msUploadDocFile(this.closest('.ap-row'), 'apinvoice')" title="Upload PDF/image into the CRM"><i class="fas fa-file-arrow-up"></i></button>
             <button class="btn btn-danger btn-sm" style="padding:8px;" onclick="this.closest('.ap-row').remove(); updateModalSums();"><i class="fas fa-trash"></i></button>
         </div>
+        <div class="ap-upload-status" style="font-size:11px; margin:4px 0 0 2px;"></div>
         <div class="local-file-panel" style="display:none;">
             <span class="panel-label">Local file:</span>
             <input type="text" class="ap-localpath" placeholder="/path/to/file.pdf (or paste a path)" value="${localPath ? localPath.replace(/"/g, '&quot;') : ''}" oninput="window.__msUpdateLocalToggleState(this)">
@@ -20637,6 +20794,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
         var lp = row.querySelector('.ap-localpath');
         if (lp) window.__msUpdateLocalToggleState(lp);
     }
+    if (typeof window.__msRenderDocUploadStatus === 'function') window.__msRenderDocUploadStatus(row, 'apinvoice');
     updateModalSums();
 }
 
@@ -20758,7 +20916,7 @@ function openUnifiedModal(cIdx, yIdx) {
 
     document.getElementById('apInvoicesContainer').innerHTML = '';
     if (y.apInvoices && y.apInvoices.length > 0) {
-        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || ''));
+        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || '', inv.apId || '', inv.uploadAttId || ''));
     } else if (y.oemInvoiceNo || y.oemInvoiceDate) {
         addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD');
     } else {
@@ -20808,9 +20966,11 @@ function submitUnifiedModal() {
         let lk = row.querySelector('.ap-link').value;
         let lpEl = row.querySelector('.ap-localpath');
         let lp = lpEl ? (lpEl.value || '').trim() : '';
+        let apId = row.getAttribute('data-apid') || '';
+        let uploadAttId = row.getAttribute('data-upload-attid') || '';
 
         if (no || dt || amt > 0) {
-            apInvoices.push({ invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp });
+            apInvoices.push({ invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp, apId: apId, uploadAttId: uploadAttId });
             apSumUSD += amt;
             apWeightedFXSum += (amt * fx);
         }
@@ -33471,6 +33631,9 @@ async function __refreshAttachmentsFromSQLite() {
 const ATT_KNOWN_ENTITY_TYPES = [
     'consultant_payment',
     'consultant',
+    'apinvoice',
+    'internalpo',
+    'clientpo',
     'gendoc',
     'invoice'
 ];
@@ -43059,16 +43222,31 @@ function __deGatherForOemInvoice(ref) {
     }
     if (sel) {
         var lab = 'OEM/Purchase Invoice ' + (sel.invNo || sel.oemInvoiceNo || '(unnumbered)');
+        // 8BX — uploaded PDF/image stored in CRM (packs into zip)
+        if (sel.apId && sel.uploadAttId) {
+            var oemAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('apinvoice', sel.apId) : [];
+            var oemFile = oemAtts.filter(function (a) { return a.id === sel.uploadAttId; })[0];
+            if (oemFile && oemFile.dataUrl) {
+                push({ folder: 'Purchase Invoices (OEM)', kind: 'zip', label: lab + ' [SELECTED] (uploaded)', filename: __deSafeName(lab) + (__deExtFromName(oemFile.filename, oemFile.mimeType) || ''), dataUrl: oemFile.dataUrl, mimeType: oemFile.mimeType, contractTag: c });
+            }
+        }
         if (sel.localPath) { push({ folder: 'Purchase Invoices (OEM)', kind: 'local', label: lab + ' [SELECTED]', path: sel.localPath, contractTag: c }); result.localChecks.push({ path: sel.localPath }); }
         else if (sel.link) push({ folder: 'Purchase Invoices (OEM)', kind: 'link', label: lab + ' [SELECTED]', url: sel.link, contractTag: c });
-        else push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' [SELECTED] — no file/link recorded', contractTag: c });
+        else if (!(sel.apId && sel.uploadAttId)) push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' [SELECTED] — no file/link recorded', contractTag: c });
     }
 
     // 2) Internal PO (contract-level) + PO-entity attachments for this contract
     var ilab = 'Internal PO ' + (c.internalPO || '');
+    // 8BX — uploaded internal PO file (packs into zip). Entity id = c<idx>_internalpo.
+    if (c.internalPOUploadAttId) {
+        var ipoEntId = 'c' + ref.cIdx + '_internalpo';
+        var ipoAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('internalpo', ipoEntId) : [];
+        var ipoFile = ipoAtts.filter(function (a) { return a.id === c.internalPOUploadAttId; })[0];
+        if (ipoFile && ipoFile.dataUrl) push({ folder: 'Internal POs', kind: 'zip', label: ilab + ' (uploaded)', filename: __deSafeName(ilab || 'Internal_PO') + (__deExtFromName(ipoFile.filename, ipoFile.mimeType) || ''), dataUrl: ipoFile.dataUrl, mimeType: ipoFile.mimeType, contractTag: c });
+    }
     if (c.internalPOLocalPath) { push({ folder: 'Internal POs', kind: 'local', label: ilab, path: c.internalPOLocalPath, contractTag: c }); result.localChecks.push({ path: c.internalPOLocalPath }); }
     else if (c.internalPOLink) push({ folder: 'Internal POs', kind: 'link', label: ilab, url: c.internalPOLink, contractTag: c });
-    else if (c.internalPO) push({ folder: 'Internal POs', kind: 'missing', label: ilab + ' — no file/link recorded', contractTag: c });
+    else if (c.internalPO && !c.internalPOUploadAttId) push({ folder: 'Internal POs', kind: 'missing', label: ilab + ' — no file/link recorded', contractTag: c });
     if (typeof purchaseOrders !== 'undefined') {
         purchaseOrders.forEach(function (po) {
             if (String(po.linkedContractIdx) !== String(ref.cIdx)) return;
@@ -43085,9 +43263,15 @@ function __deGatherForOemInvoice(ref) {
     cpos.forEach(function (po) {
         if (!po) return;
         var lab = 'Client PO ' + (po.poNo || po.poNumber || '');
+        // 8BX — uploaded client PO file (packs into zip)
+        if (po.cpoId && po.uploadAttId) {
+            var cpoAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('clientpo', po.cpoId) : [];
+            var cpoFile = cpoAtts.filter(function (a) { return a.id === po.uploadAttId; })[0];
+            if (cpoFile && cpoFile.dataUrl) push({ folder: 'Client POs', kind: 'zip', label: lab + ' (uploaded)', filename: __deSafeName(lab || 'Client_PO') + (__deExtFromName(cpoFile.filename, cpoFile.mimeType) || ''), dataUrl: cpoFile.dataUrl, mimeType: cpoFile.mimeType, contractTag: c });
+        }
         if (po.localPath) { push({ folder: 'Client POs', kind: 'local', label: lab, path: po.localPath, contractTag: c }); result.localChecks.push({ path: po.localPath }); }
         else if (po.poLink || po.link) push({ folder: 'Client POs', kind: 'link', label: lab, url: po.poLink || po.link, contractTag: c });
-        else if (po.poNo || po.poNumber) push({ folder: 'Client POs', kind: 'missing', label: lab + ' — no file/link recorded', contractTag: c });
+        else if ((po.poNo || po.poNumber) && !(po.cpoId && po.uploadAttId)) push({ folder: 'Client POs', kind: 'missing', label: lab + ' — no file/link recorded', contractTag: c });
     });
 
     // 4) Sales invoice(s) — same cycle as the selected OEM invoice, OR untagged
@@ -43393,11 +43577,12 @@ function __deRenderPreview(g, ctx) {
         '<strong style="color:var(--warning,#d29922);">' + locals + '</strong> local files · ' +
         '<strong style="color:var(--danger,#f85149);">' + missing + '</strong> missing';
     var btnAttr = ctx.mode === 'remit' ? ('onclick="downloadDocExportRemit(\'' + (ctx.oemRef || '') + '\')"') : 'onclick="downloadDocExportClient()"';
-    var disabled = inZip === 0 ? ' disabled title="Nothing to zip — all items are links/local/missing. The INDEX.txt will still list them."' : '';
+    var dlLabel = inZip === 0 ? 'Download INDEX' : 'Download .zip';
+    var dlTitle = inZip === 0 ? ' title="No files are stored in the CRM for this selection, so the download is a zip containing just INDEX.txt (the full checklist with every link/path)."' : '';
     return '<div class="card">' +
         '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap;">' +
             '<h3 style="margin:0; border:none; padding:0;"><i class="fas fa-list-check"></i> Bundle contents</h3>' +
-            '<button class="btn btn-primary"' + btnAttr + disabled + '><i class="fas fa-download"></i> Download .zip</button>' +
+            '<button class="btn btn-primary"' + btnAttr + dlTitle + '><i class="fas fa-download"></i> ' + dlLabel + '</button>' +
         '</div>' +
         '<div style="font-size:12.5px; color:var(--text-dim); margin-bottom:12px;">' + summary + '</div>' +
         '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:10px;"><i class="fas fa-circle-info"></i> Only <strong>In ZIP</strong> items are packed. Links and local files are listed (with location) in INDEX.txt so your CA/bank can find them.</div>' +
