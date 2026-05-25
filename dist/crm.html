@@ -10583,17 +10583,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <div id="docExpRemitSection">
     <div class="card" style="margin-bottom:20px;">
       <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-handshake"></i> Pick an OEM invoice</h3>
-      <div style="display:grid; grid-template-columns: 1fr 240px; gap:14px; align-items:end;">
-        <div>
-          <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">OEM invoice (grouped by OEM)</label>
-          <select id="docExpContract" onchange="renderDocExportRemitPreview()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
-            <option value="">— Select a contract —</option>
-          </select>
-        </div>
-        <div>
-          <input id="docExpContractSearch" type="text" placeholder="Search by OEM / client / invoice / PO…" oninput="populateDocExportContractPicker()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
-        </div>
-      </div>
+      <input id="docExpContractSearch" type="text" placeholder="Search by OEM / client / invoice no / PO…" oninput="populateDocExportContractPicker()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; margin-bottom:6px;">
+      <div id="docExpPickerHint" style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Type to filter, or scroll. Click an OEM invoice to select it.</div>
+      <!-- Hidden holder for the selected ref; the rest of the engine reads .value here. -->
+      <input type="hidden" id="docExpContract" value="">
+      <div id="docExpPickerList" style="max-height:340px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; background:var(--input-bg);"></div>
     </div>
     <div id="docExpRemitPreview"></div>
   </div>
@@ -43433,7 +43427,6 @@ function populateDocExportContractPicker() {
     var sel = document.getElementById('docExpContract');
     if (!sel || typeof contracts === 'undefined') return;
     var q = ((document.getElementById('docExpContractSearch') || {}).value || '').trim().toLowerCase();
-    var cur = sel.value;
     // One row per OEM invoice. value encodes cIdx|yi|apIdx ('L' = legacy single).
     var rows = [];
     contracts.forEach(function (c, i) {
@@ -43465,20 +43458,40 @@ function populateDocExportContractPicker() {
         if (a.oem.toLowerCase() > b.oem.toLowerCase()) return 1;
         return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
     });
-    var html = '<option value="">— Select an OEM invoice —</option>';
+    var listEl = document.getElementById('docExpPickerList');
+    var cur = (document.getElementById('docExpContract') || {}).value || '';
+    if (!listEl) return;
+    if (rows.length === 0) {
+        listEl.innerHTML = '<div style="padding:16px; text-align:center; color:var(--text-dim); font-size:13px;">' + (q ? 'No OEM invoices match “' + pEsc(q) + '”.' : 'No OEM invoices recorded.') + '</div>';
+        return;
+    }
+    var html = '';
     var lastOem = null;
     rows.forEach(function (r) {
         if (r.oem !== lastOem) {
-            if (lastOem !== null) html += '</optgroup>';
-            html += '<optgroup label="' + pEsc(r.oem) + '">';
+            html += '<div style="position:sticky; top:0; background:var(--card-bg,#1e1e24); color:var(--text-dim); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:6px 12px; border-bottom:1px solid var(--glass-border);">' + pEsc(r.oem) + '</div>';
             lastOem = r.oem;
         }
-        html += '<option value="' + pEsc(r.val) + '">' + pEsc(r.label) + '</option>';
+        var isSel = (r.val === cur);
+        html += '<div class="de-picker-row" data-val="' + pEsc(r.val) + '" onclick="__deSelectOemInvoice(this.getAttribute(\'data-val\'))" ' +
+            'style="padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--glass-border); ' +
+            (isSel ? 'background:var(--accent-cyan,#2563eb); color:#fff;' : 'color:var(--text-main);') + '" ' +
+            'onmouseover="if(!this.classList.contains(\'de-sel\'))this.style.background=\'rgba(127,127,127,0.10)\';" ' +
+            'onmouseout="if(!this.classList.contains(\'de-sel\'))this.style.background=\'transparent\';"' +
+            (isSel ? ' class="de-picker-row de-sel"' : '') + '>' +
+            (isSel ? '<i class="fas fa-check" style="margin-right:6px;"></i>' : '') + pEsc(r.label) +
+        '</div>';
     });
-    if (lastOem !== null) html += '</optgroup>';
-    if (rows.length === 0) html = '<option value="">— No OEM invoices recorded —</option>';
-    sel.innerHTML = html;
-    if (cur) sel.value = cur;
+    listEl.innerHTML = html;
+}
+
+// Select an OEM invoice from the grouped list: set the hidden holder + preview.
+function __deSelectOemInvoice(val) {
+    var holder = document.getElementById('docExpContract');
+    if (holder) holder.value = val || '';
+    // Re-render the list to move the highlight, then the preview.
+    populateDocExportContractPicker();
+    if (typeof renderDocExportRemitPreview === 'function') renderDocExportRemitPreview();
 }
 
 // Parse a "cIdx|yi|apIdx" picker value into a ref object, or null.
