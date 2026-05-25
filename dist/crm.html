@@ -43237,31 +43237,33 @@ function __deGatherForOemInvoice(ref) {
     }
     if (sel) {
         var lab = 'OEM/Purchase Invoice ' + (sel.invNo || sel.oemInvoiceNo || '(unnumbered)');
+        var oemTarget = { type: 'apinvoice', cIdx: ref.cIdx, yi: ref.yi, apIdx: ref.apIdx };
         // 8BX — uploaded PDF/image stored in CRM (packs into zip)
         if (sel.apId && sel.uploadAttId) {
             var oemAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('apinvoice', sel.apId) : [];
             var oemFile = oemAtts.filter(function (a) { return a.id === sel.uploadAttId; })[0];
             if (oemFile && oemFile.dataUrl) {
-                push({ folder: 'Purchase Invoices (OEM)', kind: 'zip', label: lab + ' [SELECTED] (uploaded)', filename: __deSafeName(lab) + (__deExtFromName(oemFile.filename, oemFile.mimeType) || ''), dataUrl: oemFile.dataUrl, mimeType: oemFile.mimeType, contractTag: c });
+                push({ folder: 'Purchase Invoices (OEM)', kind: 'zip', label: lab + ' [SELECTED] (uploaded)', filename: __deSafeName(lab) + (__deExtFromName(oemFile.filename, oemFile.mimeType) || ''), dataUrl: oemFile.dataUrl, mimeType: oemFile.mimeType, contractTag: c, upTarget: oemTarget });
             }
         }
-        if (sel.localPath) { push({ folder: 'Purchase Invoices (OEM)', kind: 'local', label: lab + ' [SELECTED]', path: sel.localPath, contractTag: c }); result.localChecks.push({ path: sel.localPath }); }
-        else if (sel.link) push({ folder: 'Purchase Invoices (OEM)', kind: 'link', label: lab + ' [SELECTED]', url: sel.link, contractTag: c });
-        else if (!(sel.apId && sel.uploadAttId)) push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' [SELECTED] — no file/link recorded', contractTag: c });
+        if (sel.localPath) { push({ folder: 'Purchase Invoices (OEM)', kind: 'local', label: lab + ' [SELECTED]', path: sel.localPath, contractTag: c, upTarget: oemTarget }); result.localChecks.push({ path: sel.localPath }); }
+        else if (sel.link) push({ folder: 'Purchase Invoices (OEM)', kind: 'link', label: lab + ' [SELECTED]', url: sel.link, contractTag: c, upTarget: oemTarget });
+        else if (!(sel.apId && sel.uploadAttId)) push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' [SELECTED] — no file/link recorded', contractTag: c, upTarget: oemTarget });
     }
 
     // 2) Internal PO (contract-level) + PO-entity attachments for this contract
     var ilab = 'Internal PO ' + (c.internalPO || '');
+    var ipoTarget = { type: 'internalpo', cIdx: ref.cIdx };
     // 8BX — uploaded internal PO file (packs into zip). Entity id = c<idx>_internalpo.
     if (c.internalPOUploadAttId) {
         var ipoEntId = 'c' + ref.cIdx + '_internalpo';
         var ipoAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('internalpo', ipoEntId) : [];
         var ipoFile = ipoAtts.filter(function (a) { return a.id === c.internalPOUploadAttId; })[0];
-        if (ipoFile && ipoFile.dataUrl) push({ folder: 'Internal POs', kind: 'zip', label: ilab + ' (uploaded)', filename: __deSafeName(ilab || 'Internal_PO') + (__deExtFromName(ipoFile.filename, ipoFile.mimeType) || ''), dataUrl: ipoFile.dataUrl, mimeType: ipoFile.mimeType, contractTag: c });
+        if (ipoFile && ipoFile.dataUrl) push({ folder: 'Internal POs', kind: 'zip', label: ilab + ' (uploaded)', filename: __deSafeName(ilab || 'Internal_PO') + (__deExtFromName(ipoFile.filename, ipoFile.mimeType) || ''), dataUrl: ipoFile.dataUrl, mimeType: ipoFile.mimeType, contractTag: c, upTarget: ipoTarget });
     }
-    if (c.internalPOLocalPath) { push({ folder: 'Internal POs', kind: 'local', label: ilab, path: c.internalPOLocalPath, contractTag: c }); result.localChecks.push({ path: c.internalPOLocalPath }); }
-    else if (c.internalPOLink) push({ folder: 'Internal POs', kind: 'link', label: ilab, url: c.internalPOLink, contractTag: c });
-    else if (c.internalPO && !c.internalPOUploadAttId) push({ folder: 'Internal POs', kind: 'missing', label: ilab + ' — no file/link recorded', contractTag: c });
+    if (c.internalPOLocalPath) { push({ folder: 'Internal POs', kind: 'local', label: ilab, path: c.internalPOLocalPath, contractTag: c, upTarget: ipoTarget }); result.localChecks.push({ path: c.internalPOLocalPath }); }
+    else if (c.internalPOLink) push({ folder: 'Internal POs', kind: 'link', label: ilab, url: c.internalPOLink, contractTag: c, upTarget: ipoTarget });
+    else if (c.internalPO && !c.internalPOUploadAttId) push({ folder: 'Internal POs', kind: 'missing', label: ilab + ' — no file/link recorded', contractTag: c, upTarget: ipoTarget });
     if (typeof purchaseOrders !== 'undefined') {
         purchaseOrders.forEach(function (po) {
             if (String(po.linkedContractIdx) !== String(ref.cIdx)) return;
@@ -43274,19 +43276,21 @@ function __deGatherForOemInvoice(ref) {
     }
 
     // 3) Client PO(s)
-    var cpos = Array.isArray(c.clientPOs) && c.clientPOs.length ? c.clientPOs : [{ poNo: c.clientPO, poLink: c.clientPOLink, localPath: c.clientPOLocalPath }];
-    cpos.forEach(function (po) {
+    var cposIsArray = Array.isArray(c.clientPOs) && c.clientPOs.length;
+    var cpos = cposIsArray ? c.clientPOs : [{ poNo: c.clientPO, poLink: c.clientPOLink, localPath: c.clientPOLocalPath }];
+    cpos.forEach(function (po, cpoArrIdx) {
         if (!po) return;
         var lab = 'Client PO ' + (po.poNo || po.poNumber || '');
+        var cpoTarget = { type: 'clientpo', cIdx: ref.cIdx, cpoArrIdx: cposIsArray ? cpoArrIdx : 'L' };
         // 8BX — uploaded client PO file (packs into zip)
         if (po.cpoId && po.uploadAttId) {
             var cpoAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('clientpo', po.cpoId) : [];
             var cpoFile = cpoAtts.filter(function (a) { return a.id === po.uploadAttId; })[0];
-            if (cpoFile && cpoFile.dataUrl) push({ folder: 'Client POs', kind: 'zip', label: lab + ' (uploaded)', filename: __deSafeName(lab || 'Client_PO') + (__deExtFromName(cpoFile.filename, cpoFile.mimeType) || ''), dataUrl: cpoFile.dataUrl, mimeType: cpoFile.mimeType, contractTag: c });
+            if (cpoFile && cpoFile.dataUrl) push({ folder: 'Client POs', kind: 'zip', label: lab + ' (uploaded)', filename: __deSafeName(lab || 'Client_PO') + (__deExtFromName(cpoFile.filename, cpoFile.mimeType) || ''), dataUrl: cpoFile.dataUrl, mimeType: cpoFile.mimeType, contractTag: c, upTarget: cpoTarget });
         }
-        if (po.localPath) { push({ folder: 'Client POs', kind: 'local', label: lab, path: po.localPath, contractTag: c }); result.localChecks.push({ path: po.localPath }); }
-        else if (po.poLink || po.link) push({ folder: 'Client POs', kind: 'link', label: lab, url: po.poLink || po.link, contractTag: c });
-        else if ((po.poNo || po.poNumber) && !(po.cpoId && po.uploadAttId)) push({ folder: 'Client POs', kind: 'missing', label: lab + ' — no file/link recorded', contractTag: c });
+        if (po.localPath) { push({ folder: 'Client POs', kind: 'local', label: lab, path: po.localPath, contractTag: c, upTarget: cpoTarget }); result.localChecks.push({ path: po.localPath }); }
+        else if (po.poLink || po.link) push({ folder: 'Client POs', kind: 'link', label: lab, url: po.poLink || po.link, contractTag: c, upTarget: cpoTarget });
+        else if ((po.poNo || po.poNumber) && !(po.cpoId && po.uploadAttId)) push({ folder: 'Client POs', kind: 'missing', label: lab + ' — no file/link recorded', contractTag: c, upTarget: cpoTarget });
     });
 
     // 4) Sales invoice(s) — same cycle as the selected OEM invoice, OR untagged
@@ -43667,6 +43671,8 @@ function __deContractInFY(c, range) {
 
 // ---- Shared preview renderer ------------------------------------------
 function __deRenderPreview(g, ctx) {
+    window.__deCurrentItems = g.items; // stash for upload-from-preview
+    window.__deCurrentCtx = ctx;
     var inZip = g.items.filter(function (i) { return i.kind === 'zip'; }).length;
     var links = g.items.filter(function (i) { return i.kind === 'link'; }).length;
     var locals = g.items.filter(function (i) { return i.kind === 'local'; }).length;
@@ -43683,10 +43689,18 @@ function __deRenderPreview(g, ctx) {
         var detail = '';
         if (it.kind === 'link') detail = '<div style="font-size:11px; color:var(--text-dim); word-break:break-all;">' + pEsc(it.url) + '</div>';
         else if (it.kind === 'local') detail = '<div class="deLocalStatus" data-path="' + pEsc(it.path) + '" style="font-size:11px; color:var(--text-dim); word-break:break-all;">' + pEsc(it.path) + ' · checking…</div>';
+        // 8CA — upload-from-preview action for OEM invoice / internal PO / client PO rows.
+        var action = '';
+        if (it.upTarget) {
+            var verb = (it.kind === 'zip') ? 'Replace' : 'Upload';
+            var icon = (it.kind === 'zip') ? 'fa-rotate' : 'fa-file-arrow-up';
+            action = '<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px; font-size:11.5px;" onclick="__deUploadFromPreview(' + i + ')" title="Upload a PDF/image into the CRM for this document (saves immediately and links everywhere)"><i class="fas ' + icon + '"></i> ' + verb + '</button>';
+        }
         return '<tr>' +
             '<td><span style="display:inline-block; padding:2px 8px; border-radius:9px; font-size:11px; font-weight:600; color:' + color + '; background:rgba(127,127,127,0.12);">' + badge + '</span></td>' +
             '<td>' + pEsc(it.folder) + '</td>' +
             '<td>' + pEsc(it.label) + detail + '</td>' +
+            '<td style="text-align:right; white-space:nowrap;">' + action + '</td>' +
         '</tr>';
     }).join('');
     var summary = '<strong style="color:var(--success,#3fb950);">' + inZip + '</strong> in zip · ' +
@@ -43702,8 +43716,8 @@ function __deRenderPreview(g, ctx) {
             '<button class="btn btn-primary"' + btnAttr + dlTitle + '><i class="fas fa-download"></i> ' + dlLabel + '</button>' +
         '</div>' +
         '<div style="font-size:12.5px; color:var(--text-dim); margin-bottom:12px;">' + summary + '</div>' +
-        '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:10px;"><i class="fas fa-circle-info"></i> Only <strong>In ZIP</strong> items are packed. Links and local files are listed (with location) in INDEX.txt so your CA/bank can find them.</div>' +
-        '<div class="table-scroll-wrap"><table><thead><tr><th style="width:110px;">Where</th><th style="width:150px;">Folder</th><th>Document</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:10px;"><i class="fas fa-circle-info"></i> Only <strong>In ZIP</strong> items are packed. Use <strong>Upload</strong> on a row to store its PDF in the CRM (saves immediately, links everywhere). Links and local files are also listed in INDEX.txt.</div>' +
+        '<div class="table-scroll-wrap"><table><thead><tr><th style="width:110px;">Where</th><th style="width:150px;">Folder</th><th>Document</th><th style="width:110px; text-align:right;">Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
 }
 
@@ -43722,6 +43736,86 @@ function __deRunLocalChecks(g) {
             node.innerHTML = pEsc(path) + ' · <span style="color:var(--text-dim);">(check failed)</span>';
         });
     });
+}
+
+// ---- 8CA — Upload a file from the Bundle preview, save immediately ----
+// Attaches to the correct underlying record (OEM invoice / internal PO /
+// client PO), writes the reference into contracts, persists, and refreshes
+// the preview. Links everywhere because it writes the same fields the
+// contract form writes.
+function __deUploadFromPreview(itemIndex) {
+    var items = window.__deCurrentItems || [];
+    var it = items[itemIndex];
+    if (!it || !it.upTarget) return;
+    var tgt = it.upTarget;
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = (window.__MS_DOC_UPLOAD_ACCEPT || 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png');
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.onchange = function () {
+        if (!input.files || !input.files[0]) { input.remove(); return; }
+        if (typeof addAttachment !== 'function') { alert('Attachment system unavailable.'); input.remove(); return; }
+        var file = input.files[0];
+        var c = contracts[tgt.cIdx];
+        if (!c) { alert('Contract not found.'); input.remove(); return; }
+
+        if (tgt.type === 'apinvoice') {
+            var by = (Array.isArray(c.billingYears) ? c.billingYears : [])[tgt.yi];
+            if (!by) { alert('Billing cycle not found.'); input.remove(); return; }
+            var apObj;
+            if (tgt.apIdx === 'L') {
+                // legacy single OEM invoice — promote to an apInvoices[0] entry so it can hold an id
+                if (!Array.isArray(by.apInvoices)) by.apInvoices = [];
+                if (!by.apInvoices.length) by.apInvoices.push({ invNo: by.oemInvoiceNo || '', date: by.oemInvoiceDate || '', link: by.oemInvoiceLink || '', localPath: by.oemInvoiceLocalPath || '' });
+                apObj = by.apInvoices[0];
+            } else {
+                apObj = (Array.isArray(by.apInvoices) ? by.apInvoices : [])[parseInt(tgt.apIdx)];
+            }
+            if (!apObj) { alert('OEM invoice row not found.'); input.remove(); return; }
+            if (!apObj.apId) apObj.apId = (typeof prospectNewId === 'function' ? prospectNewId('apinv') : 'apinv_' + Date.now().toString(36));
+            if (apObj.uploadAttId) { try { window.__msPurgeAttachment('apinvoice', apObj.apId, apObj.uploadAttId); } catch (e) {} }
+            addAttachment('apinvoice', apObj.apId, file, 'Uploaded OEM invoice document', function (rec) {
+                apObj.uploadAttId = rec.id;
+                if (typeof persistData === 'function') persistData();
+                __deAfterPreviewUpload();
+            });
+        } else if (tgt.type === 'internalpo') {
+            var ipoEntId = 'c' + tgt.cIdx + '_internalpo';
+            if (c.internalPOUploadAttId) { try { window.__msPurgeAttachment('internalpo', ipoEntId, c.internalPOUploadAttId); } catch (e) {} }
+            addAttachment('internalpo', ipoEntId, file, 'Uploaded internal PO document', function (rec) {
+                c.internalPOUploadAttId = rec.id;
+                if (typeof persistData === 'function') persistData();
+                __deAfterPreviewUpload();
+            });
+        } else if (tgt.type === 'clientpo') {
+            var poObj;
+            if (tgt.cpoArrIdx === 'L') {
+                if (!Array.isArray(c.clientPOs) || !c.clientPOs.length) c.clientPOs = [{ poNo: c.clientPO || '', poLink: c.clientPOLink || '', localPath: c.clientPOLocalPath || '' }];
+                poObj = c.clientPOs[0];
+            } else {
+                poObj = (Array.isArray(c.clientPOs) ? c.clientPOs : [])[parseInt(tgt.cpoArrIdx)];
+            }
+            if (!poObj) { alert('Client PO row not found.'); input.remove(); return; }
+            if (!poObj.cpoId) poObj.cpoId = (typeof prospectNewId === 'function' ? prospectNewId('cpo') : 'cpo_' + Date.now().toString(36));
+            if (poObj.uploadAttId) { try { window.__msPurgeAttachment('clientpo', poObj.cpoId, poObj.uploadAttId); } catch (e) {} }
+            addAttachment('clientpo', poObj.cpoId, file, 'Uploaded client PO document', function (rec) {
+                poObj.uploadAttId = rec.id;
+                if (typeof persistData === 'function') persistData();
+                __deAfterPreviewUpload();
+            });
+        }
+        input.remove();
+    };
+    input.click();
+}
+
+// Refresh the preview after an upload (re-gather so the row flips to In ZIP).
+function __deAfterPreviewUpload() {
+    if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> PDF stored in the CRM and linked. It\'s now in the bundle.', 5000);
+    var ctx = window.__deCurrentCtx || {};
+    if (ctx.mode === 'remit' && typeof renderDocExportRemitPreview === 'function') renderDocExportRemitPreview();
+    else if (ctx.mode === 'client' && typeof renderDocExportClientPreview === 'function') renderDocExportClientPreview();
 }
 
 // ---- Build INDEX.txt text ---------------------------------------------
