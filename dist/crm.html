@@ -10583,8 +10583,29 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   <div id="docExpRemitSection">
     <div class="card" style="margin-bottom:20px;">
       <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-handshake"></i> Pick an OEM invoice</h3>
-      <input id="docExpContractSearch" type="text" placeholder="Search by OEM / client / invoice no / PO…" oninput="populateDocExportContractPicker()" style="width:100%; padding:9px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; margin-bottom:6px;">
-      <div id="docExpPickerHint" style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Type to filter, or scroll. Click an OEM invoice to select it.</div>
+      <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:10px;">
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">OEM</label>
+          <select id="docExpFiltOem" onchange="__deOnFilterChange()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;"><option value="">All OEMs</option></select>
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">Client</label>
+          <select id="docExpFiltClient" onchange="__deOnFilterChange()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;"><option value="">All clients</option></select>
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">Financial year</label>
+          <select id="docExpFiltFy" onchange="__deOnFilterChange()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;"><option value="">All years</option></select>
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:3px;">Product</label>
+          <select id="docExpFiltProduct" onchange="__deOnFilterChange()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;"><option value="">All products</option></select>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">
+        <input id="docExpContractSearch" type="text" placeholder="Search invoice no / PO…" oninput="__deOnFilterChange()" style="flex:1; padding:8px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="__deClearFilters()"><i class="fas fa-rotate-left"></i> Clear filters</button>
+      </div>
+      <div id="docExpPickerHint" style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Narrow with the filters above (they refine each other), then click an OEM invoice to select it.</div>
       <!-- Hidden holder for the selected ref; the rest of the engine reads .value here. -->
       <input type="hidden" id="docExpContract" value="">
       <div id="docExpPickerList" style="max-height:340px; overflow-y:auto; border:1px solid var(--glass-border); border-radius:8px; background:var(--input-bg);"></div>
@@ -43423,46 +43444,116 @@ function __deGatherForContract(cIdx, opts) {
 }
 
 // ---- Contract picker (grouped by OEM, searchable) ---------------------
-function populateDocExportContractPicker() {
-    var sel = document.getElementById('docExpContract');
-    if (!sel || typeof contracts === 'undefined') return;
-    var q = ((document.getElementById('docExpContractSearch') || {}).value || '').trim().toLowerCase();
-    // One row per OEM invoice. value encodes cIdx|yi|apIdx ('L' = legacy single).
+// Build ALL candidate OEM-invoice rows (unfiltered), each with filter fields.
+function __deBuildAllOemRows() {
     var rows = [];
+    if (typeof contracts === 'undefined') return rows;
+    function fyOf(dateStr) {
+        if (!dateStr) return '';
+        var d = new Date(dateStr); if (isNaN(d.getTime())) return '';
+        var y = d.getFullYear(); if (y < 2000 || y > 2100) return '';
+        var m = d.getMonth(); var fyStart = (m >= 3) ? y : y - 1;
+        return fyStart + '-' + (fyStart + 1);
+    }
     contracts.forEach(function (c, i) {
         if (!c) return;
         var oem = (typeof _caExportEffectiveOem === 'function' ? _caExportEffectiveOem(c) : (c.oem || '')) || 'Other / Service';
         var client = c.client || '(no client)';
-        var prod = c.product ? ' · ' + c.product : '';
+        var product = c.product || '';
+        var prodLab = product ? ' · ' + product : '';
         var byrs = Array.isArray(c.billingYears) ? c.billingYears : [];
         byrs.forEach(function (by, yi) {
             var aps = Array.isArray(by.apInvoices) ? by.apInvoices : [];
             aps.forEach(function (ap, ai) {
                 var invNo = ap.invNo || ap.oemInvoiceNo || '';
-                if (!invNo && !ap.link && !ap.localPath) return; // skip empty rows
-                var label = 'OEM Inv ' + (invNo || '(unnumbered)') + ' · ' + client + prod;
-                var hay = (oem + ' ' + client + ' ' + invNo + ' ' + (c.internalPO || '') + ' ' + (c.clientPO || '') + ' ' + (c.product || '')).toLowerCase();
-                if (q && hay.indexOf(q) === -1) return;
-                rows.push({ val: i + '|' + yi + '|' + ai, oem: oem, label: label });
+                if (!invNo && !ap.link && !ap.localPath) return;
+                rows.push({
+                    val: i + '|' + yi + '|' + ai, oem: oem, client: client, product: product,
+                    fy: fyOf(ap.date), invNo: invNo,
+                    label: 'OEM Inv ' + (invNo || '(unnumbered)') + ' · ' + client + prodLab,
+                    hay: (oem + ' ' + client + ' ' + invNo + ' ' + (c.internalPO || '') + ' ' + (c.clientPO || '') + ' ' + product).toLowerCase()
+                });
             });
-            // legacy single OEM invoice on the year
             if (by.oemInvoiceNo && !(Array.isArray(by.apInvoices) && by.apInvoices.length)) {
-                var label2 = 'OEM Inv ' + by.oemInvoiceNo + ' · ' + client + prod;
-                var hay2 = (oem + ' ' + client + ' ' + by.oemInvoiceNo + ' ' + (c.internalPO || '') + ' ' + (c.product || '')).toLowerCase();
-                if (!q || hay2.indexOf(q) !== -1) rows.push({ val: i + '|' + yi + '|L', oem: oem, label: label2 });
+                rows.push({
+                    val: i + '|' + yi + '|L', oem: oem, client: client, product: product,
+                    fy: fyOf(by.oemInvoiceDate), invNo: by.oemInvoiceNo,
+                    label: 'OEM Inv ' + by.oemInvoiceNo + ' · ' + client + prodLab,
+                    hay: (oem + ' ' + client + ' ' + by.oemInvoiceNo + ' ' + (c.internalPO || '') + ' ' + product).toLowerCase()
+                });
             }
         });
     });
+    return rows;
+}
+
+// Read the current filter values.
+function __deGetFilters() {
+    return {
+        oem: (document.getElementById('docExpFiltOem') || {}).value || '',
+        client: (document.getElementById('docExpFiltClient') || {}).value || '',
+        fy: (document.getElementById('docExpFiltFy') || {}).value || '',
+        product: (document.getElementById('docExpFiltProduct') || {}).value || '',
+        q: ((document.getElementById('docExpContractSearch') || {}).value || '').trim().toLowerCase()
+    };
+}
+
+// Does a row pass a filter set? `ignore` lets us exclude one field (for cascade).
+function __deRowMatches(r, f, ignore) {
+    if (ignore !== 'oem' && f.oem && r.oem !== f.oem) return false;
+    if (ignore !== 'client' && f.client && r.client !== f.client) return false;
+    if (ignore !== 'fy' && f.fy && r.fy !== f.fy) return false;
+    if (ignore !== 'product' && f.product && (r.product || '') !== f.product) return false;
+    if (ignore !== 'q' && f.q && r.hay.indexOf(f.q) === -1) return false;
+    return true;
+}
+
+// Repopulate a dropdown with the distinct values still possible given the OTHER
+// active filters (cascade). Keeps the current selection if still valid.
+function __deFillFilterDropdown(selId, field, allRows, f, labelAll) {
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+    var cur = sel.value;
+    var vals = {};
+    allRows.forEach(function (r) {
+        if (__deRowMatches(r, f, field)) {
+            var v = (field === 'fy') ? r.fy : (r[field] || '');
+            if (v) vals[v] = 1;
+        }
+    });
+    var keys = Object.keys(vals).sort(function (a, b) {
+        if (field === 'fy') return a < b ? 1 : -1; // FY newest first
+        return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+    });
+    var html = '<option value="">' + labelAll + '</option>';
+    keys.forEach(function (k) { html += '<option value="' + pEsc(k) + '">' + pEsc(field === 'fy' ? ('FY ' + k) : k) + '</option>'; });
+    sel.innerHTML = html;
+    // Restore selection if still valid; else clear it.
+    if (cur && vals[cur]) sel.value = cur; else sel.value = '';
+}
+
+// Main entry: rebuild dropdowns (cascading) + render the filtered list.
+function populateDocExportContractPicker() {
+    var allRows = __deBuildAllOemRows();
+    var f = __deGetFilters();
+    // Cascade-populate each dropdown from rows matching the OTHER filters.
+    __deFillFilterDropdown('docExpFiltOem', 'oem', allRows, f, 'All OEMs');
+    __deFillFilterDropdown('docExpFiltClient', 'client', allRows, f, 'All clients');
+    __deFillFilterDropdown('docExpFiltFy', 'fy', allRows, f, 'All years');
+    __deFillFilterDropdown('docExpFiltProduct', 'product', allRows, f, 'All products');
+    // Re-read filters in case a selection was cleared by the cascade.
+    f = __deGetFilters();
+    var rows = allRows.filter(function (r) { return __deRowMatches(r, f, null); });
     rows.sort(function (a, b) {
         if (a.oem.toLowerCase() < b.oem.toLowerCase()) return -1;
         if (a.oem.toLowerCase() > b.oem.toLowerCase()) return 1;
         return a.label.toLowerCase() < b.label.toLowerCase() ? -1 : 1;
     });
     var listEl = document.getElementById('docExpPickerList');
-    var cur = (document.getElementById('docExpContract') || {}).value || '';
     if (!listEl) return;
+    var cur = (document.getElementById('docExpContract') || {}).value || '';
     if (rows.length === 0) {
-        listEl.innerHTML = '<div style="padding:16px; text-align:center; color:var(--text-dim); font-size:13px;">' + (q ? 'No OEM invoices match “' + pEsc(q) + '”.' : 'No OEM invoices recorded.') + '</div>';
+        listEl.innerHTML = '<div style="padding:16px; text-align:center; color:var(--text-dim); font-size:13px;">No OEM invoices match these filters. <a href="javascript:void(0)" onclick="__deClearFilters()" style="color:var(--accent-cyan);">Clear filters</a></div>';
         return;
     }
     var html = '';
@@ -43473,16 +43564,29 @@ function populateDocExportContractPicker() {
             lastOem = r.oem;
         }
         var isSel = (r.val === cur);
-        html += '<div class="de-picker-row" data-val="' + pEsc(r.val) + '" onclick="__deSelectOemInvoice(this.getAttribute(\'data-val\'))" ' +
+        html += '<div class="de-picker-row' + (isSel ? ' de-sel' : '') + '" data-val="' + pEsc(r.val) + '" onclick="__deSelectOemInvoice(this.getAttribute(\'data-val\'))" ' +
             'style="padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--glass-border); ' +
             (isSel ? 'background:var(--accent-cyan,#2563eb); color:#fff;' : 'color:var(--text-main);') + '" ' +
             'onmouseover="if(!this.classList.contains(\'de-sel\'))this.style.background=\'rgba(127,127,127,0.10)\';" ' +
-            'onmouseout="if(!this.classList.contains(\'de-sel\'))this.style.background=\'transparent\';"' +
-            (isSel ? ' class="de-picker-row de-sel"' : '') + '>' +
+            'onmouseout="if(!this.classList.contains(\'de-sel\'))this.style.background=\'transparent\';">' +
             (isSel ? '<i class="fas fa-check" style="margin-right:6px;"></i>' : '') + pEsc(r.label) +
         '</div>';
     });
     listEl.innerHTML = html;
+}
+
+// A filter changed → rebuild the picker (dropdowns cascade + list refilters).
+function __deOnFilterChange() {
+    populateDocExportContractPicker();
+}
+
+// Reset all filters.
+function __deClearFilters() {
+    ['docExpFiltOem', 'docExpFiltClient', 'docExpFiltFy', 'docExpFiltProduct'].forEach(function (id) {
+        var el = document.getElementById(id); if (el) el.value = '';
+    });
+    var s = document.getElementById('docExpContractSearch'); if (s) s.value = '';
+    populateDocExportContractPicker();
 }
 
 // Select an OEM invoice from the grouped list: set the hidden holder + preview.
