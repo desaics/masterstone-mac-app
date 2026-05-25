@@ -43729,12 +43729,53 @@ function __deRunLocalChecks(g) {
         var path = node.getAttribute('data-path');
         if (!path) return;
         if (!t || !t.invoke) { node.innerHTML = pEsc(path) + ' · <span style="color:var(--text-dim);">(can\'t verify outside app)</span>'; return; }
-        t.invoke('check_file_exists', { path: path }).then(function (r) {
-            var ok = r && (r === true || r.exists === true || r.ok === true);
-            node.innerHTML = pEsc(path) + ' · ' + (ok ? '<span style="color:var(--success,#3fb950);">exists ✓</span>' : '<span style="color:var(--danger,#f85149);">not found ✗</span>');
+        // 8CB — read the file's bytes so it can be packed into the zip
+        // automatically (no re-upload). Falls back to existence check + INDEX
+        // listing if the read fails.
+        t.invoke('read_file_bytes', { path: path }).then(function (r) {
+            if (r && r.ok && r.dataUrl) {
+                node.innerHTML = pEsc(path) + ' · <span style="color:var(--success,#3fb950);">will be packed ✓</span>';
+                // Attach the dataUrl to every matching local item so the zip packs it.
+                var items = (g && g.items) ? g.items : (window.__deCurrentItems || []);
+                items.forEach(function (it) {
+                    if (it.kind === 'local' && it.path === path) {
+                        it.dataUrl = r.dataUrl;
+                        it.mimeType = r.mime;
+                        it.packedFromLocal = true;
+                        if (!it.filename) it.filename = __deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/,'')) + (__deExtFromName('', r.mime) || '');
+                    }
+                });
+                __deRefreshPackCounts();
+            } else {
+                var msg = (r && r.error) ? r.error : 'could not read';
+                node.innerHTML = pEsc(path) + ' · <span style="color:var(--warning,#d29922);">exists, not packable (' + pEsc(msg) + ')</span>';
+            }
         }).catch(function () {
-            node.innerHTML = pEsc(path) + ' · <span style="color:var(--text-dim);">(check failed)</span>';
+            // read_file_bytes unavailable (older build) → fall back to existence check.
+            t.invoke('check_file_exists', { path: path }).then(function (r2) {
+                var ok = r2 && (r2 === true || r2.exists === true || r2.ok === true);
+                node.innerHTML = pEsc(path) + ' · ' + (ok ? '<span style="color:var(--success,#3fb950);">exists ✓</span>' : '<span style="color:var(--danger,#f85149);">not found ✗</span>');
+            }).catch(function () {
+                node.innerHTML = pEsc(path) + ' · <span style="color:var(--text-dim);">(check failed)</span>';
+            });
         });
+    });
+}
+
+// Recompute the "N in zip · N local" summary line after local files are read
+// in, and flip the download button label if needed. Updates in place without
+// a full re-render (which would re-trigger the reads).
+function __deRefreshPackCounts() {
+    var items = window.__deCurrentItems || [];
+    var inZip = items.filter(function (i) { return i.kind === 'zip' || (i.kind === 'local' && i.dataUrl); }).length;
+    var hint = document.querySelector('#docExpRemitPreview .de-pack-summary, #docExpClientPreview .de-pack-summary');
+    // The summary is rebuilt on next render; here we just ensure the download
+    // button isn't stuck on "Download INDEX" when local files became packable.
+    var btns = document.querySelectorAll('#docExpRemitPreview .btn-primary, #docExpClientPreview .btn-primary');
+    Array.prototype.forEach.call(btns, function (b) {
+        if (inZip > 0 && /INDEX/.test(b.textContent)) {
+            b.innerHTML = '<i class="fas fa-download"></i> Download .zip';
+        }
     });
 }
 
@@ -43826,7 +43867,7 @@ function __deBuildIndexText(g, header) {
     lines.push('');
     header.forEach(function (h) { lines.push(h); });
     lines.push('');
-    lines.push('LEGEND:  [ZIP] = included in this zip   [LINK] = OneDrive link   [LOCAL] = file on your Mac   [MISSING] = not recorded');
+    lines.push('LEGEND:  [ZIP] = included in this zip   [LINK] = OneDrive link   [LOCAL] = file on your Mac (not packable)   [MISSING] = not recorded');
     lines.push('============================================================');
     lines.push('');
     var byFolder = {};
@@ -43834,8 +43875,10 @@ function __deBuildIndexText(g, header) {
     Object.keys(byFolder).forEach(function (folder) {
         lines.push('## ' + folder);
         byFolder[folder].forEach(function (it) {
-            var tag = it.kind === 'zip' ? '[ZIP]   ' : it.kind === 'link' ? '[LINK]  ' : it.kind === 'local' ? '[LOCAL] ' : '[MISSING]';
-            var loc = it.kind === 'link' ? ('  ->  ' + it.url) : it.kind === 'local' ? ('  ->  ' + it.path) : '';
+            // 8CB — a local file that was read into bytes is packed; tag it [ZIP].
+            var packed = (it.kind === 'zip') || (it.kind === 'local' && it.dataUrl);
+            var tag = packed ? '[ZIP]   ' : it.kind === 'link' ? '[LINK]  ' : it.kind === 'local' ? '[LOCAL] ' : '[MISSING]';
+            var loc = it.kind === 'link' ? ('  ->  ' + it.url) : (it.kind === 'local' ? ('  (from: ' + it.path + ')') : '');
             lines.push('  ' + tag + ' ' + it.label + loc);
         });
         lines.push('');
@@ -43844,13 +43887,38 @@ function __deBuildIndexText(g, header) {
 }
 
 // ---- Build & download the zip -----------------------------------------
+// 8CB — read every local-file item's bytes (via the Rust read_file_bytes
+// command) so they pack into the zip, THEN build the zip. Async because the
+// reads are async; falls back to whatever bytes are already present if a read
+// fails or the command is unavailable.
+function __deReadLocalsThenZip(g, opts) {
+    var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+    var locals = (g.items || []).filter(function (it) { return it.kind === 'local' && it.path && !it.dataUrl; });
+    if (!t || !t.invoke || locals.length === 0) { __deDownloadZip(g, opts); return; }
+    var pending = locals.length;
+    var done = function () { pending--; if (pending <= 0) __deDownloadZip(g, opts); };
+    locals.forEach(function (it) {
+        t.invoke('read_file_bytes', { path: it.path }).then(function (r) {
+            if (r && r.ok && r.dataUrl) {
+                it.dataUrl = r.dataUrl;
+                it.mimeType = r.mime;
+                it.packedFromLocal = true;
+                if (!it.filename) it.filename = __deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/, '')) + (__deExtFromName('', r.mime) || '');
+            }
+            done();
+        }).catch(function () { done(); });
+    });
+}
+
 function __deDownloadZip(g, opts) {
     if (typeof JSZip === 'undefined') { alert('Zip library not loaded. Please restart the app.'); return; }
     var perContract = !!opts.perContract;
     var zip = new JSZip();
     var zipped = 0;
     g.items.forEach(function (it) {
-        if (it.kind !== 'zip' || !it.dataUrl) return;
+        // 8CB — pack any item that has file bytes: CRM-stored ('zip') OR a local
+        // file we read in via read_file_bytes (kind 'local' with a dataUrl).
+        if (!it.dataUrl) return;
         var folder = it.folder;
         if (perContract && it.contractTag) {
             var c = it.contractTag;
@@ -43920,7 +43988,7 @@ function downloadDocExportRemit(refStr) {
         'INTERNAL PO: ' + (c.internalPO || '—') + '   CLIENT PO: ' + (c.clientPO || (c.clientPOs && c.clientPOs[0] && c.clientPOs[0].poNo) || '—')
     ];
     var zipName = __deSafeName('Remittance_' + (c.client || 'client') + '_OEMInv_' + (invNo || oem)) + '.zip';
-    __deDownloadZip(g, { perContract: false, header: header, zipName: zipName });
+    __deReadLocalsThenZip(g, { perContract: false, header: header, zipName: zipName });
 }
 
 function downloadDocExportClient() {
@@ -43947,7 +44015,7 @@ function downloadDocExportClient() {
         'DOC TYPES: ' + Object.keys(typesOn).filter(function (k) { return typesOn[k]; }).join(', ')
     ];
     var zipName = __deSafeName('ClientPack_' + client + '_' + (fyVal === 'ALL' ? 'AllFY' : fyVal)) + '.zip';
-    __deDownloadZip(combined, { perContract: true, header: header, zipName: zipName });
+    __deReadLocalsThenZip(combined, { perContract: true, header: header, zipName: zipName });
 }
 
 // ---- Sub-tab switching + init -----------------------------------------

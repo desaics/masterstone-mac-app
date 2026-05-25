@@ -1302,6 +1302,85 @@ fn check_file_exists(path: String) -> serde_json::Value {
 }
 
 // ============================================================================
+// Phase 8CB — read_file_bytes: read a local file from disk and return its
+// contents as a base64 data URL, so the Document Export can pack local-path
+// files (OEM invoices, POs stored on the OneDrive-synced disk) into the zip
+// without the user having to re-upload them into the CRM.
+//
+// Read-only. Returns {ok, dataUrl, mime, size} on success, {ok:false,error}
+// otherwise. A size cap (25 MB) guards against accidentally loading something
+// huge into the WebView. The base64 ENCODER is inlined to avoid adding a
+// Cargo dependency (mirrors the existing inlined decoder above).
+// ============================================================================
+fn b64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut chunks = bytes.chunks_exact(3);
+    for chunk in &mut chunks {
+        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
+        out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+        out.push(ALPHABET[((n >> 6) & 63) as usize] as char);
+        out.push(ALPHABET[(n & 63) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    match rem.len() {
+        1 => {
+            let n = (rem[0] as u32) << 16;
+            out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let n = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
+            out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 6) & 63) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
+}
+
+fn mime_for_ext(path: &str) -> &'static str {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".pdf") { "application/pdf" }
+    else if lower.ends_with(".png") { "image/png" }
+    else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "image/jpeg" }
+    else if lower.ends_with(".gif") { "image/gif" }
+    else if lower.ends_with(".webp") { "image/webp" }
+    else { "application/octet-stream" }
+}
+
+#[tauri::command]
+fn read_file_bytes(path: String) -> serde_json::Value {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({"ok": false, "error": "Empty path"});
+    }
+    let p = std::path::Path::new(trimmed);
+    if !p.exists() {
+        return serde_json::json!({"ok": false, "error": "File not found"});
+    }
+    // Size guard: refuse files larger than 25 MB.
+    if let Ok(meta) = std::fs::metadata(p) {
+        if meta.len() > 25 * 1024 * 1024 {
+            return serde_json::json!({"ok": false, "error": "File exceeds 25 MB limit"});
+        }
+    }
+    match std::fs::read(p) {
+        Ok(bytes) => {
+            let mime = mime_for_ext(trimmed);
+            let data_url = format!("data:{};base64,{}", mime, b64_encode(&bytes));
+            serde_json::json!({"ok": true, "dataUrl": data_url, "mime": mime, "size": bytes.len()})
+        }
+        Err(e) => serde_json::json!({"ok": false, "error": format!("Read failed: {e}")}),
+    }
+}
+
+// ============================================================================
 // Phase 8BD — fetch_fx_rate: HTTP GET against a free FX API to retrieve a
 // current USD:INR rate. Bypasses the WebView CORS restrictions that block
 // direct browser fetches from JavaScript to most public FX APIs.
@@ -2940,6 +3019,9 @@ pub fn run() {
             // Phase 8BA: existence probe for the broken-link sweeper —
             // see check_file_exists definition for rationale.
             check_file_exists,
+            // Phase 8CB: read a local file's bytes (base64 data URL) so the
+            // Document Export can pack local-path files into the zip.
+            read_file_bytes,
             // Phase 8BD: HTTP fetch for live USD:INR rate (bypasses WebView CORS).
             fetch_fx_rate,
             // Phase 8AV: open in-memory PDF (base64 dataUrl) in OS default
