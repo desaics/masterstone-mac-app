@@ -43195,6 +43195,12 @@ var __docExpMode = 'remit';
 function __deSafeName(s) {
     return String(s || '').replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120) || 'file';
 }
+// 8CC — original filename from a disk path (last segment), for flat packing.
+function __deBasename(path) {
+    var s = String(path || '').replace(/\\/g, '/');
+    var seg = s.substring(s.lastIndexOf('/') + 1);
+    return seg || '';
+}
 function __deDataUrlToUint8(dataUrl) {
     var idx = String(dataUrl || '').indexOf(',');
     var b64 = idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
@@ -43645,12 +43651,40 @@ function renderDocExportClientPreview() {
             if (!c || c.client !== client) return;
             if (fyVal !== 'ALL' && !__deContractInFY(c, fyRange)) return;
             var g = __deGatherForContract(i, { typeOn: typeOn });
-            g.items.forEach(function (it) { combined.items.push(it); });
+            var fyLabel = (fyVal !== 'ALL') ? ('FY ' + fyVal) : __deContractFYLabel(c);
+            g.items.forEach(function (it) { it.fy = fyLabel; combined.items.push(it); });
             g.localChecks.forEach(function (lc) { combined.localChecks.push(lc); });
         });
     }
     host.innerHTML = __deRenderPreview(combined, { mode: 'client', client: client, fy: fyVal });
     __deRunLocalChecks(combined);
+}
+
+// 8CC — A contract's representative FY label (e.g. "FY 2025-2026") for the
+// Client Pack folder structure. Uses, in order: earliest OEM-invoice date,
+// earliest sales-invoice date, else c.startDate. Returns 'FY unknown' if none.
+function __deContractFYLabel(c) {
+    function fyOf(dateStr) {
+        if (!dateStr) return null;
+        var d = new Date(dateStr); if (isNaN(d.getTime())) return null;
+        var y = d.getFullYear(); if (y < 2000 || y > 2100) return null;
+        var m = d.getMonth(); var s = (m >= 3) ? y : y - 1;
+        return 'FY ' + s + '-' + (s + 1);
+    }
+    var cIdx = (typeof contracts !== 'undefined') ? contracts.indexOf(c) : -1;
+    // earliest OEM invoice date
+    var dates = [];
+    (Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (by) {
+        (Array.isArray(by.apInvoices) ? by.apInvoices : []).forEach(function (ap) { if (ap.date) dates.push(ap.date); });
+        if (by.oemInvoiceDate) dates.push(by.oemInvoiceDate);
+    });
+    if (typeof invoices !== 'undefined' && cIdx > -1) {
+        invoices.forEach(function (inv) { if (String(inv.linkedContractIdx) === String(cIdx) && inv.invoiceDate) dates.push(inv.invoiceDate); });
+    }
+    if (c.startDate) dates.push(c.startDate);
+    dates.sort();
+    for (var i = 0; i < dates.length; i++) { var f = fyOf(dates[i]); if (f) return f; }
+    return 'FY unknown';
 }
 
 // Does any invoice/AP activity on this contract fall within the FY range?
@@ -43742,7 +43776,7 @@ function __deRunLocalChecks(g) {
                         it.dataUrl = r.dataUrl;
                         it.mimeType = r.mime;
                         it.packedFromLocal = true;
-                        if (!it.filename) it.filename = __deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/,'')) + (__deExtFromName('', r.mime) || '');
+                        if (!it.filename) it.filename = __deBasename(it.path) || (__deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/,'')) + (__deExtFromName('', r.mime) || ''));
                     }
                 });
                 __deRefreshPackCounts();
@@ -43903,7 +43937,7 @@ function __deReadLocalsThenZip(g, opts) {
                 it.dataUrl = r.dataUrl;
                 it.mimeType = r.mime;
                 it.packedFromLocal = true;
-                if (!it.filename) it.filename = __deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/, '')) + (__deExtFromName('', r.mime) || '');
+                if (!it.filename) it.filename = __deBasename(it.path) || (__deSafeName((it.label || 'file').replace(/\s*\[SELECTED\]\s*/, '')) + (__deExtFromName('', r.mime) || ''));
             }
             done();
         }).catch(function () { done(); });
@@ -43919,18 +43953,18 @@ function __deDownloadZip(g, opts) {
         // 8CB — pack any item that has file bytes: CRM-stored ('zip') OR a local
         // file we read in via read_file_bytes (kind 'local' with a dataUrl).
         if (!it.dataUrl) return;
-        var folder = it.folder;
-        if (perContract && it.contractTag) {
-            var c = it.contractTag;
-            var sub = __deSafeName((c.client || 'client') + (c.internalPO ? ' - PO ' + c.internalPO : (c.product ? ' - ' + c.product : '')));
-            folder = sub + '/' + folder;
-        }
+        // 8CC — folder structure:
+        //   Remittance (perContract=false): FLAT, no folders (zip root).
+        //   Client Pack (perContract=true): group by FY only (no per-contract subfolders).
+        var folder = '';
+        if (perContract) folder = __deSafeName(it.fy || 'FY unknown');
         try {
             var bytes = __deDataUrlToUint8(it.dataUrl);
             var name = it.filename || (it.label + '');
-            // ensure uniqueness
-            var path = folder + '/' + __deSafeName(name);
-            if (zip.file(path)) path = folder + '/' + zipped + '_' + __deSafeName(name);
+            // ensure uniqueness — keep original filename, number only on clash
+            var base = folder ? (folder + '/') : '';
+            var path = base + __deSafeName(name);
+            if (zip.file(path)) path = base + zipped + '_' + __deSafeName(name);
             zip.file(path, bytes);
             zipped++;
         } catch (e) { console.warn('zip add failed for', it.label, e); }
@@ -44005,7 +44039,8 @@ function downloadDocExportClient() {
             if (!c || c.client !== client) return;
             if (fyVal !== 'ALL' && !__deContractInFY(c, fyRange)) return;
             var g = __deGatherForContract(i, { typeOn: typeOn });
-            g.items.forEach(function (it) { combined.items.push(it); });
+            var fyLabel = (fyVal !== 'ALL') ? ('FY ' + fyVal) : __deContractFYLabel(c);
+            g.items.forEach(function (it) { it.fy = fyLabel; combined.items.push(it); });
         });
     }
     var header = [
