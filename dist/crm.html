@@ -1588,7 +1588,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 /* Aging buckets — responsive 5-col */
 .aging-summary-grid {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
     margin-bottom: 24px;
 }
@@ -10129,7 +10129,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <!-- 8U item #9: each card sets arAgingFilter to its bucket key on click.
          setArAgingFilter() handles the filter set + active-class management. -->
     <div class="aging-summary-grid" id="arAgingGrid">
-      <div class="aging-bucket-card" data-aging="notdue" onclick="setArAgingFilter('notdue')" style="border-top:3px solid var(--text-dim);"><div class="aging-bucket-lbl">Not Yet Due</div><div class="aging-bucket-val" id="arAge_notdue" style="color:var(--text-dim);">₹0</div><div class="aging-bucket-count" id="arAge_notdueCount">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="0_30" onclick="setArAgingFilter('0_30')" style="border-top:3px solid var(--success);"><div class="aging-bucket-lbl">Current (0–30 Days)</div><div class="aging-bucket-val" id="arAge_0_30" style="color:var(--success);">₹0</div><div class="aging-bucket-count" id="arAge_0_30Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="31_60" onclick="setArAgingFilter('31_60')" style="border-top:3px solid var(--accent-cyan);"><div class="aging-bucket-lbl">31–60 Days</div><div class="aging-bucket-val" id="arAge_31_60" style="color:var(--accent-cyan);">₹0</div><div class="aging-bucket-count" id="arAge_31_60Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="61_90" onclick="setArAgingFilter('61_90')" style="border-top:3px solid var(--warning);"><div class="aging-bucket-lbl">61–90 Days</div><div class="aging-bucket-val" id="arAge_61_90" style="color:var(--warning);">₹0</div><div class="aging-bucket-count" id="arAge_61_90Count">0 invoices</div></div>
@@ -10162,7 +10161,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                compare directly without translation. -->
           <select id="arAgingFilter" onchange="renderARApPage()" style="width:160px;">
             <option value="ALL">All Aging</option>
-            <option value="notdue">Not Yet Due</option>
             <option value="0_30">Current (0–30)</option>
             <option value="31_60">31–60 Days</option>
             <option value="61_90">61–90 Days</option>
@@ -10197,7 +10195,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <table id="arAgingClientTable">
           <thead><tr>
             <th>Client</th>
-            <th style="text-align:right;">Not Yet Due</th>
             <th style="text-align:right;">0–30 Days</th>
             <th style="text-align:right;">31–60 Days</th>
             <th style="text-align:right;">61–90 Days</th>
@@ -10255,7 +10252,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="kpi-section-title">AP Aging Analysis</div>
     <!-- 8U item #9: AP cards parallel the AR ones — click sets apAgingFilter. -->
     <div class="aging-summary-grid" id="apAgingGrid">
-      <div class="aging-bucket-card" data-aging="notdue" onclick="setApAgingFilter('notdue')" style="border-top:3px solid var(--text-dim);"><div class="aging-bucket-lbl">Not Yet Due</div><div class="aging-bucket-val" id="apAge_notdue" style="color:var(--text-dim);">₹0</div><div class="aging-bucket-count" id="apAge_notdueCount">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="0_30" onclick="setApAgingFilter('0_30')" style="border-top:3px solid var(--success);"><div class="aging-bucket-lbl">Current (0–30 Days)</div><div class="aging-bucket-val" id="apAge_0_30" style="color:var(--success);">₹0</div><div class="aging-bucket-count" id="apAge_0_30Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="31_60" onclick="setApAgingFilter('31_60')" style="border-top:3px solid var(--accent-cyan);"><div class="aging-bucket-lbl">31–60 Days</div><div class="aging-bucket-val" id="apAge_31_60" style="color:var(--accent-cyan);">₹0</div><div class="aging-bucket-count" id="apAge_31_60Count">0 invoices</div></div>
       <div class="aging-bucket-card" data-aging="61_90" onclick="setApAgingFilter('61_90')" style="border-top:3px solid var(--warning);"><div class="aging-bucket-lbl">61–90 Days</div><div class="aging-bucket-val" id="apAge_61_90" style="color:var(--warning);">₹0</div><div class="aging-bucket-count" id="apAge_61_90Count">0 invoices</div></div>
@@ -10283,7 +10279,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <!-- 8U item #9: aging-bucket filter on the AP register. Same shape as AR. -->
           <select id="apAgingFilter" onchange="renderARApPage()" style="width:160px;">
             <option value="ALL">All Aging</option>
-            <option value="notdue">Not Yet Due</option>
             <option value="0_30">Current (0–30)</option>
             <option value="31_60">31–60 Days</option>
             <option value="61_90">61–90 Days</option>
@@ -10319,7 +10314,6 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <table id="apAgingClientTable">
           <thead><tr>
             <th>Client / Contract</th>
-            <th style="text-align:right;">Not Yet Due</th>
             <th style="text-align:right;">0–30 Days</th>
             <th style="text-align:right;">31–60 Days</th>
             <th style="text-align:right;">61–90 Days</th>
@@ -37996,12 +37990,11 @@ function bsBuildMoneyRecords() {
 function bsAgeBuckets(list, side) {
     let b1 = 0, b2 = 0, b3 = 0, b4 = 0;
     list.forEach(r => {
-        const a = r.ageDays;
         const v = bsApplyTax(Number(r.amount) || 0, side);
-        if (a === null || a === undefined) { b1 += v; return; }
-        if (a <= 30) b1 += v;
-        else if (a <= 60) b2 += v;
-        else if (a <= 90) b3 += v;
+        const bucket = getAgeBucket(r.ageDays); // 8CF — shared classifier (same one the registers use)
+        if (bucket === '0_30') b1 += v;
+        else if (bucket === '31_60') b2 += v;
+        else if (bucket === '61_90') b3 += v;
         else b4 += v;
     });
     return { b1, b2, b3, b4, total: b1 + b2 + b3 + b4 };
@@ -41810,6 +41803,26 @@ function getEffectiveFX(c, y, yIdx) {
 
 function getBillingDueDate(y) { let d = new Date(y.billDate); if (y.cycle === 1) d.setDate(d.getDate() + 15); else d.setDate(d.getDate() - 7); return d; }
 function getDaysOverdue(dueDate) { const now = new Date(); now.setHours(0, 0, 0, 0); const due = new Date(dueDate); due.setHours(0, 0, 0, 0); return Math.floor((now - due) / (1000 * 60 * 60 * 24)); }
+// 8CF — shared aging classifier. The Business Snapshot AND the Receivables/
+// Payables registers both bucket aging by DAYS SINCE THE INVOICE WAS RAISED
+// (today − invoice date), with no "Not Yet Due" bucket (≤30 days, incl. not-yet-
+// due and undated, folds into 0–30). Both views call getAgeBucket() so they can
+// never drift apart again. (getAgingBucket below is the legacy due-date-based
+// classifier, retained for reference; no longer used for register buckets.)
+function getInvoiceAgeDays(invoiceDateStr) {
+    if (!invoiceDateStr) return null;
+    const d = new Date(invoiceDateStr);
+    if (isNaN(d.getTime())) return null;
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    return Math.floor((t - d) / 86400000);
+}
+function getAgeBucket(ageDays) {
+    if (ageDays === null || ageDays === undefined) return '0_30';
+    if (ageDays <= 30) return '0_30';
+    if (ageDays <= 60) return '31_60';
+    if (ageDays <= 90) return '61_90';
+    return '90plus';
+}
 function getAgingBucket(daysOverdue) { if (daysOverdue < 0) return 'notdue'; if (daysOverdue <= 30) return '0_30'; if (daysOverdue <= 60) return '31_60'; if (daysOverdue <= 90) return '61_90'; return '90plus'; }
 
 // 8U item #9: Helpers for aging-bucket-card click handlers. Toggle behaviour —
@@ -42259,10 +42272,10 @@ function renderARApPage() {
 
     // Render AR
     let arToRaise = 0, arToRaiseCount = 0; let arAwaiting = 0, arAwaitingCount = 0; let arOverdue = 0, arOverdueCount = 0; let arCollected = 0, arCollectedCount = 0; let dsoSum = 0, dsoCount = 0; let totalInvoiced = 0, totalCollected = 0;
-    const arAgingBuckets = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const arAgingCounts = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const arClientBuckets = {};
+    const arAgingBuckets = { '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const arAgingCounts = { '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const arClientBuckets = {};
 
     arRecords.forEach(r => {
-        if (!arClientBuckets[r.client]) arClientBuckets[r.client] = { client: r.client, notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0, collected: 0, total: 0 };
+        if (!arClientBuckets[r.client]) arClientBuckets[r.client] = { client: r.client, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0, collected: 0, total: 0 };
         const cb = arClientBuckets[r.client];
         if (r.status === 'PAID') {
             arCollected += r.cycleRev; arCollectedCount++; totalCollected += r.cycleRev; cb.collected += r.cycleRev;
@@ -42272,7 +42285,7 @@ function renderARApPage() {
             totalInvoiced += r.cycleRev;
             if (r.daysOverdue > 0 && r.status !== 'PAID') { arOverdue += r.cycleRev; arOverdueCount++; }
             if (r.status === 'INVOICED') { arAwaiting += r.cycleRev; arAwaitingCount++; }
-            const bucket = getAgingBucket(r.daysOverdue); arAgingBuckets[bucket] += r.cycleRev; arAgingCounts[bucket]++; cb[bucket] += r.cycleRev; cb.total += r.cycleRev;
+            const bucket = getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)); arAgingBuckets[bucket] += r.cycleRev; arAgingCounts[bucket]++; cb[bucket] += r.cycleRev; cb.total += r.cycleRev;
         }
     });
 
@@ -42285,7 +42298,7 @@ function renderARApPage() {
     const _arTax = (a) => (typeof bsApplyTax === 'function') ? bsApplyTax(a, 'AR') : (Number(a) || 0);
     arToRaise = _arTax(arToRaise); arAwaiting = _arTax(arAwaiting); arOverdue = _arTax(arOverdue); arCollected = _arTax(arCollected);
     Object.keys(arAgingBuckets).forEach(b => { arAgingBuckets[b] = _arTax(arAgingBuckets[b]); });
-    Object.keys(arClientBuckets).forEach(cn => { const _cb = arClientBuckets[cn]; ['notdue','0_30','31_60','61_90','90plus','collected','total'].forEach(k => { _cb[k] = _arTax(_cb[k]); }); });
+    Object.keys(arClientBuckets).forEach(cn => { const _cb = arClientBuckets[cn]; ['0_30','31_60','61_90','90plus','collected','total'].forEach(k => { _cb[k] = _arTax(_cb[k]); }); });
 
     const dso = dsoCount > 0 ? Math.round(dsoSum / dsoCount) : 0; const collRate = (totalInvoiced + totalCollected) > 0 ? (totalCollected / (totalInvoiced + totalCollected)) * 100 : 0;
     document.getElementById('ar_toRaise').innerText = fmt(arToRaise); document.getElementById('ar_toRaiseCount').innerText = `${arToRaiseCount} cycles`;
@@ -42294,7 +42307,7 @@ function renderARApPage() {
     document.getElementById('ar_collected').innerText = fmt(arCollected); document.getElementById('ar_collectedCount').innerText = `${arCollectedCount} invoices`;
     document.getElementById('ar_dso').innerText = `${dso} days`; document.getElementById('ar_collRate').innerText = `${collRate.toFixed(1)}%`;
 
-    const arAgingIdMap = { notdue: 'arAge_notdue', '0_30': 'arAge_0_30', '31_60': 'arAge_31_60', '61_90': 'arAge_61_90', '90plus': 'arAge_90plus' }; const arAgingCountMap = { notdue: 'arAge_notdueCount', '0_30': 'arAge_0_30Count', '31_60': 'arAge_31_60Count', '61_90': 'arAge_61_90Count', '90plus': 'arAge_90plusCount' };
+    const arAgingIdMap = { '0_30': 'arAge_0_30', '31_60': 'arAge_31_60', '61_90': 'arAge_61_90', '90plus': 'arAge_90plus' }; const arAgingCountMap = { '0_30': 'arAge_0_30Count', '31_60': 'arAge_31_60Count', '61_90': 'arAge_61_90Count', '90plus': 'arAge_90plusCount' };
     Object.keys(arAgingBuckets).forEach(b => { const el = document.getElementById(arAgingIdMap[b]); const cel = document.getElementById(arAgingCountMap[b]); if (el) el.innerText = fmt(arAgingBuckets[b]); if (cel) cel.innerText = `${arAgingCounts[b]} invoices`; });
     // 8U item #9: sync the .active class so the currently-filtered card is highlighted.
     try {
@@ -42309,10 +42322,10 @@ function renderARApPage() {
     const arAgingClientBody = document.getElementById('arAgingClientBody');
     if (arAgingClientBody) {
         const rows = Object.entries(arClientBuckets).map(([name, data]) => {
-            const outstanding = data.notdue + data['0_30'] + data['31_60'] + data['61_90'] + data['90plus'];
-            return `<tr><td><strong>${getClientDisplayHtml(data.client || name)}</strong></td><td style="text-align:right; color:var(--text-dim);">${data.notdue > 0 ? fmt(data.notdue) : '-'}</td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.collected > 0 ? fmt(data.collected) : '-'}</td></tr>`;
+            const outstanding = data['0_30'] + data['31_60'] + data['61_90'] + data['90plus'];
+            return `<tr><td><strong>${getClientDisplayHtml(data.client || name)}</strong></td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.collected > 0 ? fmt(data.collected) : '-'}</td></tr>`;
         });
-        arAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-dim);">No AR data for this period.</td></tr>';
+        arAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-dim);">No AR data for this period.</td></tr>';
     }
 
     const arRegisterBody = document.getElementById('arRegisterBody');
@@ -42344,7 +42357,7 @@ function renderARApPage() {
         // results = the count shown on the active card.
         const filteredAR = arAgingVal === 'ALL'
             ? filteredAR_byStatus
-            : filteredAR_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgingBucket(r.daysOverdue) === arAgingVal);
+            : filteredAR_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)) === arAgingVal);
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an invoice has been raised, contract-schedule dueDate otherwise).
         filteredAR.sort((a, b) => {
@@ -42414,7 +42427,7 @@ function renderARApPage() {
 
     // Render AP
     let apToReceive = 0, apToReceiveCount = 0; let apInvoiced = 0, apInvoicedCount = 0; let apOverdue = 0, apOverdueCount = 0; let apSettled = 0, apSettledCount = 0; let dpoSum = 0, dpoCount = 0; let totalFxPl = 0;
-    const apAgingBuckets = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apAgingCounts = { notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apClientBuckets = {};
+    const apAgingBuckets = { '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apAgingCounts = { '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0 }; const apClientBuckets = {};
 
     // 8BD — Live FX repricing for OUTSTANDING foreign-OEM AP rows.
     // For unpaid USD-denominated rows, recompute cycleCostINR at today's
@@ -42438,7 +42451,7 @@ function renderARApPage() {
 
     apRecords.forEach(r => {
         const key = `${r.client} — ${r.product}`;
-        if (!apClientBuckets[key]) apClientBuckets[key] = { client: r.client, product: r.product, notdue: 0, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0, settled: 0 };
+        if (!apClientBuckets[key]) apClientBuckets[key] = { client: r.client, product: r.product, '0_30': 0, '31_60': 0, '61_90': 0, '90plus': 0, settled: 0 };
         const cb = apClientBuckets[key];
 
         if (r.status === 'SETTLED') {
@@ -42453,7 +42466,7 @@ function renderARApPage() {
                 apInvoiced += r.cycleCostINR;
                 apInvoicedCount++;
             }
-            const bucket = getAgingBucket(r.daysOverdue); apAgingBuckets[bucket] += r.cycleCostINR; apAgingCounts[bucket]++; cb[bucket] += r.cycleCostINR;
+            const bucket = getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)); apAgingBuckets[bucket] += r.cycleCostINR; apAgingCounts[bucket]++; cb[bucket] += r.cycleCostINR;
         }
     });
 
@@ -42474,7 +42487,7 @@ function renderARApPage() {
         fxNoteEl.style.color = totalFxPl >= 0 ? 'var(--success)' : 'var(--danger)';
     }
 
-    const apAgingIdMap = { notdue: 'apAge_notdue', '0_30': 'apAge_0_30', '31_60': 'apAge_31_60', '61_90': 'apAge_61_90', '90plus': 'apAge_90plus' }; const apAgingCountMap = { notdue: 'apAge_notdueCount', '0_30': 'apAge_0_30Count', '31_60': 'apAge_31_60Count', '61_90': 'apAge_61_90Count', '90plus': 'apAge_90plusCount' };
+    const apAgingIdMap = { '0_30': 'apAge_0_30', '31_60': 'apAge_31_60', '61_90': 'apAge_61_90', '90plus': 'apAge_90plus' }; const apAgingCountMap = { '0_30': 'apAge_0_30Count', '31_60': 'apAge_31_60Count', '61_90': 'apAge_61_90Count', '90plus': 'apAge_90plusCount' };
     Object.keys(apAgingBuckets).forEach(b => { const el = document.getElementById(apAgingIdMap[b]); const cel = document.getElementById(apAgingCountMap[b]); if (el) el.innerText = fmt(apAgingBuckets[b]); if (cel) cel.innerText = `${apAgingCounts[b]} invoices`; });
     // 8U item #9: AP aging-card .active sync (mirrors the AR pattern above).
     try {
@@ -42489,11 +42502,11 @@ function renderARApPage() {
     const apAgingClientBody = document.getElementById('apAgingClientBody');
     if (apAgingClientBody) {
         const rows = Object.entries(apClientBuckets).map(([name, data]) => {
-            const outstanding = data.notdue + data['0_30'] + data['31_60'] + data['61_90'] + data['90plus'];
+            const outstanding = data['0_30'] + data['31_60'] + data['61_90'] + data['90plus'];
             const labelHtml = data.client ? `${getClientDisplayHtml(data.client)} — ${pEsc(data.product || '')}` : pEsc(name);
-            return `<tr><td><strong>${labelHtml}</strong></td><td style="text-align:right; color:var(--text-dim);">${data.notdue > 0 ? fmt(data.notdue) : '-'}</td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.settled > 0 ? fmt(data.settled) : '-'}</td></tr>`;
+            return `<tr><td><strong>${labelHtml}</strong></td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.settled > 0 ? fmt(data.settled) : '-'}</td></tr>`;
         });
-        apAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-dim);">No AP data for this period.</td></tr>';
+        apAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-dim);">No AP data for this period.</td></tr>';
     }
 
     const apRegisterBody = document.getElementById('apRegisterBody');
@@ -42527,7 +42540,7 @@ function renderARApPage() {
         // for INVOICED + OVERDUE; SETTLED and PENDING are excluded from buckets).
         const filteredAP = apAgingVal === 'ALL'
             ? filteredAP_byStatus
-            : filteredAP_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgingBucket(r.daysOverdue) === apAgingVal);
+            : filteredAP_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)) === apAgingVal);
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an OEM invoice has been received, contract-schedule dueDate otherwise).
         filteredAP.sort((a, b) => {
