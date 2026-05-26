@@ -42470,6 +42470,14 @@ function renderARApPage() {
         }
     });
 
+    // 8CG — apply GST to AP figures so the Payables register tracks the Business
+    // Snapshot under the GST toggle (mirrors the AR _arTax block above). AP carries
+    // no TDS — bsApplyTax only deducts TDS on the AR side. INR figures only; the
+    // original-currency (USD) amounts shown in the register stay raw.
+    const _apTax = (a) => (typeof bsApplyTax === 'function') ? bsApplyTax(a, 'AP') : (Number(a) || 0);
+    apToReceive = _apTax(apToReceive); apInvoiced = _apTax(apInvoiced); apOverdue = _apTax(apOverdue); apSettled = _apTax(apSettled);
+    Object.keys(apAgingBuckets).forEach(b => { apAgingBuckets[b] = _apTax(apAgingBuckets[b]); });
+    Object.keys(apClientBuckets).forEach(k => { const _cb = apClientBuckets[k]; ['0_30','31_60','61_90','90plus','settled'].forEach(kk => { _cb[kk] = _apTax(_cb[kk]); }); });
     const dpo = dpoCount > 0 ? Math.round(dpoSum / dpoCount) : 0;
     document.getElementById('ap_toReceive').innerText = fmt(apToReceive); document.getElementById('ap_toReceiveCount').innerText = `${apToReceiveCount} cycles`;
     document.getElementById('ap_invoiced').innerText = fmt(apInvoiced); document.getElementById('ap_invoicedCount').innerText = `${apInvoicedCount} invoices`;
@@ -42568,7 +42576,7 @@ function renderARApPage() {
                     let totalForeign = 0;
                     let foreignCount = 0;
                     filteredAP.forEach(r => {
-                        totalINR += (r.cycleCostINR || 0);
+                        totalINR += _apTax(r.cycleCostINR || 0);
                         if (r.costCurrency && r.costCurrency !== 'INR') {
                             totalForeign += (r.cycleCostUSD || 0);
                             foreignCount++;
@@ -42607,7 +42615,7 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(r.cycleCostINR)}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(_apTax(r.cycleCostINR))}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
