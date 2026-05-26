@@ -37886,12 +37886,20 @@ function bsBuildMoneyRecords() {
 
                 if (raisedArInvs.length > 0) {
                     // Cycle has at least one invoice raised — emit one record per UNPAID invoice
+                    // 8CH — base-amount alignment with the register: a single-invoice cycle uses
+                    // the pre-GST contract schedule (cycleRev), exactly as the register's
+                    // single-invoice path does, so the GST toggle adds 18% to a pre-GST base
+                    // rather than to the GST-inclusive stored invoice grandTotal. Multi-invoice
+                    // cycles keep per-invoice stored amounts, matching the register's multi path.
+                    const singleInvoiceCycle = raisedArInvs.length < 2;
                     raisedArInvs.forEach(inv => {
                         const isPaid = !!inv.paidDate || cycleVendorPaid;
                         if (isPaid) return;
-                        const amt = (inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
-                            ? (Number(inv.amount) || 0)
-                            : cycleRev;
+                        const amt = singleInvoiceCycle
+                            ? cycleRev
+                            : ((inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
+                                ? (Number(inv.amount) || 0)
+                                : cycleRev);
                         if (amt <= 0) return;
                         const invDate = new Date(inv.date);
                         const ageDays = Math.floor((today - invDate) / 86400000);
