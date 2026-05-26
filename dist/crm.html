@@ -38030,8 +38030,15 @@ function bsUrgencyBuckets(list, side) {
 // click needs to set multiple filters at once (e.g. BS aging-bucket clicks reset
 // arStatusFilter to ALL while setting arAgingFilter). Backward-compatible: if
 // filterId is a string, the legacy single-filter path runs unchanged.
-function bsGotoTab(tab, filterId, filterVal) {
+function bsGotoTab(tab, filterId, filterVal, subTab) {
     showTab(tab);
+    // 8CE — optional sub-tab switch. The invoicesTab page has two sub-tabs
+    // (Invoice Manager / Receivables); showTab lands on the default 'manager'
+    // view, so a Snapshot receivables aging-bucket click must explicitly switch
+    // to the 'ar' (Receivables) sub-tab for the filtered register to be visible.
+    if (subTab && tab === 'invoicesTab' && typeof showInvoicesSubTab === 'function') {
+        showInvoicesSubTab(subTab);
+    }
     const filters = (filterId && typeof filterId === 'object')
         ? filterId
         : (filterId ? { [filterId]: filterVal } : null);
@@ -38417,7 +38424,7 @@ function renderBusinessSnapshot() {
     // (PAID rows aren't in any bucket) and the user would see an empty register.
     const bsBucketMap = { bsRecB1: '0_30', bsRecB2: '31_60', bsRecB3: '61_90', bsRecB4: '90plus' };
     Object.keys(bsBucketMap).forEach(id => wireClick(id, () =>
-        bsGotoTab('invoicesTab', { arStatusFilter: 'ALL', arAgingFilter: bsBucketMap[id] })));
+        bsGotoTab('invoicesTab', { arStatusFilter: 'ALL', arAgingFilter: bsBucketMap[id] }, null, 'ar')));
     const bsPayBucketMap = { bsPayB1: '0_30', bsPayB2: '31_60', bsPayB3: '61_90', bsPayB4: '90plus' };
     Object.keys(bsPayBucketMap).forEach(id => wireClick(id, () =>
         bsGotoTab('purchaseInvoicesTab', { apStatusFilter: 'ALL', apAgingFilter: bsPayBucketMap[id] })));
@@ -42359,7 +42366,7 @@ function renderARApPage() {
             const arTotalEl = document.getElementById('arFilterTotal');
             const arTotalValEl = document.getElementById('arFilterTotalVal');
             if (arTotalEl && arTotalValEl) {
-                if (arStatusVal === 'ALL' || filteredAR.length === 0) {
+                if ((arStatusVal === 'ALL' && arAgingVal === 'ALL') || filteredAR.length === 0) {
                     arTotalEl.style.display = 'none';
                 } else {
                     let arTotal = 0;
@@ -42541,7 +42548,7 @@ function renderARApPage() {
             const totalEl = document.getElementById('apFilterTotal');
             const totalValEl = document.getElementById('apFilterTotalVal');
             if (totalEl && totalValEl) {
-                if (apStatusVal === 'ALL' || filteredAP.length === 0) {
+                if ((apStatusVal === 'ALL' && apAgingVal === 'ALL') || filteredAP.length === 0) {
                     totalEl.style.display = 'none';
                 } else {
                     let totalINR = 0;
