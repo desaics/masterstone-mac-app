@@ -6515,12 +6515,18 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 <div class="main-content">
   
   <div id="businessSnapshotTab">
-    <div class="page-header" style="margin-bottom: 14px; align-items: center;">
-      <h2 style="margin: 0;">Business Snapshot</h2>
-      <div style="display: flex; align-items: center; gap: 14px;">
-        <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on all money figures"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
-        <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) on Receivables side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
-        <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+    <!-- 8CI — wrapped in dashboard-sticky-top for structural parity with the
+         Financial Intelligence tab: gives the header the same sticky top bar,
+         banner-aware top spacing (mac-app 30px + sticky-top 12px), and bottom
+         border/blur, fixing the cramped top spacing in both banner states. -->
+    <div class="dashboard-sticky-top">
+      <div class="page-header" style="margin-bottom: 14px; align-items: center;">
+        <h2 style="margin: 0;">Business Snapshot</h2>
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on all money figures"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
+          <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) on Receivables side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
+          <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+        </div>
       </div>
     </div>
 
