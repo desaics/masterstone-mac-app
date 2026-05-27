@@ -9331,6 +9331,29 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     </div>
   </div>
 
+  <!-- SECTION 3b: Contract / License Term — 8CJ. Subscription-only (hidden in
+       Service mode, which has its own engagement dates). Start + End are entered;
+       Term is auto-calculated for display and printed on the proposal PDF so the
+       client sees the licence period. These dates flow into the contract on convert. -->
+  <div class="card proposal-subscription-only" data-proptype="subscription" style="margin-bottom:20px;">
+    <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-hourglass-half" style="color:var(--accent-cyan);"></i> Contract / License Term</div>
+    <div class="prospect-form-grid-3">
+      <div>
+        <label>Contract Start Date</label>
+        <input type="date" id="proposalStartDate" onchange="updateProposalTerm()">
+      </div>
+      <div>
+        <label>Contract End Date</label>
+        <input type="date" id="proposalEndDate" onchange="updateProposalTerm()">
+      </div>
+      <div>
+        <label>Term (auto-calculated)</label>
+        <input type="text" id="proposalTermDisplay" readonly style="background:var(--input-bg); color:var(--text-dim);" placeholder="Set start &amp; end dates">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Prints on the proposal PDF so the client sees the licence period.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- SECTION 4: Line Items -->
   <!-- Phase 8E — data-proptype="subscription" hides this in Service mode -->
   <div class="card proposal-subscription-only" data-proptype="subscription" style="margin-bottom:20px;">
@@ -23114,6 +23137,8 @@ function proposalBlank() {
         subject: '',
         issueDate: today,
         validUntil: validUntil.toISOString().slice(0, 10),
+        startDate: '',                    // 8CJ — contract/licence start (subscription)
+        endDate: '',                      // 8CJ — contract/licence end (subscription)
         status: 'Draft',
         lineItems: [],  // [{ id, oem, product, hsnSac, qty, unitPrice, discountPct, gstPct }]
         terms: '',
@@ -23567,6 +23592,9 @@ function openProposalForm(id) {
         val('proposalSubject', p.subject);
         val('proposalIssueDate', p.issueDate);
         val('proposalValidUntil', p.validUntil);
+        val('proposalStartDate', p.startDate || '');
+        val('proposalEndDate', p.endDate || '');
+        if (typeof updateProposalTerm === 'function') updateProposalTerm();
         val('proposalStatus', p.status);
         val('proposalTerms', p.terms);
         val('proposalNotes', p.notes);
@@ -24528,6 +24556,39 @@ function closeTermsPreview() {
     document.getElementById('termsPreviewModal').style.display = 'none';
 }
 
+// 8CJ — auto-calculate the contract/licence term from start + end dates and show
+// a friendly label. Display-only: we persist the two dates (term is always derivable),
+// so no stored term can go stale. Shared by the date onchange handlers and form load.
+function msComputeTermMonths(startStr, endStr) {
+    if (!startStr || !endStr) return null;
+    const s = new Date(startStr), e = new Date(endStr);
+    if (isNaN(s.getTime()) || isNaN(e.getTime())) return null;
+    if (e <= s) return -1; // sentinel: end not after start
+    // Whole months from start to end by calendar anniversary. A licence running
+    // 01-Apr-26 → 01-Apr-27 is exactly 12 months; only a day-of-month that lands
+    // strictly *after* the start's day adds a further partial month (rounded up).
+    let months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+    if (e.getDate() > s.getDate()) months += 1;
+    return Math.max(months, 1);
+}
+function msFormatTermLabel(months) {
+    if (months === null) return '';
+    if (months === -1) return '⚠ End date must be after start';
+    const noun = months === 1 ? 'month' : 'months';
+    if (months % 12 === 0) {
+        const yrs = months / 12;
+        return `${months} ${noun} (${yrs} year${yrs > 1 ? 's' : ''})`;
+    }
+    return `${months} ${noun}`;
+}
+function updateProposalTerm() {
+    const sEl = document.getElementById('proposalStartDate');
+    const eEl = document.getElementById('proposalEndDate');
+    const out = document.getElementById('proposalTermDisplay');
+    if (!sEl || !eEl || !out) return;
+    out.value = msFormatTermLabel(msComputeTermMonths(sEl.value, eEl.value));
+}
+
 function saveProposalFromForm() {
     const client = document.getElementById('proposalClient').value;
     const subject = document.getElementById('proposalSubject').value.trim();
@@ -24570,6 +24631,8 @@ function saveProposalFromForm() {
     rec.subject = subject;
     rec.issueDate = document.getElementById('proposalIssueDate').value;
     rec.validUntil = document.getElementById('proposalValidUntil').value;
+    rec.startDate = (document.getElementById('proposalStartDate') || {}).value || '';
+    rec.endDate = (document.getElementById('proposalEndDate') || {}).value || '';
     rec.status = document.getElementById('proposalStatus').value;
     rec.terms = document.getElementById('proposalTerms').value;
     rec.notes = document.getElementById('proposalNotes').value;
@@ -26317,6 +26380,7 @@ function buildProposalPDFHTMLDefault(proposal) {
                 <div style="font-size:13px; font-weight:700; color:var(--text-main); margin-bottom:10px;">${safe(proposal.subject)}</div>
                 <div style="font-size:11px; color:var(--text-dim);">
                     <div><strong>Valid Until:</strong> ${proposal.validUntil ? formatDateReadable(proposal.validUntil) : '—'}</div>
+                    ${(proposal.startDate && proposal.endDate) ? `<div style="margin-top:4px;"><strong>Contract Term:</strong> ${formatDateReadable(proposal.startDate)} &rarr; ${formatDateReadable(proposal.endDate)}</div><div style="margin-top:4px;"><strong>Duration:</strong> ${msFormatTermLabel(msComputeTermMonths(proposal.startDate, proposal.endDate))}</div>` : ''}
                     ${gst.buyerStateName ? `<div style="margin-top:4px;"><strong>Place of Supply:</strong> ${safe(gst.buyerStateName)}${gst.buyerState ? ' (' + gst.buyerState + ')' : ''}</div>` : ''}
                     <div style="margin-top:4px;"><strong>GST Mode:</strong> ${gst.mode === 'intra' ? 'Intra-state (CGST + SGST)' : 'Inter-state (IGST)'}</div>
                 </div>
@@ -26532,6 +26596,7 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
                     <div style="font-size:12.5px; font-weight:700; color:${COL_BODY}; margin-bottom:10px; line-height:1.4;">${safe(proposal.subject)}</div>
                     <div style="font-size:11px; color:${COL_BODY};">
                         <div><strong>Valid Until:</strong> ${proposal.validUntil ? formatDateReadable(proposal.validUntil) : '—'}</div>
+                        ${(proposal.startDate && proposal.endDate) ? `<div style="margin-top:4px;"><strong>Contract Term:</strong> ${formatDateReadable(proposal.startDate)} &rarr; ${formatDateReadable(proposal.endDate)}</div><div style="margin-top:4px;"><strong>Duration:</strong> ${msFormatTermLabel(msComputeTermMonths(proposal.startDate, proposal.endDate))}</div>` : ''}
                         ${gst.buyerStateName ? `<div style="margin-top:4px;"><strong>Place of Supply:</strong> ${safe(gst.buyerStateName)}${gst.buyerState ? ' (' + gst.buyerState + ')' : ''}</div>` : ''}
                         <div style="margin-top:4px;"><strong>GST Mode:</strong> ${gst.mode === 'intra' ? 'Intra-state (CGST + SGST)' : 'Inter-state (IGST)'}</div>
                     </div>
@@ -26876,12 +26941,19 @@ function convertProposalToContract(proposalId) {
         setVal('sellINR', totals.subtotal);  // subtotal (pre-GST) as sell value
         // Default cost blank — user will fill from OEM PO
         setVal('costCurrency', 'INR');
-        // Dates: start = validUntil or today; end = start + 12mo default
-        const startDate = p.validUntil || new Date().toISOString().slice(0, 10);
+        // Dates: 8CJ — use the proposal's contract Start/End when set; otherwise fall
+        // back to legacy behaviour (start = validUntil or today; end = start + 12mo).
+        const startDate = p.startDate || p.validUntil || new Date().toISOString().slice(0, 10);
         setVal('start', startDate);
-        const endD = new Date(startDate);
-        endD.setFullYear(endD.getFullYear() + 1);
-        setVal('endDate', endD.toISOString().slice(0, 10));
+        let endStr;
+        if (p.endDate) {
+            endStr = p.endDate;
+        } else {
+            const endD = new Date(startDate);
+            endD.setFullYear(endD.getFullYear() + 1);
+            endStr = endD.toISOString().slice(0, 10);
+        }
+        setVal('endDate', endStr);
 
         // Phase 4C.2/4C.3 — inherit commercial routing (Q1 Option A)
         setVal('contractCommercialModel', p.commercialModel || 'Direct');
