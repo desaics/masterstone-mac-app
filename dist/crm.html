@@ -19691,8 +19691,15 @@ function renderContracts() {
                                             totalCostOrig = annualCostOrig * yrs;
                                         }
 
-                                        const priceLic = licenses > 0 ? annualSellInr / licenses : 0;
-                                        const costLicOrig = licenses > 0 ? annualCostOrig / licenses : 0;
+                                        // 8CM — derive ACV from billingYears totals using the user's exact
+                                        // formula (Total ÷ months × 12). c.sellINR / c.costUSD are NOT reliably
+                                        // the annual figure on variable-escalation contracts, so we don't trust
+                                        // them for display. For uniform contracts this equals what we showed
+                                        // before; for escalations it correctly averages across the term.
+                                        const acvSell = term > 0 ? (totalSellInr / term) * 12 : 0;
+                                        const acvCostOrig = term > 0 ? (totalCostOrig / term) * 12 : 0;
+                                        const priceLic = licenses > 0 ? acvSell / licenses : 0;
+                                        const costLicOrig = licenses > 0 ? acvCostOrig / licenses : 0;
 
                                         const dash = '<span style="color:var(--text-dim);">—</span>';
                                         const showInr = v => (v && v > 0) ? fmtInr(v) : dash;
@@ -19707,8 +19714,8 @@ function renderContracts() {
                                         return `
                                     <div class="info-row"><span class="info-label">Contract Value</span><span class="info-val">${showInr(totalSellInr)}</span></div>
                                     <div class="info-row"><span class="info-label">Contract Cost</span><span class="info-val">${showCost(totalCostOrig)}</span></div>
-                                    <div class="info-row"><span class="info-label">ACV (Sales)</span><span class="info-val">${showInr(annualSellInr)}</span></div>
-                                    <div class="info-row"><span class="info-label">ACV (Cost)</span><span class="info-val">${showCost(annualCostOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Sales)</span><span class="info-val">${showInr(acvSell)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Cost)</span><span class="info-val">${showCost(acvCostOrig)}</span></div>
                                     <div class="info-row"><span class="info-label">Price / License (p.a.)</span><span class="info-val">${showInr(priceLic)}</span></div>
                                     <div class="info-row"><span class="info-label">Cost / License (p.a.)</span><span class="info-val">${showCost(costLicOrig)}</span></div>
                                     <div class="info-row"><span class="info-label">FX Rate</span><span class="info-val">${fxDisplay}</span></div>
