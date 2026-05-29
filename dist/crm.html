@@ -19627,27 +19627,6 @@ function renderContracts() {
                     <div class="detail-content">
                         <div class="expanded-container" style="gap:14px;">
                             
-                            <div>
-                                <div class="sp-detail-section-h">
-                                    <span><i class="fas fa-chart-line" style="color:var(--accent-cyan); margin-right:6px;"></i>Detailed Financial Performance</span>
-                                </div>
-                                <div class="sp-detail-table-scroll">
-                                    ${financialTableHTML}
-                                </div>
-                            </div>
-
-                            <div>
-                                <div class="sp-detail-section-h">
-                                    <span><i class="fas fa-file-invoice" style="color:var(--accent-cyan); margin-right:6px;"></i>Invoicing Lifecycle Details</span>
-                                    <span style="font-size:10px; font-weight:400; color:var(--text-dim); text-transform:none; letter-spacing:0; font-style:italic;">
-                                        <i class="fas fa-pencil-alt"></i> Click the pencil to edit any cycle
-                                    </span>
-                                </div>
-                                <div class="sp-detail-table-scroll">
-                                    ${invoicingTableHTML}
-                                </div>
-                            </div>
-                            
                             <div class="expanded-top-grid">
                                 <div class="expanded-block">
                                     <h5>Timeline &amp; Terms</h5>
@@ -19712,13 +19691,13 @@ function renderContracts() {
                                         const fxDisplay = isINR ? dash : ('₹' + baseFx.toFixed(2) + ' / ' + ccySymbol);
 
                                         return `
-                                    <div class="info-row"><span class="info-label">Contract Value</span><span class="info-val">${showInr(totalSellInr)}</span></div>
-                                    <div class="info-row"><span class="info-label">Contract Cost</span><span class="info-val">${showCost(totalCostOrig)}</span></div>
-                                    <div class="info-row"><span class="info-label">ACV (Sales)</span><span class="info-val">${showInr(acvSell)}</span></div>
-                                    <div class="info-row"><span class="info-label">ACV (Cost)</span><span class="info-val">${showCost(acvCostOrig)}</span></div>
-                                    <div class="info-row"><span class="info-label">Price / License (p.a.)</span><span class="info-val">${showInr(priceLic)}</span></div>
-                                    <div class="info-row"><span class="info-label">Cost / License (p.a.)</span><span class="info-val">${showCost(costLicOrig)}</span></div>
-                                    <div class="info-row"><span class="info-label">FX Rate</span><span class="info-val">${fxDisplay}</span></div>
+                                    <div class="info-row"><span class="info-label">Contract Value</span><span class="info-val" style="color:var(--success);">${showInr(totalSellInr)}</span></div>
+                                    <div class="info-row"><span class="info-label">Contract Cost</span><span class="info-val" style="color:var(--danger);">${showCost(totalCostOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Sales)</span><span class="info-val" style="color:var(--success);">${showInr(acvSell)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Cost)</span><span class="info-val" style="color:var(--danger);">${showCost(acvCostOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">Price / License (p.a.)</span><span class="info-val" style="color:var(--success);">${showInr(priceLic)}</span></div>
+                                    <div class="info-row"><span class="info-label">Cost / License (p.a.)</span><span class="info-val" style="color:var(--danger);">${showCost(costLicOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">FX Rate</span><span class="info-val" style="color:#b91c1c;">${fxDisplay}</span></div>
                                         `;
                                     })()}
                                 </div>
@@ -19736,6 +19715,27 @@ function renderContracts() {
                                     <div class="info-row"><span class="info-label">Internal OEM PO</span><span class="info-val">${expIntPO}</span></div>
                                     <div class="info-row"><span class="info-label">Int. PO Date</span><span class="info-val">${formatDateReadable(c.internalPODate)}</span></div>
                                     <div class="info-row"><span class="info-label">Contact</span><span class="info-val">${pEsc(c.clientContactName || '-')}</span></div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="sp-detail-section-h">
+                                    <span><i class="fas fa-chart-line" style="color:var(--accent-cyan); margin-right:6px;"></i>Detailed Financial Performance</span>
+                                </div>
+                                <div class="sp-detail-table-scroll">
+                                    ${financialTableHTML}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <div class="sp-detail-section-h">
+                                    <span><i class="fas fa-file-invoice" style="color:var(--accent-cyan); margin-right:6px;"></i>Invoicing Lifecycle Details</span>
+                                    <span style="font-size:10px; font-weight:400; color:var(--text-dim); text-transform:none; letter-spacing:0; font-style:italic;">
+                                        <i class="fas fa-pencil-alt"></i> Click the pencil to edit any cycle
+                                    </span>
+                                </div>
+                                <div class="sp-detail-table-scroll">
+                                    ${invoicingTableHTML}
                                 </div>
                             </div>
 
