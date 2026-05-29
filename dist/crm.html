@@ -796,7 +796,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 .expanded-container { display: flex; flex-direction: column; gap: 24px; }
 .expanded-top-grid {
-    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    display: grid; grid-template-columns: repeat(2, 1fr);
     gap: 20px;
     padding-top: 20px; border-top: 1px solid var(--glass-border);
 }
@@ -19670,6 +19670,64 @@ function renderContracts() {
                                     <div class="info-row"><span class="info-label">Internal OEM PO</span><span class="info-val">${expIntPO}</span></div>
                                     <div class="info-row"><span class="info-label">Int. PO Date</span><span class="info-val">${formatDateReadable(c.internalPODate)}</span></div>
                                     <div class="info-row"><span class="info-label">Contact</span><span class="info-val">${pEsc(c.clientContactName || '-')}</span></div>
+                                </div>
+
+                                <div class="expanded-block">
+                                    <h5>Pricing</h5>
+                                    ${(() => {
+                                        // 8CK — Pricing card. Pre-tax view of the committed deal. Totals are
+                                        // the exact sum of billingYears at BOOKING FX (the rate the deal was
+                                        // signed at); realised-FX P&L is surfaced separately on Financial
+                                        // Intelligence. Per-licence figures are annualised (= annual ÷ licences).
+                                        // Auto-currency: INR-only for INR contracts; USD/INR pair for USD.
+                                        const term = parseFloat(c.term) || 0;
+                                        const licenses = parseInt(c.licenses) || 0;
+                                        const annualSellInr = parseFloat(c.sellINR) || 0;
+                                        const annualCostOrig = parseFloat(c.costUSD) || 0;
+                                        const ccy = c.costCurrency || 'USD';
+                                        const isINR = ccy === 'INR';
+                                        const baseFx = isINR ? 1 : (parseFloat(c.baseFX) || 83.5);
+
+                                        let totalSellInr = 0, totalCostOrig = 0, fromYears = false;
+                                        if (Array.isArray(c.billingYears) && c.billingYears.length > 0) {
+                                            c.billingYears.forEach(y => {
+                                                const bs = (y.baseSell !== undefined ? y.baseSell : annualSellInr) || 0;
+                                                const bc = (y.baseCost !== undefined ? y.baseCost : annualCostOrig) || 0;
+                                                const r = parseFloat(y.ratio) || 0;
+                                                totalSellInr += bs * r;
+                                                totalCostOrig += bc * r;
+                                                fromYears = true;
+                                            });
+                                        }
+                                        if (!fromYears) {
+                                            const yrs = term > 0 ? term / 12 : 0;
+                                            totalSellInr = annualSellInr * yrs;
+                                            totalCostOrig = annualCostOrig * yrs;
+                                        }
+
+                                        const priceLic = licenses > 0 ? annualSellInr / licenses : 0;
+                                        const costLicOrig = licenses > 0 ? annualCostOrig / licenses : 0;
+
+                                        const dash = '<span style="color:var(--text-dim);">—</span>';
+                                        const showInr = v => (v && v > 0) ? fmtInr(v) : dash;
+                                        const showCost = vOrig => {
+                                            if (!vOrig || vOrig <= 0) return dash;
+                                            const vInr = vOrig * baseFx;
+                                            return isINR ? fmtInr(vInr) : (fmtPoCcy(vOrig, ccy) + ' / ' + fmtInr(vInr));
+                                        };
+                                        const ccySymbol = ccy === 'USD' ? '$' : ccy === 'GBP' ? '£' : ccy === 'EUR' ? '€' : ccy;
+                                        const fxDisplay = isINR ? dash : ('₹' + baseFx.toFixed(2) + ' / ' + ccySymbol);
+
+                                        return `
+                                    <div class="info-row"><span class="info-label">Contract Value</span><span class="info-val">${showInr(totalSellInr)}</span></div>
+                                    <div class="info-row"><span class="info-label">Contract Cost</span><span class="info-val">${showCost(totalCostOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Sales)</span><span class="info-val">${showInr(annualSellInr)}</span></div>
+                                    <div class="info-row"><span class="info-label">ACV (Cost)</span><span class="info-val">${showCost(annualCostOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">Price / License (p.a.)</span><span class="info-val">${showInr(priceLic)}</span></div>
+                                    <div class="info-row"><span class="info-label">Cost / License (p.a.)</span><span class="info-val">${showCost(costLicOrig)}</span></div>
+                                    <div class="info-row"><span class="info-label">FX Rate</span><span class="info-val">${fxDisplay}</span></div>
+                                        `;
+                                    })()}
                                 </div>
                             </div>
 
