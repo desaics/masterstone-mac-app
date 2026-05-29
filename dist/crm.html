@@ -944,7 +944,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* Tighter expanded-block grid */
 .sp-detail-row .expanded-top-grid {
-    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    display: grid; grid-template-columns: repeat(2, 1fr);
     gap: 10px;
     padding-top: 10px; border-top: 1px solid var(--glass-border);
     margin-top: 10px;
@@ -19658,21 +19658,6 @@ function renderContracts() {
                                 </div>
 
                                 <div class="expanded-block">
-                                    <h5>Scope &amp; Assets</h5>
-                                    <div class="info-row"><span class="info-label">Product</span><span class="info-val">${c.product ? getProductDisplayHtml(c.product) : '-'}</span></div>
-                                    <div class="info-row"><span class="info-label">Licenses</span><span class="info-val">${c.licenses || '-'}</span></div>
-                                    <div class="info-row" style="align-items:flex-start;"><span class="info-label">Hardware</span><span class="info-val">${pEsc(c.hardware || '-')}</span></div>
-                                </div>
-
-                                <div class="expanded-block">
-                                    <h5>Procurement</h5>
-                                    <div class="info-row" style="align-items:flex-start;"><span class="info-label">Client PO(s)</span><span class="info-val" style="text-align:right;">${expClientPO}</span></div>
-                                    <div class="info-row"><span class="info-label">Internal OEM PO</span><span class="info-val">${expIntPO}</span></div>
-                                    <div class="info-row"><span class="info-label">Int. PO Date</span><span class="info-val">${formatDateReadable(c.internalPODate)}</span></div>
-                                    <div class="info-row"><span class="info-label">Contact</span><span class="info-val">${pEsc(c.clientContactName || '-')}</span></div>
-                                </div>
-
-                                <div class="expanded-block">
                                     <h5>Pricing</h5>
                                     ${(() => {
                                         // 8CK — Pricing card. Pre-tax view of the committed deal. Totals are
@@ -19680,6 +19665,7 @@ function renderContracts() {
                                         // signed at); realised-FX P&L is surfaced separately on Financial
                                         // Intelligence. Per-licence figures are annualised (= annual ÷ licences).
                                         // Auto-currency: INR-only for INR contracts; USD/INR pair for USD.
+                                        // 8CL — moved to row 1 (slot 2), beside Timeline & Terms.
                                         const term = parseFloat(c.term) || 0;
                                         const licenses = parseInt(c.licenses) || 0;
                                         const annualSellInr = parseFloat(c.sellINR) || 0;
@@ -19728,6 +19714,21 @@ function renderContracts() {
                                     <div class="info-row"><span class="info-label">FX Rate</span><span class="info-val">${fxDisplay}</span></div>
                                         `;
                                     })()}
+                                </div>
+
+                                <div class="expanded-block">
+                                    <h5>Scope &amp; Assets</h5>
+                                    <div class="info-row"><span class="info-label">Product</span><span class="info-val">${c.product ? getProductDisplayHtml(c.product) : '-'}</span></div>
+                                    <div class="info-row"><span class="info-label">Licenses</span><span class="info-val">${c.licenses || '-'}</span></div>
+                                    <div class="info-row" style="align-items:flex-start;"><span class="info-label">Hardware</span><span class="info-val">${pEsc(c.hardware || '-')}</span></div>
+                                </div>
+
+                                <div class="expanded-block">
+                                    <h5>Procurement</h5>
+                                    <div class="info-row" style="align-items:flex-start;"><span class="info-label">Client PO(s)</span><span class="info-val" style="text-align:right;">${expClientPO}</span></div>
+                                    <div class="info-row"><span class="info-label">Internal OEM PO</span><span class="info-val">${expIntPO}</span></div>
+                                    <div class="info-row"><span class="info-label">Int. PO Date</span><span class="info-val">${formatDateReadable(c.internalPODate)}</span></div>
+                                    <div class="info-row"><span class="info-label">Contact</span><span class="info-val">${pEsc(c.clientContactName || '-')}</span></div>
                                 </div>
                             </div>
 
