@@ -699,6 +699,36 @@ h2 {
     margin-top: 8px; padding-top: 6px;
     border-top: 1px solid var(--glass-border);
 }
+/* ===== Weekly Briefing modal (Phase 8CO) ===== */
+.wb-taxnote {
+    font-size: 11px; color: var(--text-subtle);
+    margin-bottom: 14px; letter-spacing: 0.2px;
+}
+.wb-section {
+    background: var(--detail-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+.wb-sec-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--glass-border);
+}
+.wb-sec-title { font-size: 13px; font-weight: 700; color: var(--text-main); }
+.wb-sec-headline { font-size: 13px; font-weight: 700; color: var(--text-main); white-space: nowrap; }
+.wb-item {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px; padding: 4px 0; font-size: 12.5px;
+}
+.wb-item + .wb-item { border-top: 1px dashed var(--glass-border); }
+.wb-item-lbl { color: var(--text-main); }
+.wb-item-meta { color: var(--text-subtle); font-size: 11px; }
+.wb-item-val { font-weight: 600; color: var(--text-main); white-space: nowrap; }
+.wb-empty { font-size: 12px; color: var(--text-subtle); font-style: italic; padding: 2px 0; }
+.wb-more { font-size: 11px; color: var(--text-subtle); padding-top: 5px; }
+.wb-buckets { font-size: 11px; color: var(--text-subtle); margin-top: 8px; }
 /* ===== End Business Snapshot tiles ===== */
 
 /* Dashboard Grids */
@@ -6523,6 +6553,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div class="page-header" style="margin-bottom: 14px; align-items: center;">
         <h2 style="margin: 0;">Business Snapshot</h2>
         <div style="display: flex; align-items: center; gap: 14px;">
+          <!-- 8CO — Weekly Briefing: opens a dated "what needs attention" digest
+               (overdue AR, bills to raise, vendor dues, OEM invoices to chase,
+               renewals, open POs). Copyable as text + printable via printHtml.
+               Honours the live GST/TDS toggle so figures match this Snapshot. -->
+          <button class="btn btn-ghost btn-sm" onclick="openWeeklyBriefing()" title="Open the Weekly Briefing — everything that needs attention this week"><i class="fas fa-clipboard-list"></i> Weekly Briefing</button>
           <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on all money figures"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
           <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) on Receivables side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
           <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
@@ -11611,6 +11646,22 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div id="brokenLinkResultsBody" style="overflow-y:auto; flex:1; min-height:80px; border:1px solid var(--glass-border); border-radius:6px;"></div>
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-shrink:0;">
       <button class="btn btn-primary" onclick="window.__msCloseBrokenLinkResults()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== WEEKLY BRIEFING MODAL (Phase 8CO) ===================== -->
+<div id="weeklyBriefingModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 880px; max-height: 86vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-shrink:0;">
+      <h2 style="font-size:18px; margin:0;"><i class="fas fa-clipboard-list" style="color:var(--accent-cyan);"></i> Weekly Briefing <span id="wbDateLabel" style="font-size:12px; color:var(--text-subtle); font-weight:500; margin-left:8px;"></span></h2>
+      <button class="btn btn-ghost" onclick="closeWeeklyBriefing()" style="border:none;"><i class="fas fa-times" style="font-size:18px;"></i></button>
+    </div>
+    <div id="wbBody" style="overflow-y:auto; flex:1; min-height:120px; padding-right:4px;"></div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; flex-shrink:0;">
+      <button class="btn btn-ghost btn-sm" onclick="copyWeeklyBriefing()" title="Copy the briefing as plain text for email / WhatsApp"><i class="fas fa-copy"></i> Copy as text</button>
+      <button class="btn btn-ghost btn-sm" onclick="printWeeklyBriefing()" title="Open a printable version (Save as PDF)"><i class="fas fa-print"></i> Print / PDF</button>
+      <button class="btn btn-primary btn-sm" onclick="closeWeeklyBriefing()">Close</button>
     </div>
   </div>
 </div>
@@ -38583,6 +38634,297 @@ function renderBusinessSnapshot() {
 /* ======================================================================
    End of Business Snapshot module
    ====================================================================== */
+
+/* ======================================================================
+   8CO — WEEKLY BRIEFING ("what needs attention this week")
+   ----------------------------------------------------------------------
+   A dated, shareable digest built entirely on existing Snapshot helpers
+   (bsBuildMoneyRecords / bsApplyTax / bsFmtINRShort / getAgeBucket) plus
+   contracts + purchaseOrders. No backend involvement. Honours the live
+   GST/TDS toggle so figures reconcile with the Business Snapshot.
+
+   Surfaces: a modal (#weeklyBriefingModal) opened from the Snapshot header.
+   One data-gatherer (wbGatherBriefing) feeds three consumers — the on-screen
+   render, the plain-text copy, and the printable HTML — so they never drift.
+   ====================================================================== */
+
+function wbFmtDate(d) {
+    if (!d) return '';
+    const dt = (d instanceof Date) ? d : new Date(d);
+    if (isNaN(dt.getTime())) return '';
+    const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return dt.getDate() + ' ' + mo[dt.getMonth()];
+}
+function wbFmtDateLong(d) {
+    if (!d) return '';
+    const dt = (d instanceof Date) ? d : new Date(d);
+    if (isNaN(dt.getTime())) return '';
+    const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return dt.getDate() + ' ' + mo[dt.getMonth()] + ' ' + dt.getFullYear();
+}
+
+// Gather every section's data into one structured object.
+function wbGatherBriefing() {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const weekOut = new Date(today); weekOut.setDate(weekOut.getDate() + 7);
+    const fy = (typeof bsGetCurrentFYRange === 'function') ? bsGetCurrentFYRange() : null;
+    const recs = (typeof bsBuildMoneyRecords === 'function')
+        ? bsBuildMoneyRecords()
+        : { arInvoiced: [], arToIssue: [], apReceived: [], apToReceive: [] };
+    const tax = (amt, side) => (typeof bsApplyTax === 'function') ? bsApplyTax(amt, side) : (Number(amt) || 0);
+    const bucketOf = ad => (typeof getAgeBucket === 'function') ? getAgeBucket(ad) : '0_30';
+
+    // 1. Collect now — overdue raised AR (>60 days), plus aging-bucket totals.
+    const overdueAR = recs.arInvoiced
+        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 60)
+        .map(r => ({ label: r.client || '(no client)', meta: r.ageDays + 'd', amount: tax(r.amount, 'AR') }))
+        .sort((a, b) => b.amount - a.amount);
+    let arB1 = 0, arB2 = 0, arB3 = 0, arB4 = 0;
+    recs.arInvoiced.forEach(r => {
+        const v = tax(r.amount, 'AR');
+        const b = bucketOf(r.ageDays);
+        if (b === '0_30') arB1 += v; else if (b === '31_60') arB2 += v; else if (b === '61_90') arB3 += v; else arB4 += v;
+    });
+
+    // 2. Bill this week — to-issue AR cycles past-due or due within 7 days.
+    const billSoon = recs.arToIssue
+        .filter(r => r.billDate && r.billDate <= weekOut)
+        .map(r => ({ label: r.client || '(no client)', meta: wbFmtDate(r.billDate) + (r.billDate < today ? ' · overdue' : ''), amount: tax(r.amount, 'AR') }))
+        .sort((a, b) => b.amount - a.amount);
+
+    // 3. Pay soon — received vendor (OEM) invoices, unpaid and aged > 60 days.
+    const payOutstanding = recs.apReceived
+        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 60)
+        .map(r => ({ label: (r.oem || '(no OEM)') + (r.client ? ' · ' + r.client : ''), meta: r.ageDays + 'd', amount: tax(r.amount, 'AP') }))
+        .sort((a, b) => b.amount - a.amount);
+    const payTotal = recs.apReceived.reduce((s, r) => s + tax(r.amount, 'AP'), 0);
+
+    // 4. Chase OEM invoices — awaited AP cycles past-due or due within 7 days.
+    const chaseOem = recs.apToReceive
+        .filter(r => r.billDate && r.billDate <= weekOut)
+        .map(r => ({ label: (r.oem || '(no OEM)') + (r.client ? ' · ' + r.client : ''), meta: wbFmtDate(r.billDate) + (r.billDate < today ? ' · overdue' : ''), amount: tax(r.amount, 'AP') }))
+        .sort((a, b) => b.amount - a.amount);
+
+    // 5. Renewals — contracts ending within 30 days (not Confirmed/Lost),
+    //    plus 31-60 / 61-90 day counts. Same rule as the Action Center.
+    const cons = (typeof contracts !== 'undefined' && Array.isArray(contracts)) ? contracts : [];
+    const renUrgent = [];
+    let ren3160 = 0, ren6190 = 0;
+    cons.forEach(c => {
+        if (!c || !c.endDate) return;
+        const e = new Date(c.endDate);
+        if (isNaN(e.getTime())) return;
+        const days = Math.floor((e - today) / 86400000);
+        const st = c.renewalStatus || 'Not Started';
+        if (st === 'Confirmed' || st === 'Lost') return;
+        if (days < 0 || days > 90) return;
+        if (days <= 30) {
+            const sub = c.product || (c.oem ? ((typeof getOemDisplayName === 'function') ? getOemDisplayName(c.oem) : c.oem) : '');
+            renUrgent.push({ label: c.client || '(no client)', sub: sub, meta: days + 'd' });
+        } else if (days <= 60) { ren3160++; } else { ren6190++; }
+    });
+    renUrgent.sort((a, b) => (parseInt(a.meta, 10) || 0) - (parseInt(b.meta, 10) || 0));
+
+    // 6. Open POs awaiting vendor (Acknowledged / Received).
+    const pos = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) ? purchaseOrders : [];
+    const openPOs = pos
+        .filter(po => po && (po.status === 'Acknowledged' || po.status === 'Received'))
+        .map(po => ({
+            label: po.poNumber || po.poNo || ('PO #' + (po.id || '')),
+            sub: po.oem || '',
+            amount: (typeof bsPOTotalINR === 'function') ? bsPOTotalINR(po) : 0
+        }))
+        .sort((a, b) => b.amount - a.amount);
+
+    return {
+        today, fyLabel: fy ? fy.label : '',
+        gstOn: (typeof showGST !== 'undefined' && showGST),
+        tdsOn: (typeof showTDS !== 'undefined' && showTDS),
+        overdueAR, arB1, arB2, arB3, arB4,
+        billSoon, payOutstanding, payTotal, chaseOem,
+        renUrgent, ren3160, ren6190, openPOs
+    };
+}
+
+// Build the six section descriptors (shared by render / text / print).
+// Colours are fixed hex (not CSS vars) so the printable doc renders them too.
+function wbSections(d) {
+    const m = (typeof bsFmtINRShort === 'function') ? bsFmtINRShort : (n => '\u20b9' + (Number(n) || 0).toFixed(0));
+    const sum = arr => arr.reduce((s, x) => s + (x.amount || 0), 0);
+    return [
+        { icon: 'fa-hand-holding-dollar', color: '#b91c1c', title: 'Collect now \u2014 overdue receivables',
+          headline: d.overdueAR.length ? (d.overdueAR.length + ' \u00b7 ' + m(sum(d.overdueAR))) : '\u2014',
+          items: d.overdueAR, empty: 'No receivables over 60 days.',
+          extra: 'Aging \u2014 0\u201330: ' + m(d.arB1) + '  \u00b7  31\u201360: ' + m(d.arB2) + '  \u00b7  61\u201390: ' + m(d.arB3) + '  \u00b7  90+: ' + m(d.arB4) },
+        { icon: 'fa-file-circle-plus', color: '#0e7490', title: 'Bill this week \u2014 invoices to raise',
+          headline: d.billSoon.length ? (d.billSoon.length + ' \u00b7 ' + m(sum(d.billSoon))) : '\u2014',
+          items: d.billSoon, empty: 'Nothing scheduled to bill in the next 7 days.', extra: '' },
+        { icon: 'fa-building-columns', color: '#b91c1c', title: 'Pay soon \u2014 vendor invoices outstanding',
+          headline: d.payOutstanding.length ? (d.payOutstanding.length + ' \u00b7 ' + m(sum(d.payOutstanding))) : '\u2014',
+          items: d.payOutstanding, empty: 'No vendor invoices over 60 days.',
+          extra: 'Total received and unpaid: ' + m(d.payTotal) },
+        { icon: 'fa-file-import', color: '#b45309', title: 'Chase OEM invoices \u2014 awaited',
+          headline: d.chaseOem.length ? (d.chaseOem.length + ' \u00b7 ' + m(sum(d.chaseOem))) : '\u2014',
+          items: d.chaseOem, empty: 'No OEM invoices due in the next 7 days.', extra: '' },
+        { icon: 'fa-rotate', color: '#0e7490', title: 'Renewals \u2014 expiring',
+          headline: d.renUrgent.length ? (d.renUrgent.length + ' \u226430d') : '\u2014',
+          items: d.renUrgent, empty: 'No renewals due in the next 30 days.',
+          extra: '31\u201360 days: ' + d.ren3160 + '  \u00b7  61\u201390 days: ' + d.ren6190 },
+        { icon: 'fa-file-signature', color: '#6d28d9', title: 'Open POs \u2014 awaiting vendor',
+          headline: d.openPOs.length ? (d.openPOs.length + ' \u00b7 ' + m(sum(d.openPOs))) : '\u2014',
+          items: d.openPOs, empty: 'No POs awaiting the vendor.', extra: '' }
+    ];
+}
+
+function wbTaxNote(d) {
+    if (d.gstOn || d.tdsOn) {
+        const parts = [];
+        if (d.gstOn) parts.push('GST');
+        if (d.tdsOn) parts.push('TDS');
+        return 'Figures include ' + parts.join(' + ') + ' \u2014 matching the Snapshot toggle.';
+    }
+    return 'Figures are pre-tax (GST/TDS toggles are off).';
+}
+
+// On-screen render into the modal body.
+function renderWeeklyBriefing() {
+    const d = wbGatherBriefing();
+    const esc = (typeof bsEsc === 'function') ? bsEsc : (s => String(s == null ? '' : s));
+    const m = (typeof bsFmtINRShort === 'function') ? bsFmtINRShort : (n => '\u20b9' + (Number(n) || 0).toFixed(0));
+
+    const dateLbl = document.getElementById('wbDateLabel');
+    if (dateLbl) dateLbl.textContent = '\u00b7 ' + wbFmtDateLong(d.today) + (d.fyLabel ? ' \u00b7 FY ' + d.fyLabel : '');
+
+    let html = '<div class="wb-taxnote">' + esc(wbTaxNote(d)) + '</div>';
+    wbSections(d).forEach(s => {
+        let inner;
+        if (!s.items || !s.items.length) {
+            inner = '<div class="wb-empty">' + esc(s.empty) + '</div>';
+        } else {
+            const top = s.items.slice(0, 5);
+            inner = top.map(it =>
+                '<div class="wb-item"><span class="wb-item-lbl">' + esc(it.label)
+                + (it.sub ? ' \u00b7 ' + esc(it.sub) : '')
+                + (it.meta ? ' <span class="wb-item-meta">' + esc(it.meta) + '</span>' : '')
+                + '</span>'
+                + ((it.amount !== undefined && it.amount !== null) ? '<span class="wb-item-val">' + m(it.amount) + '</span>' : '')
+                + '</div>'
+            ).join('');
+            const more = s.items.length - top.length;
+            if (more > 0) inner += '<div class="wb-more">+' + more + ' more</div>';
+        }
+        const extra = s.extra ? '<div class="wb-buckets">' + esc(s.extra) + '</div>' : '';
+        html += '<div class="wb-section"><div class="wb-sec-head">'
+            + '<span class="wb-sec-title"><i class="fas ' + s.icon + '" style="color:' + s.color + ';"></i> ' + esc(s.title) + '</span>'
+            + '<span class="wb-sec-headline">' + esc(s.headline) + '</span></div>'
+            + inner + extra + '</div>';
+    });
+    const body = document.getElementById('wbBody');
+    if (body) body.innerHTML = html;
+}
+
+// Plain-text version for the clipboard (email / WhatsApp).
+function buildWeeklyBriefingText() {
+    const d = wbGatherBriefing();
+    const L = [];
+    L.push('WEEKLY BRIEFING \u2014 MASTERSTONE');
+    L.push(wbFmtDateLong(d.today) + (d.fyLabel ? '  \u00b7  FY ' + d.fyLabel : ''));
+    L.push(wbTaxNote(d));
+    L.push('');
+    wbSections(d).forEach(s => {
+        L.push('\u2014 ' + s.title + '   [' + s.headline + ']');
+        if (!s.items || !s.items.length) {
+            L.push('   ' + s.empty);
+        } else {
+            s.items.slice(0, 5).forEach(it => {
+                const right = (it.amount !== undefined && it.amount !== null) ? '  ' + (typeof bsFmtINRShort === 'function' ? bsFmtINRShort(it.amount) : it.amount) : '';
+                L.push('   \u2022 ' + it.label + (it.sub ? ' \u00b7 ' + it.sub : '') + (it.meta ? ' (' + it.meta + ')' : '') + right);
+            });
+            if (s.items.length > 5) L.push('   +' + (s.items.length - 5) + ' more');
+        }
+        if (s.extra) L.push('   ' + s.extra);
+        L.push('');
+    });
+    return L.join('\n');
+}
+
+// Standalone light-theme HTML for the print / PDF route.
+function wbBuildPrintHtml(d) {
+    const esc = (typeof bsEsc === 'function') ? bsEsc : (s => String(s == null ? '' : s));
+    const m = (typeof bsFmtINRShort === 'function') ? bsFmtINRShort : (n => '\u20b9' + (Number(n) || 0).toFixed(0));
+    let rows = '';
+    wbSections(d).forEach(s => {
+        let inner;
+        if (!s.items || !s.items.length) {
+            inner = '<div style="color:#888; font-style:italic; padding:4px 0;">' + esc(s.empty) + '</div>';
+        } else {
+            inner = s.items.slice(0, 5).map(it =>
+                '<div style="display:flex; justify-content:space-between; gap:12px; padding:3px 0; border-bottom:1px solid #eee;"><span>' + esc(it.label)
+                + (it.sub ? ' \u00b7 ' + esc(it.sub) : '')
+                + (it.meta ? ' <span style="color:#999; font-size:11px;">' + esc(it.meta) + '</span>' : '')
+                + '</span><span style="font-weight:600; white-space:nowrap;">'
+                + ((it.amount !== undefined && it.amount !== null) ? m(it.amount) : '')
+                + '</span></div>'
+            ).join('');
+            const more = s.items.length - 5;
+            if (more > 0) inner += '<div style="color:#888; font-size:11px; padding-top:3px;">+' + more + ' more</div>';
+        }
+        const extra = s.extra ? '<div style="color:#666; font-size:11px; margin-top:5px;">' + esc(s.extra) + '</div>' : '';
+        rows += '<div style="margin-bottom:16px;"><div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid ' + s.color + '; padding-bottom:3px; margin-bottom:6px;">'
+            + '<span style="font-weight:700; color:' + s.color + ';">' + esc(s.title) + '</span>'
+            + '<span style="font-weight:700;">' + esc(s.headline) + '</span></div>' + inner + extra + '</div>';
+    });
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Weekly Briefing</title></head>'
+        + '<body style="font-family:-apple-system,Helvetica,Arial,sans-serif; color:#1a1a1a; max-width:720px; margin:24px auto; padding:0 16px; font-size:13px; line-height:1.45;">'
+        + '<div style="border-bottom:3px solid #1a1a1a; padding-bottom:8px; margin-bottom:6px;">'
+        + '<div style="font-size:20px; font-weight:800; letter-spacing:0.5px;">WEEKLY BRIEFING</div>'
+        + '<div style="font-size:12px; color:#555;">Masterstone \u00b7 ' + esc(wbFmtDateLong(d.today)) + (d.fyLabel ? ' \u00b7 FY ' + esc(d.fyLabel) : '') + '</div></div>'
+        + '<div style="font-size:11px; color:#777; margin-bottom:16px;">' + esc(wbTaxNote(d)) + '</div>'
+        + rows
+        + '<div style="margin-top:20px; padding-top:8px; border-top:1px solid #ccc; font-size:10px; color:#aaa;">Generated by Masterstone CRM \u00b7 ' + esc(wbFmtDateLong(d.today)) + '</div>'
+        + '</body></html>';
+}
+
+function openWeeklyBriefing() {
+    try { renderWeeklyBriefing(); } catch (e) { console.warn('Weekly Briefing render failed:', e); }
+    const el = document.getElementById('weeklyBriefingModal');
+    if (el) el.style.display = 'flex';
+}
+function closeWeeklyBriefing() {
+    const el = document.getElementById('weeklyBriefingModal');
+    if (el) el.style.display = 'none';
+}
+
+function wbFallbackCopy(text, ok) {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+        ok();
+    } catch (e) {
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> Copy failed \u2014 select the text manually.');
+    }
+}
+function copyWeeklyBriefing() {
+    const text = buildWeeklyBriefingText();
+    const ok = () => { if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Briefing copied \u2014 paste into email or WhatsApp.'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(ok).catch(() => wbFallbackCopy(text, ok));
+    } else {
+        wbFallbackCopy(text, ok);
+    }
+}
+function printWeeklyBriefing() {
+    const d = wbGatherBriefing();
+    const html = wbBuildPrintHtml(d);
+    if (typeof printHtml === 'function') {
+        printHtml(html, 'Weekly Briefing');
+    } else {
+        try { const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); } } catch (e) {}
+    }
+}
+
 
 
 /* ======================================================================
