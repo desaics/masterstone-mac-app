@@ -38674,9 +38674,13 @@ function wbGatherBriefing() {
     const tax = (amt, side) => (typeof bsApplyTax === 'function') ? bsApplyTax(amt, side) : (Number(amt) || 0);
     const bucketOf = ad => (typeof getAgeBucket === 'function') ? getAgeBucket(ad) : '0_30';
 
-    // 1. Collect now — overdue raised AR (>60 days), plus aging-bucket totals.
+    // 1. Collect now — overdue raised AR, plus aging-bucket totals.
+    //    8CO.1 — overdue = past the standard 30-day payment term (ageDays > 30),
+    //    i.e. everything outside the 0–30 bucket (which folds in not-yet-due
+    //    invoices). The earlier >60 cut hid genuinely overdue 31–60-day money,
+    //    leaving the section empty while the aging line still showed a balance.
     const overdueAR = recs.arInvoiced
-        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 60)
+        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 30)
         .map(r => ({ label: r.client || '(no client)', meta: r.ageDays + 'd', amount: tax(r.amount, 'AR') }))
         .sort((a, b) => b.amount - a.amount);
     let arB1 = 0, arB2 = 0, arB3 = 0, arB4 = 0;
@@ -38692,9 +38696,11 @@ function wbGatherBriefing() {
         .map(r => ({ label: r.client || '(no client)', meta: wbFmtDate(r.billDate) + (r.billDate < today ? ' · overdue' : ''), amount: tax(r.amount, 'AR') }))
         .sort((a, b) => b.amount - a.amount);
 
-    // 3. Pay soon — received vendor (OEM) invoices, unpaid and aged > 60 days.
+    // 3. Pay soon — received vendor (OEM) invoices, unpaid and overdue.
+    //    8CO.1 — mirrors the receivables fix: overdue = ageDays > 30 (past the
+    //    standard term), not >60, so 31–60-day vendor dues surface here too.
     const payOutstanding = recs.apReceived
-        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 60)
+        .filter(r => r.ageDays !== null && r.ageDays !== undefined && r.ageDays > 30)
         .map(r => ({ label: (r.oem || '(no OEM)') + (r.client ? ' · ' + r.client : ''), meta: r.ageDays + 'd', amount: tax(r.amount, 'AP') }))
         .sort((a, b) => b.amount - a.amount);
     const payTotal = recs.apReceived.reduce((s, r) => s + tax(r.amount, 'AP'), 0);
@@ -38754,14 +38760,14 @@ function wbSections(d) {
     return [
         { icon: 'fa-hand-holding-dollar', color: '#b91c1c', title: 'Collect now \u2014 overdue receivables',
           headline: d.overdueAR.length ? (d.overdueAR.length + ' \u00b7 ' + m(sum(d.overdueAR))) : '\u2014',
-          items: d.overdueAR, empty: 'No receivables over 60 days.',
+          items: d.overdueAR, empty: 'Nothing overdue beyond the standard 30-day term.',
           extra: 'Aging \u2014 0\u201330: ' + m(d.arB1) + '  \u00b7  31\u201360: ' + m(d.arB2) + '  \u00b7  61\u201390: ' + m(d.arB3) + '  \u00b7  90+: ' + m(d.arB4) },
         { icon: 'fa-file-circle-plus', color: '#0e7490', title: 'Bill this week \u2014 invoices to raise',
           headline: d.billSoon.length ? (d.billSoon.length + ' \u00b7 ' + m(sum(d.billSoon))) : '\u2014',
           items: d.billSoon, empty: 'Nothing scheduled to bill in the next 7 days.', extra: '' },
         { icon: 'fa-building-columns', color: '#b91c1c', title: 'Pay soon \u2014 vendor invoices outstanding',
           headline: d.payOutstanding.length ? (d.payOutstanding.length + ' \u00b7 ' + m(sum(d.payOutstanding))) : '\u2014',
-          items: d.payOutstanding, empty: 'No vendor invoices over 60 days.',
+          items: d.payOutstanding, empty: 'Nothing overdue beyond the standard 30-day term.',
           extra: 'Total received and unpaid: ' + m(d.payTotal) },
         { icon: 'fa-file-import', color: '#b45309', title: 'Chase OEM invoices \u2014 awaited',
           headline: d.chaseOem.length ? (d.chaseOem.length + ' \u00b7 ' + m(sum(d.chaseOem))) : '\u2014',
