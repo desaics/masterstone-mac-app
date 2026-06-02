@@ -40928,6 +40928,26 @@ function _caExportEffectiveOem(c) {
     return _caExportInferOemFromProduct(c.product || '');
 }
 
+// 8CP — End-client suffix for the Payments sheet ITEMS column.
+// Each contract/OEM payment IS tied to an end client via the contract
+// (c.client), so we append " - <End Client>" to the product text — e.g.
+// "Darktrace (DT Network) - JK Cement Limited". Skipped when there's no
+// real end client: blank, or an internal/stocking pseudo-client (the AP
+// row is a Masterstone-side purchase, not billed to a single end client).
+// Consultant / service-vendor rows don't call this — they have no client.
+const _CA_EXPORT_INTERNAL_CLIENTS = new Set([
+    'masterstone — shared services',
+    'masterstone - shared services',
+    'masterstone shared services'
+]);
+function _caExportEndClientSuffix(c) {
+    if (!c) return '';
+    const client = (c.client || '').trim();
+    if (!client) return '';
+    if (_CA_EXPORT_INTERNAL_CLIENTS.has(client.toLowerCase())) return '';
+    return ' - ' + client;
+}
+
 // Resolve client master record from a client name string.
 // 8BC.1 hotfix — v1 incorrectly used a non-existent `clients` variable.
 // The real Client Master is `clientMaster` (an object keyed by `cmKey(name)`).
@@ -41300,7 +41320,7 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
                         'GST': '',
                         'AADHAR': 'N/A',
                         'INVOICE NO.': ap.invNo || '',
-                        'ITEMS': c.product || '',
+                        'ITEMS': (c.product || '') + _caExportEndClientSuffix(c),
                         'UNIT': 1,
                         'PRICE/UNIT': 0,
                         'USD VALUE': usdValue || '',
@@ -41685,7 +41705,7 @@ async function generateCaExport() {
                             'GST': oemTaxId,
                             'AADHAR': 'N/A',
                             'INVOICE NO.': ap.invNo || '',
-                            'ITEMS': c.product || '',
+                            'ITEMS': (c.product || '') + _caExportEndClientSuffix(c),
                             'UNIT': 1, 'PRICE/UNIT': 0,
                             'USD VALUE': amt.usdValue || '',
                             'USD:INR INVOICE DATE RATE': amt.isUSDcontract ? amt.fxRate : '',
