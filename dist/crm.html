@@ -10422,7 +10422,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:18px;">
             <div>
                 <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Month</label>
-                <input type="month" id="caExportMonth" style="width:100%; padding:9px 12px;">
+                <!-- 8CR — explicit Year + Month dropdowns (default: current year/month;
+                     previous years/months selectable). They write a "yyyy-mm" string
+                     into the hidden #caExportMonth mirror so every downstream reader
+                     (generateCaExport, generateCaExportInvoices, _caExportComputeRange)
+                     keeps working unchanged. -->
+                <div style="display:flex; gap:8px;">
+                    <select id="caExportMonthSel" onchange="_caExportSyncMonth()" style="flex:1; padding:9px 12px;"></select>
+                    <select id="caExportYear" onchange="_caExportSyncMonth()" style="width:38%; padding:9px 12px;"></select>
+                </div>
+                <input type="hidden" id="caExportMonth">
             </div>
             <div>
                 <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Scope</label>
@@ -40833,14 +40842,79 @@ function exportConsultantPayments() {
 
 // Initialise the month picker to current month when the tab is opened.
 // Called from showTab when navigating to the CA Export tab.
-function initCaExportTab() {
-    const monthEl = document.getElementById('caExportMonth');
-    if (monthEl && !monthEl.value) {
-        const d = new Date();
-        monthEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+// 8CR — earliest data year across sales/AP/AR/consultant dates, for the Year
+// dropdown's lower bound. Falls back to (current year − 3) when no data.
+function _caExportEarliestDataYear() {
+    let minYr = null;
+    const consider = (ds) => {
+        if (!ds || typeof ds !== 'string') return;
+        const m = ds.match(/^(\d{4})-\d{2}/);
+        if (m) { const y = parseInt(m[1], 10); if (!minYr || y < minYr) minYr = y; }
+    };
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+        invoices.forEach(inv => consider(inv && inv.invoiceDate));
     }
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach(c => {
+            (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(by => {
+                if (!by) return;
+                consider(by.oemInvoiceDate);
+                (Array.isArray(by.apInvoices) ? by.apInvoices : []).forEach(ap => consider(ap && ap.date));
+                (Array.isArray(by.arInvoices) ? by.arInvoices : []).forEach(ar => consider(ar && ar.date));
+            });
+        });
+    }
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) {
+        consultantPayments.forEach(p => consider(p && p.invoiceDate));
+    }
+    const cy = new Date().getFullYear();
+    if (!minYr || minYr > cy) minYr = cy - 3;
+    return Math.min(minYr, cy - 1); // always offer at least one prior year
+}
+
+// 8CR — keep the hidden #caExportMonth mirror ("yyyy-mm") in sync with the
+// Year + Month dropdowns, so all existing readers keep working unchanged.
+function _caExportSyncMonth() {
+    const yEl = document.getElementById('caExportYear');
+    const mEl = document.getElementById('caExportMonthSel');
+    const hidden = document.getElementById('caExportMonth');
+    if (!yEl || !mEl || !hidden) return;
+    const y = yEl.value;
+    const m = String(mEl.value).padStart(2, '0');
+    hidden.value = (y && m) ? `${y}-${m}` : '';
+}
+
+function initCaExportTab() {
+    const yEl = document.getElementById('caExportYear');
+    const mEl = document.getElementById('caExportMonthSel');
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1; // 1-based
+
+    if (yEl && !yEl.options.length) {
+        const startYr = _caExportEarliestDataYear();
+        for (let y = curYear; y >= startYr; y--) {
+            const opt = document.createElement('option');
+            opt.value = String(y); opt.textContent = String(y);
+            yEl.appendChild(opt);
+        }
+        yEl.value = String(curYear);
+    }
+    if (mEl && !mEl.options.length) {
+        const names = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        for (let m = 1; m <= 12; m++) {
+            const opt = document.createElement('option');
+            opt.value = String(m).padStart(2, '0'); opt.textContent = names[m - 1];
+            mEl.appendChild(opt);
+        }
+        mEl.value = String(curMonth).padStart(2, '0');
+    }
+    _caExportSyncMonth();
+
     const statusEl = document.getElementById('caExportStatus');
     if (statusEl) statusEl.textContent = '';
+    const invStatusEl = document.getElementById('caExportInvStatus');
+    if (invStatusEl) invStatusEl.textContent = '';
 }
 
 // Compute the [start, end] date range based on month picker + scope.
