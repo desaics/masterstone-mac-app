@@ -10433,9 +10433,17 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             </div>
         </div>
 
-        <div style="margin-top:22px; display:flex; gap:10px; align-items:center;">
+        <div style="margin-top:22px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
             <button class="btn btn-primary" id="caExportGenerateBtn" onclick="generateCaExport()" style="padding:11px 22px;"><i class="fas fa-download"></i> Generate &amp; Download</button>
             <span id="caExportStatus" style="font-size:12.5px; color:var(--text-dim);"></span>
+        </div>
+
+        <!-- 8CQ — second action: bundle the actual invoice FILES (Sales + OEM +
+             Consultant) for the same Month + Scope into a .zip + INDEX.txt.
+             Reuses the Document Export zip engine. -->
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button class="btn btn-ghost" id="caExportInvoicesBtn" onclick="generateCaExportInvoices()" style="padding:11px 22px;"><i class="fas fa-box-archive"></i> Download Invoices (zip)</button>
+            <span id="caExportInvStatus" style="font-size:12.5px; color:var(--text-dim);"></span>
         </div>
 
         <div style="margin-top:22px; padding:12px 14px; background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.2); border-radius:6px; font-size:11.5px; color:var(--text-dim); line-height:1.6;">
@@ -10444,6 +10452,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             • Payments sheet: contract AP invoices + consultant payments + service-vendor payments<br>
             • Invoice numbers link to OneDrive where the cloud URL is on the record (fall back to plain text otherwise)<br>
             • Foreign-OEM lines: GST shown as IGST only (your CA handles the RCM logic)<br>
+            • <strong>Download Invoices (zip):</strong> bundles the actual invoice files (Sales + OEM/Purchase + Consultant) for the same Month + Scope, with an INDEX.txt checklist. CRM-stored files and local files are packed; OneDrive-link-only items are listed in the index.<br>
             • Filename: <code>Masterstone_GST_{Month}_{Year}.xlsx</code> or <code>Masterstone_FY{xx-yy}_thru_{Month}{Year}.xlsx</code>
         </div>
     </div>
@@ -41853,6 +41862,203 @@ async function generateCaExport() {
                 5000
             );
         }
+    }
+}
+
+
+
+/* ======================================================================
+   8CQ — CA EXPORT: "Download Invoices (zip)"
+   ----------------------------------------------------------------------
+   Second action on the CA Export tab. Bundles the actual invoice FILES
+   (Sales, OEM/purchase, Consultant) for the SAME Month + Scope used by
+   the Excel, into one .zip + INDEX.txt.
+
+   Reuses the Document Export engine wholesale:
+     __deReadLocalsThenZip → __deDownloadZip → __deBuildIndexText
+   plus item helpers (getAttachmentsFor, __deSafeName, __deExtFromName).
+   No backend change; local-file paths are read to bytes via the existing
+   read_file_bytes Rust command inside __deReadLocalsThenZip.
+
+   Item shape pushed (matching the engine):
+     { folder, kind:'zip'|'local'|'link'|'missing', label,
+       filename?, dataUrl?, mimeType?, path?, url? }
+   Date filtering mirrors the Excel builders exactly (string yyyy-mm-dd
+   compare against _caExportComputeRange; Sales statuses Issued/Paid/
+   Credit-Note-Issued).
+   ====================================================================== */
+
+function _caExportGatherInvoiceFiles(rangeStart, rangeEnd) {
+    var g = { items: [], localChecks: [] };
+    var getAtts = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor : function () { return []; };
+    var safe = (typeof __deSafeName === 'function') ? __deSafeName : function (s) { return String(s || 'file'); };
+    var ext = (typeof __deExtFromName === 'function') ? __deExtFromName : function () { return ''; };
+    function inRange(dateStr) { return dateStr && dateStr >= rangeStart && dateStr <= rangeEnd; }
+
+    // ---- 1) SALES INVOICES — mirror _caExportBuildSalesRows eligibility ----
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+        var eligible = { 'Issued': 1, 'Paid': 1, 'Credit-Note-Issued': 1 };
+        invoices.forEach(function (inv) {
+            if (!inv || !eligible[inv.status]) return;
+            if (!inRange(inv.invoiceDate || '')) return;
+            var label = 'Sales Invoice ' + (inv.invoiceNumber || inv.id) + (inv.clientName ? ' · ' + inv.clientName : '');
+            if (inv.signedPdfAttachmentId) {
+                var atts = getAtts('invoice', inv.id);
+                var signed = atts.filter(function (a) { return a.id === inv.signedPdfAttachmentId; })[0];
+                if (signed && signed.dataUrl) {
+                    g.items.push({ folder: 'Sales Invoices', kind: 'zip', label: label + ' (signed)',
+                        filename: safe(label) + (ext(signed.filename, signed.mimeType) || '.pdf'),
+                        dataUrl: signed.dataUrl, mimeType: signed.mimeType });
+                    return;
+                }
+                g.items.push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — signed PDF referenced but file missing' });
+                return;
+            }
+            // No signed PDF; fall back to a link on the matching AR cycle if present.
+            var arLink = '', arLocal = '';
+            if (typeof contracts !== 'undefined' && !isNaN(parseInt(inv.linkedContractIdx))) {
+                var c = contracts[parseInt(inv.linkedContractIdx)];
+                if (c && Array.isArray(c.billingYears)) {
+                    c.billingYears.forEach(function (by) {
+                        var arr = (by && by.arInvoices) || [];
+                        var m = arr.filter(function (x) { return x && x.invNo && String(x.invNo).trim() === String(inv.invoiceNumber).trim(); })[0];
+                        if (m) { arLink = m.link || ''; arLocal = m.localPath || ''; }
+                    });
+                }
+            }
+            if (arLocal) { g.items.push({ folder: 'Sales Invoices', kind: 'local', label: label, path: arLocal }); g.localChecks.push({ path: arLocal }); }
+            else if (arLink) g.items.push({ folder: 'Sales Invoices', kind: 'link', label: label, url: arLink });
+            else g.items.push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — no signed PDF / link recorded' });
+        });
+    }
+
+    // ---- 2) OEM / PURCHASE INVOICES — mirror the Payments AP rows ----
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach(function (c, cIdx) {
+            if (!c || !Array.isArray(c.billingYears)) return;
+            c.billingYears.forEach(function (by) {
+                if (!by || !Array.isArray(by.apInvoices)) return;
+                by.apInvoices.forEach(function (ap) {
+                    if (!ap || !ap.invNo) return;
+                    if (!inRange(ap.date || '')) return;
+                    var lab = 'OEM Invoice ' + (ap.invNo || '(unnumbered)')
+                        + (c.oem ? ' · ' + c.oem : '') + (c.client ? ' · ' + c.client : '');
+                    // uploaded file stored in CRM
+                    if (ap.apId && ap.uploadAttId) {
+                        var oemAtts = getAtts('apinvoice', ap.apId);
+                        var f = oemAtts.filter(function (a) { return a.id === ap.uploadAttId; })[0];
+                        if (f && f.dataUrl) {
+                            g.items.push({ folder: 'Purchase Invoices (OEM)', kind: 'zip', label: lab + ' (uploaded)',
+                                filename: safe(lab) + (ext(f.filename, f.mimeType) || ''),
+                                dataUrl: f.dataUrl, mimeType: f.mimeType });
+                            return;
+                        }
+                    }
+                    if (ap.localPath) { g.items.push({ folder: 'Purchase Invoices (OEM)', kind: 'local', label: lab, path: ap.localPath }); g.localChecks.push({ path: ap.localPath }); }
+                    else if (ap.link) g.items.push({ folder: 'Purchase Invoices (OEM)', kind: 'link', label: lab, url: ap.link });
+                    else g.items.push({ folder: 'Purchase Invoices (OEM)', kind: 'missing', label: lab + ' — no file/link recorded' });
+                });
+            });
+        });
+    }
+
+    // ---- 3) CONSULTANT INVOICES — mirror the Payments consultant rows ----
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) {
+        consultantPayments.forEach(function (p) {
+            if (!p) return;
+            if (!inRange(p.invoiceDate || '')) return;
+            var con = (typeof getConsultantById === 'function') ? getConsultantById(p.consultantId) : null;
+            var who = con ? con.name : (p.consultantName || 'consultant');
+            var lab = 'Consultant Invoice ' + (p.invoiceNumber || '(unnumbered)') + ' · ' + who
+                + (p.periodCovered ? ' · ' + p.periodCovered : '');
+            // attachment(s) stored in CRM under 'consultant_payment'
+            var cpAtts = getAtts('consultant_payment', p.id) || [];
+            var withData = cpAtts.filter(function (a) { return a && a.dataUrl; });
+            if (p.uploadAttId) {
+                var chosen = withData.filter(function (a) { return a.id === p.uploadAttId; })[0];
+                if (chosen) {
+                    g.items.push({ folder: 'Consultant Invoices', kind: 'zip', label: lab + ' (uploaded)',
+                        filename: safe(lab) + (ext(chosen.filename, chosen.mimeType) || ''),
+                        dataUrl: chosen.dataUrl, mimeType: chosen.mimeType });
+                    return;
+                }
+            }
+            if (withData.length) {
+                withData.forEach(function (a) {
+                    g.items.push({ folder: 'Consultant Invoices', kind: 'zip', label: lab + ' · ' + (a.filename || 'attachment'),
+                        filename: safe(lab + '_' + (a.filename || 'att')) + (ext(a.filename, a.mimeType) || ''),
+                        dataUrl: a.dataUrl, mimeType: a.mimeType });
+                });
+                return;
+            }
+            if (p.link) g.items.push({ folder: 'Consultant Invoices', kind: 'link', label: lab, url: p.link });
+            else g.items.push({ folder: 'Consultant Invoices', kind: 'missing', label: lab + ' — no file/link recorded' });
+        });
+    }
+
+    return g;
+}
+
+function generateCaExportInvoices() {
+    var monthEl = document.getElementById('caExportMonth');
+    var scopeEl = document.getElementById('caExportScope');
+    var statusEl = document.getElementById('caExportInvStatus');
+    var setStatus = function (msg, color) {
+        if (statusEl) { statusEl.textContent = msg || ''; statusEl.style.color = color || 'var(--text-dim)'; }
+    };
+    var monthStr = monthEl ? monthEl.value : '';
+    var scope = scopeEl ? scopeEl.value : 'month';
+    if (!monthStr) { setStatus('Pick a month first.', 'var(--warning)'); return; }
+    var range = (typeof _caExportComputeRange === 'function') ? _caExportComputeRange(monthStr, scope) : null;
+    if (!range) { setStatus('Invalid month.', 'var(--warning)'); return; }
+
+    setStatus('Gathering invoice files…');
+    var g;
+    try { g = _caExportGatherInvoiceFiles(range.start, range.end); }
+    catch (e) { console.error('CA invoice gather failed:', e); setStatus('Could not gather invoices.', 'var(--danger)'); return; }
+
+    if (!g.items.length) { setStatus('No invoices found for that month/scope.', 'var(--warning)'); return; }
+
+    // Filename + INDEX header parallel the Excel naming.
+    var parts = monthStr.split('-');
+    var yr = parts[0], mo = parts[1];
+    var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var moName = monthNames[parseInt(mo, 10) - 1] || mo;
+    var zipName, scopeLabel;
+    if (scope === 'fytd') {
+        var fyStartYear = (parseInt(mo, 10) >= 4) ? parseInt(yr, 10) : parseInt(yr, 10) - 1;
+        var fyLabel = String(fyStartYear).slice(-2) + '-' + String(fyStartYear + 1).slice(-2);
+        zipName = 'Masterstone_Invoices_FY' + fyLabel + '_thru_' + moName + yr + '.zip';
+        scopeLabel = 'FY-to-date through ' + moName + ' ' + yr + ' (FY ' + fyLabel + ')';
+    } else {
+        zipName = 'Masterstone_Invoices_' + moName + '_' + yr + '.zip';
+        scopeLabel = moName + ' ' + yr + ' (this month only)';
+    }
+
+    var counts = { zip: 0, link: 0, local: 0, missing: 0 };
+    g.items.forEach(function (it) {
+        if (it.kind === 'zip') counts.zip++;
+        else if (it.kind === 'link') counts.link++;
+        else if (it.kind === 'local') counts.local++;
+        else counts.missing++;
+    });
+
+    var header = [
+        'BUNDLE TYPE: CA Invoice Bundle (Sales + OEM/Purchase + Consultant)',
+        'PERIOD: ' + scopeLabel,
+        'DATE RANGE: ' + range.start + '  to  ' + range.end,
+        'TOTALS: ' + g.items.length + ' invoice(s) — '
+            + counts.zip + ' packed, ' + counts.link + ' link(s), '
+            + counts.local + ' local file(s), ' + counts.missing + ' with no file/link'
+    ];
+
+    setStatus('Building zip…');
+    try {
+        __deReadLocalsThenZip(g, { perContract: false, header: header, zipName: zipName });
+        setStatus('Done — check your downloads.', 'var(--success)');
+    } catch (e) {
+        console.error('CA invoice zip failed:', e);
+        setStatus('Could not build the zip.', 'var(--danger)');
     }
 }
 
