@@ -31438,9 +31438,15 @@ function savePaymentFromForm() {
     inv.updatedAt = new Date().toISOString();
     refreshInvoiceComputedFields(inv);
     saveInvoices();
+    // 8CS — mirror the payment onto the contract cycle so the Business Snapshot
+    // and AR register reflect it immediately. Record-paid previously skipped both
+    // propagation and the snapshot refresh, so Net Cash stayed stale until a later
+    // reload / Portfolio render synced the cycle (same pattern as Mark Issued / Cancel).
+    try { _propagateInvoiceToContractCycle(inv); } catch (e) { console.warn('Cycle propagation:', e); }
     closePaymentModal();
     renderInvoiceDetail(inv);
     renderInvoicesPage();
+    if (typeof renderBusinessSnapshot === 'function') { try { renderBusinessSnapshot(); } catch (_) {} }
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-money-check-alt" style="color:var(--success);"></i> Payment of <strong>${fmtInr(amount)}</strong> recorded. Outstanding: ${fmtInr(inv.amountOutstanding)}.`);
 }
 
@@ -31455,9 +31461,13 @@ function deletePaymentFromForm() {
     inv.updatedAt = new Date().toISOString();
     refreshInvoiceComputedFields(inv);
     saveInvoices();
+    // 8CS — keep the contract cycle + snapshot in sync when a payment is removed
+    // (downgrades the cycle's paid status if it's no longer fully paid).
+    try { _propagateInvoiceToContractCycle(inv); } catch (e) { console.warn('Cycle propagation:', e); }
     closePaymentModal();
     renderInvoiceDetail(inv);
     renderInvoicesPage();
+    if (typeof renderBusinessSnapshot === 'function') { try { renderBusinessSnapshot(); } catch (_) {} }
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-trash"></i> Payment deleted.`);
 }
 
@@ -38383,10 +38393,19 @@ function renderBusinessSnapshot() {
                 const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
                     ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ date: y.actualInvoiceDate || '', amount: cycleRev }] : []);
                 const raised = arInvs.filter(i => !!i.date);
+                // 8CS — mirror the 8CH base alignment used by the AR card: a single-invoice
+                // cycle uses the pre-GST cycleRev (not the GST-inclusive stored grandTotal),
+                // so the GST toggle adds 18% once instead of double-counting. Multi-invoice
+                // cycles keep stored amounts (the known shared latent item).
+                const singleInvoiceCycle = raised.length < 2;
                 raised.forEach(inv => {
                     const d = new Date(inv.date);
                     if (d >= fy.start && d <= fy.end) {
-                        fyInvoicedBase += (Number(inv.amount) || (raised.length === 1 ? cycleRev : 0));
+                        fyInvoicedBase += singleInvoiceCycle
+                            ? cycleRev
+                            : ((inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
+                                ? (Number(inv.amount) || 0)
+                                : cycleRev);
                     }
                 });
             });
