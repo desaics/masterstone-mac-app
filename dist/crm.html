@@ -41080,6 +41080,32 @@ function _caExportClientGstin(client) {
     return client.gstin || '';
 }
 
+// 8CT — Resolve the Sales-sheet bill-to party. For Resale-routed records the tax
+// invoice is raised TO the reseller, so the bill-to identity (name shown as
+// "Reseller - End User", plus phone / address / PAN / GSTIN / Aadhaar) comes from
+// the reseller master; otherwise it's the end client (unchanged behaviour).
+function _caExportSalesBillTo(commercialModel, resellerKey, endClientName, clientRec) {
+    if (commercialModel === 'Resale' && resellerKey
+        && typeof resellerMaster === 'object' && resellerMaster && resellerMaster[resellerKey]) {
+        const r = resellerMaster[resellerKey];
+        const rName = (r.companyName && r.companyName.trim()) ? r.companyName.trim() : String(resellerKey).trim();
+        const eu = (endClientName || '').trim();
+        return { isResale: true, rec: r, displayName: eu ? (rName + ' - ' + eu) : rName };
+    }
+    return { isResale: false, rec: clientRec, displayName: (endClientName || '') };
+}
+
+// 8CT — phone for a client/reseller record: prefer the primary contact in
+// contacts[], else the first contact with a phone, else the legacy flat field.
+function _caExportRecPhone(rec) {
+    if (!rec) return '';
+    if (Array.isArray(rec.contacts) && rec.contacts.length > 0) {
+        const primary = rec.contacts.find(c => c && c.isPrimary && c.phone) || rec.contacts.find(c => c && c.phone);
+        if (primary && primary.phone) return primary.phone;
+    }
+    return rec.contactPhone || '';
+}
+
 // 8BC.1 hotfix — pick the primary billing/shipping address from a Client Master record.
 // Multi-entry: prefer isPrimary, else first non-empty. Legacy: fall back to single field.
 function _caExportClientBillingAddr(client) {
@@ -41260,6 +41286,7 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                 ? contracts[parseInt(inv.linkedContractIdx)] : null;
             const businessHead = _caExportBusinessHeadForContract(c);
             const client = _caExportFindClient(inv.clientName);
+            const billTo = _caExportSalesBillTo(inv.commercialModel, inv.sourcedViaResellerKey, inv.clientName, client);
 
             const items = (Array.isArray(inv.lineItems) ? inv.lineItems : [])
                 .map(li => li.product || '').filter(Boolean).join('  ');
@@ -41275,13 +41302,13 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                 'SR. NO': rows.length + 1,
                 'BUSINESS HEAD': businessHead,
                 'INVOICE DATE': _caExportToDate(inv.invoiceDate),
-                'CLIENT NAME': inv.clientName || '',
-                'PHONE NUMBER': client ? (client.contactPhone || '') : '',
-                'KYC ADDRESS': _caExportClientBillingAddr(client),
-                'DELIVERY ADDRESS': _caExportClientShippingAddr(client),
-                'PAN': client ? (client.pan || '') : '',
-                'GST': _caExportClientGstin(client),
-                'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
+                'CLIENT NAME': billTo.displayName,
+                'PHONE NUMBER': billTo.isResale ? _caExportRecPhone(billTo.rec) : (client ? (client.contactPhone || '') : ''),
+                'KYC ADDRESS': billTo.isResale ? _caExportClientBillingAddr(billTo.rec) : _caExportClientBillingAddr(client),
+                'DELIVERY ADDRESS': billTo.isResale ? _caExportClientShippingAddr(billTo.rec) : _caExportClientShippingAddr(client),
+                'PAN': billTo.isResale ? (billTo.rec.pan || '') : (client ? (client.pan || '') : ''),
+                'GST': billTo.isResale ? _caExportClientGstin(billTo.rec) : _caExportClientGstin(client),
+                'AADHAR': (billTo.rec && billTo.rec.aadhaar && String(billTo.rec.aadhaar).trim()) ? billTo.rec.aadhaar : 'N/A',
                 'INVOICE NO.': inv.invoiceNumber || '',
                 'ITEMS': items,
                 'CTS/QTY': qty || '',
@@ -41318,6 +41345,7 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
             if (!c || !Array.isArray(c.billingYears)) return;
             const businessHead = _caExportBusinessHeadForContract(c);
             const client = _caExportFindClient(c.client);
+            const billTo2 = _caExportSalesBillTo(c.commercialModel, c.sourcedViaResellerKey, c.client, client);
             // 8BC.1 — Sales-side currency handling. Almost always INR for clients
             // but support USD-billed clients for completeness (handled the same way
             // as AP side — costCurrency from contract, FX via getEffectiveFX).
@@ -41346,13 +41374,13 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                         'SR. NO': rows.length + 1,
                         'BUSINESS HEAD': businessHead,
                         'INVOICE DATE': _caExportToDate(ar.date),
-                        'CLIENT NAME': c.client || '',
-                        'PHONE NUMBER': client ? (client.contactPhone || '') : '',
-                        'KYC ADDRESS': _caExportClientBillingAddr(client) || (c.billAddr || ''),
-                        'DELIVERY ADDRESS': _caExportClientShippingAddr(client) || (c.shipAddr || c.billAddr || ''),
-                        'PAN': client ? (client.pan || '') : (c.clientPAN || ''),
-                        'GST': _caExportClientGstin(client) || (c.clientGST || ''),
-                        'AADHAR': (client && client.aadhaar && String(client.aadhaar).trim()) ? client.aadhaar : 'N/A',
+                        'CLIENT NAME': billTo2.displayName,
+                        'PHONE NUMBER': billTo2.isResale ? _caExportRecPhone(billTo2.rec) : (client ? (client.contactPhone || '') : ''),
+                        'KYC ADDRESS': billTo2.isResale ? _caExportClientBillingAddr(billTo2.rec) : (_caExportClientBillingAddr(client) || (c.billAddr || '')),
+                        'DELIVERY ADDRESS': billTo2.isResale ? _caExportClientShippingAddr(billTo2.rec) : (_caExportClientShippingAddr(client) || (c.shipAddr || c.billAddr || '')),
+                        'PAN': billTo2.isResale ? (billTo2.rec.pan || '') : (client ? (client.pan || '') : (c.clientPAN || '')),
+                        'GST': billTo2.isResale ? _caExportClientGstin(billTo2.rec) : (_caExportClientGstin(client) || (c.clientGST || '')),
+                        'AADHAR': (billTo2.rec && billTo2.rec.aadhaar && String(billTo2.rec.aadhaar).trim()) ? billTo2.rec.aadhaar : 'N/A',
                         'INVOICE NO.': ar.invNo || '',
                         'ITEMS': c.product || '',
                         'CTS/QTY': '',
