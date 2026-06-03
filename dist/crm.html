@@ -10212,6 +10212,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <div style="font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:0.10em; color:var(--text-subtle);">Selected Total</div>
             <div id="arFilterTotalVal" style="margin-top:2px; color:var(--text-main); font-weight:600;">—</div>
           </div>
+          <input type="text" id="arSearch" placeholder="Search invoice #, client, product/OEM..." style="width:240px; padding:8px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;" oninput="renderARApPage()">
           <select id="arStatusFilter" onchange="renderARApPage()" style="width:180px;">
             <option value="ALL">All Statuses</option>
             <option value="ISSUED">Issued</option>
@@ -10332,6 +10333,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <div style="font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:0.10em; color:var(--text-subtle);">Selected Total</div>
             <div id="apFilterTotalVal" style="margin-top:2px; color:var(--text-main); font-weight:600;">—</div>
           </div>
+          <input type="text" id="apSearch" placeholder="Search OEM invoice #, client, OEM..." style="width:240px; padding:8px 11px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:12.5px;" oninput="renderARApPage()">
           <select id="apStatusFilter" onchange="renderARApPage()" style="width:180px;">
             <option value="ALL">All Statuses</option>
             <option value="ISSUED">Issued</option>
@@ -19680,7 +19682,7 @@ function renderContracts() {
             clientRowsHtml += `
             <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
                 <td class="sp-stacked-cell">
-                    <i class="fas fa-chevron-right expand-icon"></i><span class="stacked-main" title="${pEsc(c.product || '')}">${pEsc(c.product || '-')}</span>
+                    <i class="fas fa-chevron-right expand-icon"></i><span class="stacked-main" title="${pEsc(c.product || '')}">${pEsc(formatProductForDisplay(c.product || '-'))}</span>
                     ${c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(getOemDisplayName(c.oem))}</div>` : ''}
                 </td>
                 <td title="${pEsc((expClientPOList.length > 0 ? (posToRender.map(p => p.poNo).filter(Boolean).join(', ')) : ''))}">${poDisplay}</td>
@@ -42880,6 +42882,26 @@ function __apTh(key, label, alignRight) {
     return '<th style="' + style + '" onclick="setApSort(\'' + key + '\')" title="Sort by ' + label + '">' + label + arrow + '</th>';
 }
 
+// 8CU — free-text matcher for the AR/AP register search boxes. Matches the
+// row's client, product, OEM (from the contract), reseller key, and any of the
+// row's invoice numbers against a lowercased search term. Mirrors the kind of
+// search the Invoice Manager offers (invoice #, client, etc.).
+function _arApRowMatches(r, term) {
+    if (!term) return true;
+    const parts = [];
+    if (r.client) parts.push(r.client);
+    if (r.product) parts.push(r.product);
+    if (r.oem) parts.push(r.oem);
+    if (r.sourcedViaResellerKey) parts.push(r.sourcedViaResellerKey);
+    if (typeof contracts !== 'undefined' && r.cIdx !== undefined && contracts[r.cIdx] && contracts[r.cIdx].oem) {
+        parts.push(contracts[r.cIdx].oem);
+    }
+    if (Array.isArray(r.invoices)) {
+        r.invoices.forEach(inv => { if (inv && inv.invNo) parts.push(inv.invNo); });
+    }
+    return parts.join(' \u0001 ').toLowerCase().indexOf(term) !== -1;
+}
+
 function renderARApPage() {
     // Bug fix #18 — AR and AP filters are independent. Read each side's
     // FY + Client value separately, then gate AR-record vs AP-record creation
@@ -42895,6 +42917,9 @@ function renderARApPage() {
     // five getAgingBucket() return keys (notdue / 0_30 / 31_60 / 61_90 / 90plus).
     const arAgingVal = (document.getElementById('arAgingFilter') || {}).value || 'ALL';
     const apAgingVal = (document.getElementById('apAgingFilter') || {}).value || 'ALL';
+    // 8CU — free-text search terms (lowercased) for each register.
+    const arSearchVal = (((document.getElementById('arSearch') || {}).value) || '').trim().toLowerCase();
+    const apSearchVal = (((document.getElementById('apSearch') || {}).value) || '').trim().toLowerCase();
     const arFyRange = arFyVal !== 'ALL' ? getFYRange(arFyVal) : null;
     const apFyRange = apFyVal !== 'ALL' ? getFYRange(apFyVal) : null;
 
@@ -43202,9 +43227,12 @@ function renderARApPage() {
         // (PAID and PENDING aren't in any aging bucket per renderARApPage's own
         // aggregation logic above). Mirrors the aging-card semantics so filter
         // results = the count shown on the active card.
-        const filteredAR = arAgingVal === 'ALL'
+        let filteredAR = arAgingVal === 'ALL'
             ? filteredAR_byStatus
             : filteredAR_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)) === arAgingVal);
+        // 8CU — free-text search narrows the register table (and its Selected Total),
+        // mirroring how the status/aging filters behave. KPI/aging cards above are unaffected.
+        if (arSearchVal) filteredAR = filteredAR.filter(r => _arApRowMatches(r, arSearchVal));
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an invoice has been raised, contract-schedule dueDate otherwise).
         filteredAR.sort((a, b) => {
@@ -43393,9 +43421,11 @@ function renderARApPage() {
         const filteredAP_byStatus = apStatusVal === 'ALL' ? apRecords.slice() : apRecords.filter(r => { if (apStatusVal === 'PENDING') return r.status === 'PENDING'; if (apStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'SETTLED'; if (apStatusVal === 'INVOICED') return r.status === 'INVOICED' || r.status === 'OVERDUE'; if (apStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (apStatusVal === 'SETTLED') return r.status === 'SETTLED'; return true; });
         // 8U item #9: aging filter on AP — same convention as AR (only meaningful
         // for INVOICED + OVERDUE; SETTLED and PENDING are excluded from buckets).
-        const filteredAP = apAgingVal === 'ALL'
+        let filteredAP = apAgingVal === 'ALL'
             ? filteredAP_byStatus
             : filteredAP_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)) === apAgingVal);
+        // 8CU — free-text search for the AP register (table + Selected Total).
+        if (apSearchVal) filteredAP = filteredAP.filter(r => _arApRowMatches(r, apSearchVal));
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an OEM invoice has been received, contract-schedule dueDate otherwise).
         filteredAP.sort((a, b) => {
