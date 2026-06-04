@@ -38365,25 +38365,40 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
     if (subTab && tab === 'invoicesTab' && typeof showInvoicesSubTab === 'function') {
         showInvoicesSubTab(subTab);
     }
-    const filters = (filterId && typeof filterId === 'object')
+    const overrides = (filterId && typeof filterId === 'object')
         ? filterId
-        : (filterId ? { [filterId]: filterVal } : null);
-    if (filters) {
-        setTimeout(() => {
-            const ids = Object.keys(filters);
-            ids.forEach((id, i) => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.value = filters[id];
-                    // Dispatch 'change' only on the LAST filter so renderARApPage()
-                    // runs once with all filters in place, not N times.
-                    if (i === ids.length - 1) {
-                        try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
-                    }
-                }
-            });
-        }, 60);
-    }
+        : (filterId ? { [filterId]: filterVal } : {});
+    // 8CX — Reset the target tab's ENTIRE filter group to its neutral default
+    // BEFORE applying this click's overrides. Without this, a second click
+    // inherits leftover filters from the previous selection (e.g. a leftover FY
+    // or status filter), producing a wrong combination. Selects reset to 'ALL',
+    // free-text search boxes reset to ''. Then the click's overrides win.
+    const RESET_GROUPS = {
+        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL' },
+        purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL' },
+        prospectPipelineTab: { pipelineStageFilter: 'ALL' },
+        purchaseOrdersTab:   { poStatusFilter: 'ALL' },
+        contractsTab:        { portfolioStatusFilter: 'ALL' },
+        renewalsTab:         { renStatusFilter: 'ALL' },
+    };
+    const finalState = Object.assign({}, RESET_GROUPS[tab] || {}, overrides);
+    const ids = Object.keys(finalState);
+    if (ids.length === 0) return;
+    setTimeout(() => {
+        // Set every field's value first, then dispatch ONE 'change' on the last
+        // <select> so the page re-renders exactly once with all values in place.
+        // (Search boxes use oninput, not onchange, so we never dispatch on them —
+        // their cleared value is picked up by the render the select triggers.)
+        let lastSelect = null;
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.value = finalState[id];
+                if (el.tagName === 'SELECT') lastSelect = el;
+            }
+        });
+        if (lastSelect) { try { lastSelect.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+    }, 60);
 }
 
 // Escape HTML for safe innerHTML insertion of user-controlled strings.
