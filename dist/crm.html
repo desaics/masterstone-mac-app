@@ -38466,9 +38466,9 @@ function renderBusinessSnapshot() {
     const rtiEl = document.getElementById('bsRecToIssueRows');
     if (rtiEl) {
         rtiEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', 'arStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', 'arStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', 'arStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
         `;
     }
     // Urgency rows for Box 4 (AP To Be Received)
@@ -38476,9 +38476,9 @@ function renderBusinessSnapshot() {
     const ptrEl = document.getElementById('bsPayToReceiveRows');
     if (ptrEl) {
         ptrEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', 'apStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', 'apStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', 'apStatusFilter', 'PENDING')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
         `;
     }
 
@@ -38702,7 +38702,7 @@ function renderBusinessSnapshot() {
             let html = top.map(r =>
                 // 8U item #10: this row surfaces invoices >60 days old → land
                 // on AR register pre-filtered to OVERDUE.
-                `<div class="bs-action-item" onclick="bsGotoTab('invoicesTab', 'arStatusFilter', 'OVERDUE')"><span class="bs-action-item-lbl">${bsEsc(r.client)} · ${r.ageDays}d</span><span class="bs-action-item-val">${bsFmtINRShort(r.taxedAmount)}</span></div>`
+                `<div class="bs-action-item" onclick="bsGotoTab('invoicesTab', { arStatusFilter: 'OVERDUE' }, null, 'ar')"><span class="bs-action-item-lbl">${bsEsc(r.client)} · ${r.ageDays}d</span><span class="bs-action-item-val">${bsFmtINRShort(r.taxedAmount)}</span></div>`
             ).join('');
             const more = overdueAR.length - 3;
             if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
@@ -38742,15 +38742,15 @@ function renderBusinessSnapshot() {
         const el = document.getElementById(id);
         if (el) el.onclick = fn;
     };
-    wireClick('bsKpi_invoiced', () => bsGotoTab('invoicesTab'));
+    wireClick('bsKpi_invoiced', () => bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'ISSUED' }, null, 'ar'));
     wireClick('bsKpi_active',   () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
     wireClick('bsKpi_pipeline', () => bsGotoTab('prospectPipelineTab', 'pipelineStageFilter', 'OPEN'));
 
-    wireClick('bsRecVal',         () => bsGotoTab('invoicesTab'));
-    wireClick('bsPayVal',         () => bsGotoTab('purchaseInvoicesTab'));
-    wireClick('bsRecToIssueVal',  () => bsGotoTab('invoicesTab'));
-    wireClick('bsPayToReceiveVal',() => bsGotoTab('purchaseInvoicesTab'));
-    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab'));
+    wireClick('bsRecVal',         () => bsGotoTab('invoicesTab', { arStatusFilter: 'INVOICED' }, null, 'ar'));
+    wireClick('bsPayVal',         () => bsGotoTab('purchaseInvoicesTab', { apStatusFilter: 'INVOICED' }));
+    wireClick('bsRecToIssueVal',  () => bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar'));
+    wireClick('bsPayToReceiveVal',() => bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' }));
+    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab', null, null, 'ar'));
     wireClick('bsPayCfWrap',      () => bsGotoTab('purchaseInvoicesTab'));
 
     // 8U item #9: BS bucket clicks now reset status to ALL and set the aging
