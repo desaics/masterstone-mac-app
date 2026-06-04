@@ -7174,19 +7174,19 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px;">
                         <div>
                             <label>Annual Cost <span id="lblUnitCostCurr">(USD)</span></label>
-                            <input type="number" id="prodUnitCost" value="0" min="0" oninput="updateItemizedPerLic()">
+                            <input type="text" inputmode="decimal" class="js-money" id="prodUnitCost" value="0" min="0" oninput="updateItemizedPerLic()">
                         </div>
                         <div>
                             <label>Cost / License</label>
-                            <input type="number" id="prodCostLic" value="0" readonly style="background:var(--hover-bg); color:var(--text-dim);">
+                            <input type="text" inputmode="decimal" class="js-money" id="prodCostLic" value="0" readonly style="background:var(--hover-bg); color:var(--text-dim);">
                         </div>
                         <div>
                             <label>Annual Sell (INR)</label>
-                            <input type="number" id="prodUnitSell" value="0" min="0" oninput="updateItemizedPerLic()">
+                            <input type="text" inputmode="decimal" class="js-money" id="prodUnitSell" value="0" min="0" oninput="updateItemizedPerLic()">
                         </div>
                         <div>
                             <label>Sell / License</label>
-                            <input type="number" id="prodSellLic" value="0" readonly style="background:var(--hover-bg); color:var(--text-dim);">
+                            <input type="text" inputmode="decimal" class="js-money" id="prodSellLic" value="0" readonly style="background:var(--hover-bg); color:var(--text-dim);">
                         </div>
                     </div>
                 </div>
@@ -7305,11 +7305,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 <label>Total Vendor Cost (for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total cost for the contract's full term as it appears on the OEM PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label>
                 <div style="display:flex; gap:12px;">
                     <select id="costCurrency" style="width:100px;" onchange="updateCurrencyLabels(); updateLiveMargin();"><option value="USD">USD</option><option value="INR">INR</option></select>
-                    <input type="number" id="costAmount" value="0" oninput="updateLiveMargin()">
+                    <input type="text" inputmode="decimal" class="js-money" id="costAmount" value="0" oninput="updateLiveMargin()">
                 </div>
                 <div id="costAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
             </div>
-            <div><label>Total Sell Price (INR for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total sell value for the contract's full term as it appears on the Client PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label><input type="number" id="sellINR" value="0" oninput="updateLiveMargin()"><div id="sellAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div></div>
+            <div><label>Total Sell Price (INR for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total sell value for the contract's full term as it appears on the Client PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label><input type="text" inputmode="decimal" class="js-money" id="sellINR" value="0" oninput="updateLiveMargin()"><div id="sellAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div></div>
             
             <div style="align-self:end;">
                  <label style="color:var(--text-main);">Contract Start FX Rate (Day 1)</label>
@@ -7387,7 +7387,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                           </div>
                           <div id="contractCommissionFixedSlot" style="flex:1; display:none; align-items:center; gap:6px;">
                             <span style="color:var(--text-dim); font-size:13px;">₹</span>
-                            <input type="number" id="contractCommissionFixedOverride" step="1" min="0" placeholder="e.g. 10000" style="flex:1;">
+                            <input type="text" inputmode="decimal" class="js-money" id="contractCommissionFixedOverride" step="1" min="0" placeholder="e.g. 10000" style="flex:1;">
                           </div>
                         </div>
                         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Applies to invoices under this contract. Per-invoice override still wins.</div>
@@ -8092,7 +8092,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                         </div>
                         <div>
                             <label>Default Fee (₹)</label>
-                            <input type="number" id="servicesEditor_fee" placeholder="Leave blank for quote-by-quote" min="0" step="1" oninput="commitServicesEditor()">
+                            <input type="text" inputmode="decimal" class="js-money" id="servicesEditor_fee" placeholder="Leave blank for quote-by-quote" min="0" step="1" oninput="commitServicesEditor()">
                             <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Pre-tax. Editable per proposal.</div>
                         </div>
                         <div>
@@ -8849,7 +8849,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div>
         <label>Estimated ACV <span id="prospectAcvUnit" style="color:var(--text-dim); font-size:11px;">(INR)</span></label>
-        <input type="number" id="prospectACV" placeholder="0" min="0">
+        <input type="text" inputmode="decimal" class="js-money" id="prospectACV" placeholder="0" min="0">
         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Annual Contract Value — per-year revenue from this deal.</div>
       </div>
       <div>
@@ -9030,7 +9030,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <p style="color:var(--text-dim); font-size:13px; margin-top:0;">Confirm the deal details. On save, the Provisioning form will open pre-populated with this data so you can finalise the contract.</p>
     <div class="prospect-form-grid-2">
       <div><label>Actual Close Date</label><input type="date" id="wonCloseDate"></div>
-      <div><label>Final ACV</label><input type="number" id="wonFinalACV" min="0"></div>
+      <div><label>Final ACV</label><input type="text" inputmode="decimal" class="js-money" id="wonFinalACV" min="0"></div>
     </div>
     <div><label>Closing Notes (optional)</label><textarea id="wonNotes" rows="2" style="width:100%;" placeholder="e.g. signed via HO, includes 2-year extension option..."></textarea></div>
     <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:18px;">
@@ -9463,7 +9463,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="prospect-form-grid-2" style="margin-bottom:14px;">
       <div>
         <label>Total Professional Fee (₹) <span style="color:var(--danger);">*</span></label>
-        <input type="number" id="proposalServiceFee" placeholder="e.g. 1100000" min="0" step="1" oninput="updateProposalServiceFeeWords()">
+        <input type="text" inputmode="decimal" class="js-money" id="proposalServiceFee" placeholder="e.g. 1100000" min="0" step="1" oninput="updateProposalServiceFeeWords()">
         <div id="proposalServiceFeeWords" style="font-size:10.5px; color:var(--accent-cyan); margin-top:4px; font-style:italic;"></div>
       </div>
       <div>
@@ -10890,7 +10890,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="prospect-form-grid-3">
       <div>
         <label>Subtotal (₹) *</label>
-        <input type="number" id="conPaySubtotal" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
+        <input type="text" inputmode="decimal" class="js-money" id="conPaySubtotal" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
       </div>
       <div>
         <label style="display:flex; align-items:center; gap:8px;">
@@ -10901,7 +10901,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div id="conPayGstAmountWrap" style="display:none;">
         <label>GST Amount (₹)</label>
-        <input type="number" id="conPayGstAmount" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
+        <input type="text" inputmode="decimal" class="js-money" id="conPayGstAmount" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Enter directly from invoice. Not computed from %.</div>
       </div>
     </div>
@@ -11309,7 +11309,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           </div>
           <div id="invCommissionFixedSlot" style="flex:1; display:none; align-items:center; gap:6px;">
             <span style="color:var(--text-dim); font-size:13px;">₹</span>
-            <input type="number" id="invCommissionFixedOverride" step="1" min="0" placeholder="e.g. 10000" style="flex:1;">
+            <input type="text" inputmode="decimal" class="js-money" id="invCommissionFixedOverride" step="1" min="0" placeholder="e.g. 10000" style="flex:1;">
           </div>
         </div>
         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Leave blank to inherit contract/reseller default. Pre-tax base.</div>
@@ -11475,7 +11475,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div>
         <label>Amount (INR) <span style="color:var(--danger);">*</span></label>
-        <input type="number" id="invPaymentAmount" step="0.01" placeholder="e.g. 50000">
+        <input type="text" inputmode="decimal" class="js-money" id="invPaymentAmount" step="0.01" placeholder="e.g. 50000">
       </div>
     </div>
     <div class="prospect-form-grid-2">
@@ -11538,7 +11538,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     </div>
     <div style="margin-top:12px;">
       <label>Amount (INR) <span style="color:var(--text-dim); font-size:10.5px;">(typically full invoice amount for cancellation)</span></label>
-      <input type="number" id="cnAmount" step="0.01" readonly style="background:var(--hover-bg); opacity:0.7;">
+      <input type="text" inputmode="decimal" class="js-money" id="cnAmount" step="0.01" readonly style="background:var(--hover-bg); opacity:0.7;">
       <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">For partial credit notes, please issue a separate corrective entry in Tally.</div>
     </div>
     <div style="margin-top:12px;">
@@ -12471,7 +12471,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           </div>
           <div id="rmDefaultCommissionFixedSlot" style="flex:1; display:none; align-items:center; gap:6px;">
             <span style="color:var(--text-dim); font-size:13px;">₹</span>
-            <input type="number" id="rmDefaultCommissionFixed" placeholder="e.g. 10000" step="1" min="0" style="flex:1;">
+            <input type="text" inputmode="decimal" class="js-money" id="rmDefaultCommissionFixed" placeholder="e.g. 10000" step="1" min="0" style="flex:1;">
             <span style="color:var(--text-dim); font-size:11px; white-space:nowrap;">per invoice</span>
           </div>
         </div>
@@ -12580,7 +12580,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       </div>
       <div>
         <label>Amount (INR) *</label>
-        <input type="number" step="0.01" min="0" id="commissionPayoutAmount" placeholder="0.00">
+        <input type="text" inputmode="decimal" class="js-money" step="0.01" min="0" id="commissionPayoutAmount" placeholder="0.00">
         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;" id="commissionPayoutBalanceHint"></div>
       </div>
     </div>
@@ -16412,10 +16412,10 @@ function renderProductCycleInputs() {
             html += `
                 <div class="prod-cycle-input-row" style="display:grid; grid-template-columns: 60px 1fr 1fr 1fr 1fr; gap:10px; align-items:center;">
                     <div style="font-size:12px; color:var(--text-dim); font-weight:500;">Cycle ${i+1}</div>
-                    <div><input type="number" class="pc-cost" placeholder="Annual Cost" oninput="updateItemizedPerLic()" style="padding:6px; font-size:12px;" min="0"></div>
-                    <div><input type="number" class="pc-cost-lic" placeholder="Cost/Lic" style="padding:6px; font-size:12px; background:var(--hover-bg); color:var(--text-dim);" readonly></div>
-                    <div><input type="number" class="pc-sell" placeholder="Annual Sell" oninput="updateItemizedPerLic()" style="padding:6px; font-size:12px;" min="0"></div>
-                    <div><input type="number" class="pc-sell-lic" placeholder="Sell/Lic" style="padding:6px; font-size:12px; background:var(--hover-bg); color:var(--text-dim);" readonly></div>
+                    <div><input type="text" inputmode="decimal" class="js-money pc-cost" placeholder="Annual Cost" oninput="updateItemizedPerLic()" style="padding:6px; font-size:12px;" min="0"></div>
+                    <div><input type="text" inputmode="decimal" class="js-money pc-cost-lic" placeholder="Cost/Lic" style="padding:6px; font-size:12px; background:var(--hover-bg); color:var(--text-dim);" readonly></div>
+                    <div><input type="text" inputmode="decimal" class="js-money pc-sell" placeholder="Annual Sell" oninput="updateItemizedPerLic()" style="padding:6px; font-size:12px;" min="0"></div>
+                    <div><input type="text" inputmode="decimal" class="js-money pc-sell-lic" placeholder="Sell/Lic" style="padding:6px; font-size:12px; background:var(--hover-bg); color:var(--text-dim);" readonly></div>
                 </div>
             `;
         }
@@ -16436,8 +16436,8 @@ function updateItemizedPerLic() {
     const lic = parseFloat(document.getElementById('prodLicenses').value) || 0;
     
     // Standard Itemized Auto-Calc
-    const stdCost = parseFloat(document.getElementById('prodUnitCost').value) || 0;
-    const stdSell = parseFloat(document.getElementById('prodUnitSell').value) || 0;
+    const stdCost = __msNumVal(document.getElementById('prodUnitCost'));
+    const stdSell = __msNumVal(document.getElementById('prodUnitSell'));
     const prodCostLic = document.getElementById('prodCostLic');
     const prodSellLic = document.getElementById('prodSellLic');
     
@@ -16499,8 +16499,8 @@ function addCurrentProduct() {
     };
 
     if (isItemized && !isVar) {
-        const annualCost = parseFloat(document.getElementById('prodUnitCost').value) || 0;
-        const annualSell = parseFloat(document.getElementById('prodUnitSell').value) || 0;
+        const annualCost = __msNumVal(document.getElementById('prodUnitCost'));
+        const annualSell = __msNumVal(document.getElementById('prodUnitSell'));
         
         productEntry.annualCost = annualCost;
         productEntry.annualSell = annualSell;
@@ -17708,6 +17708,7 @@ function addNewService() {
 }
 
 function commitServicesEditor() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const id = document.getElementById('servicesEditor_id').value;
     if (!id) return;
     const list = getServicesCatalog().slice();
@@ -18209,6 +18210,80 @@ const fmt = (n) => {
     if(n === undefined || n === null || isNaN(n)) return '₹0';
     return '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 };
+
+/* ======================================================================
+   8CV — MONEY INPUT COMMA FORMATTING (Indian grouping)
+   ----------------------------------------------------------------------
+   Amount input fields tagged with class "js-money" display Indian comma
+   grouping (76,54,195) when not being edited, and revert to a raw number
+   the instant they receive focus, so typing is unhindered and the caret
+   never jumps. Safety model (so a saved figure can NEVER be corrupted):
+     • While a field is focused it holds a RAW value → every oninput /
+       onchange calc reads correct numbers with no change required.
+     • __msNumVal(el) strips commas regardless of focus (focus-agnostic).
+     • __msStripAllMoney() is called at the top of every save handler, so
+       even an un-converted parseFloat inside a save sees a raw value.
+     • __msFormatAllMoney() re-applies commas after a form is populated.
+   Rates / counts / durations / percentages are intentionally NOT tagged.
+   ====================================================================== */
+function __msStripCommas(v) { return (v === undefined || v === null) ? '' : String(v).replace(/,/g, ''); }
+function __msNumVal(elOrVal) {
+    const raw = (elOrVal && typeof elOrVal === 'object' && 'value' in elOrVal) ? elOrVal.value : elOrVal;
+    const n = parseFloat(__msStripCommas(raw).trim());
+    return isNaN(n) ? 0 : n;
+}
+// Format a numeric string with Indian grouping, preserving sign + a decimal tail.
+function __msFmtIndianGrouping(rawStr) {
+    let s = __msStripCommas(rawStr).trim();
+    if (s === '' || s === '-' || s === '.' || s === '-.') return s;
+    const neg = s.charAt(0) === '-'; if (neg) s = s.slice(1);
+    const dot = s.indexOf('.');
+    let intPart = dot === -1 ? s : s.slice(0, dot);
+    let decPart = dot === -1 ? '' : s.slice(dot + 1);
+    intPart = intPart.replace(/[^0-9]/g, '');
+    decPart = decPart.replace(/[^0-9]/g, '');
+    if (intPart === '' && dot === -1) return rawStr; // not numeric — leave as-is
+    let grouped = intPart;
+    if (intPart.length > 3) {
+        const last3 = intPart.slice(-3);
+        const rest = intPart.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',');
+        grouped = rest + ',' + last3;
+    }
+    let out = (neg ? '-' : '') + (grouped || '0');
+    if (dot !== -1) out += '.' + decPart;
+    return out;
+}
+function __msFormatMoneyField(el) {
+    if (!el) return;
+    const v = el.value;
+    if (v === '' || v === null) return;
+    el.value = __msFmtIndianGrouping(v);
+}
+function __msUnformatMoneyField(el) {
+    if (!el) return;
+    el.value = __msStripCommas(el.value);
+}
+// Strip commas from ALL money fields (call at the start of every save handler).
+function __msStripAllMoney(root) {
+    (root || document).querySelectorAll('input.js-money').forEach(el => { el.value = __msStripCommas(el.value); });
+}
+// Re-apply commas to all money fields except the one currently focused
+// (call after a form/modal is populated, or at the end of a recompute).
+function __msFormatAllMoney(root) {
+    (root || document).querySelectorAll('input.js-money').forEach(el => {
+        if (el === document.activeElement) return;
+        __msFormatMoneyField(el);
+    });
+}
+// Delegated focus handlers — work for current AND dynamically-created fields.
+document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('js-money')) __msUnformatMoneyField(t);
+}, true);
+document.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('js-money')) __msFormatMoneyField(t);
+}, true);
 
 async function fetchHistoricalFX() {
     const startVal = document.getElementById('start').value;
@@ -18860,11 +18935,11 @@ function addCustomCycle() {
             <input type="number" class="vp-duration" value="3.0" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
         </div>
         <div>
-            <input type="number" class="vp-cost" value="${defaultCost}" placeholder="Total Cost (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
+            <input type="text" inputmode="decimal" class="js-money vp-cost" value="${defaultCost}" placeholder="Total Cost (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
             <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
         </div>
         <div>
-            <input type="number" class="vp-sell" value="${defaultSell}" placeholder="Total Sell INR (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
+            <input type="text" inputmode="decimal" class="js-money vp-sell" value="${defaultSell}" placeholder="Total Sell INR (for cycle duration)" oninput="updateLiveMargin()" style="width:100%;">
             <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
         </div>
     `;
@@ -18928,11 +19003,11 @@ function generateYearlyInputs() {
                      <input type="number" class="vp-duration" value="${dur.toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
                  </div>
                  <div>
-                     <input type="number" class="vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                     <input type="text" inputmode="decimal" class="js-money vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
                      <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
                  </div>
                  <div>
-                     <input type="number" class="vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                     <input type="text" inputmode="decimal" class="js-money vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
                      <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
                  </div>
              </div>`;
@@ -18958,11 +19033,11 @@ function generateYearlyInputs() {
                     <input type="number" class="vp-duration" value="${duration.toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
                 </div>
                 <div>
-                    <input type="number" class="vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                    <input type="text" inputmode="decimal" class="js-money vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
                     <div class="vp-cost-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
                 </div>
                 <div>
-                    <input type="number" class="vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
+                    <input type="text" inputmode="decimal" class="js-money vp-sell" value="${valSell}" placeholder="Total Sell INR (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
                     <div class="vp-sell-annualised" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
                 </div>
             </div>`;
@@ -19892,6 +19967,7 @@ function toggleDetail(row) {
 }
 
 function saveContract() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const startEl = document.getElementById('start');
     const endEl = document.getElementById('endDate'); 
     const clientEl = document.getElementById('client');
@@ -20212,6 +20288,7 @@ function saveContract() {
 }
 
 function editContract(i) { 
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     showTab('provisionTab'); 
     const c = contracts[i]; 
     document.getElementById('editIndex').value = i; 
@@ -20903,7 +20980,7 @@ function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='', loc
                 <span class="ar-signed-pin">${signedPin}</span>
             </div>
             <input type="date" class="ar-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
-            <input type="number" class="ar-amt" placeholder="Amt (INR)" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
+            <input type="text" inputmode="decimal" class="js-money ar-amt" placeholder="Amt (INR)" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
             <input type="date" class="ar-paiddate" value="${paidDate}" style="font-size:12px; padding:8px;" title="Date Paid">
             <input type="url" class="ar-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
             <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
@@ -20945,7 +21022,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
         <div class="ap-row-main" style="display:grid; grid-template-columns: 1.5fr 1.2fr 1.2fr 100px 1.2fr 1.5fr auto auto auto; gap:10px; align-items:center;">
             <input type="text" class="ap-no" placeholder="OEM Inv #" value="${invNo}" style="font-size:12px; padding:8px;">
             <input type="date" class="ap-date" value="${date}" style="font-size:12px; padding:8px;" title="Date Raised">
-            <input type="number" class="ap-amt" placeholder="Amt (${currText})" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
+            <input type="text" inputmode="decimal" class="js-money ap-amt" placeholder="Amt (${currText})" value="${amount}" style="font-size:12px; padding:8px;" oninput="updateModalSums()">
             <input type="number" class="ap-fx" placeholder="FX Rate" value="${fx}" style="font-size:12px; padding:8px;" title="Settled FX Rate" oninput="updateModalSums()">
             <input type="date" class="ap-paydate" value="${payDate}" style="font-size:12px; padding:8px;" title="Date Paid">
             <input type="url" class="ap-link" placeholder="Link URL" value="${link}" style="font-size:12px; padding:8px;">
@@ -20974,7 +21051,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
 function updateModalSums() {
     const targetAr = parseFloat(document.getElementById('arSumDisplay').getAttribute('data-target')) || 0;
     let arSum = 0;
-    document.querySelectorAll('.ar-amt').forEach(inp => arSum += (parseFloat(inp.value) || 0));
+    document.querySelectorAll('.ar-amt').forEach(inp => arSum += __msNumVal(inp));
     
     let arColor = Math.abs(arSum - targetAr) < 1 ? 'var(--success)' : 'var(--warning)';
     document.getElementById('arSumDisplay').innerHTML = `<span style="color:var(--text-dim); font-weight:500;">Total Entered:</span> <span style="color:${arColor}; margin-left:6px;">${fmt(arSum)}</span> <span style="color:var(--text-dim); font-weight:500; font-size:11px; margin-left:8px;">(Target: ${fmt(targetAr)})</span>`;
@@ -20983,8 +21060,8 @@ function updateModalSums() {
     let apSumUSD = 0;
     let apWeightedFXSum = 0;
     document.querySelectorAll('.ap-row').forEach(row => {
-        let amt = parseFloat(row.querySelector('.ap-amt').value) || 0;
-        let fx = parseFloat(row.querySelector('.ap-fx').value) || 0;
+        let amt = __msNumVal(row.querySelector('.ap-amt'));
+        let fx = __msNumVal(row.querySelector('.ap-fx'));
         apSumUSD += amt;
         apWeightedFXSum += (amt * fx);
     });
@@ -21034,6 +21111,7 @@ if (isINR) {
 }
 
 function openUnifiedModal(cIdx, yIdx) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     currentUniCIdx = cIdx;
     currentUniYIdx = yIdx;
     const c = contracts[cIdx];
@@ -21108,6 +21186,7 @@ function closeUnifiedModal() {
 }
 
 function submitUnifiedModal() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const c = contracts[currentUniCIdx];
     const y = c.billingYears[currentUniYIdx];
     const isINR = c.costCurrency === 'INR';
@@ -21116,7 +21195,7 @@ function submitUnifiedModal() {
     document.querySelectorAll('.ar-row').forEach(row => {
         let no = row.querySelector('.ar-no').value.trim();
         let dt = row.querySelector('.ar-date').value;
-        let amt = parseFloat(row.querySelector('.ar-amt').value) || 0;
+        let amt = __msNumVal(row.querySelector('.ar-amt'));
         let pd = row.querySelector('.ar-paiddate').value;
         let lk = row.querySelector('.ar-link').value;
         let lpEl = row.querySelector('.ar-localpath');
@@ -21133,8 +21212,8 @@ function submitUnifiedModal() {
     document.querySelectorAll('.ap-row').forEach(row => {
         let no = row.querySelector('.ap-no').value.trim();
         let dt = row.querySelector('.ap-date').value;
-        let amt = parseFloat(row.querySelector('.ap-amt').value) || 0;
-        let fx = parseFloat(row.querySelector('.ap-fx').value) || 0;
+        let amt = __msNumVal(row.querySelector('.ap-amt'));
+        let fx = __msNumVal(row.querySelector('.ap-fx'));
         let pd = row.querySelector('.ap-paydate').value;
         let lk = row.querySelector('.ap-link').value;
         let lpEl = row.querySelector('.ap-localpath');
@@ -22262,6 +22341,7 @@ function setPipelineView(v) {
 }
 
 function openProspectForm(id) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #38 — Modal converted to a full-page tab. Navigate via showTab().
     const title = document.getElementById('prospectFormTitle');
     const setVal = (i, v) => { const el = document.getElementById(i); if (el) el.value = (v === null || v === undefined) ? '' : v; };
@@ -22478,6 +22558,7 @@ function onProspectStageChange() {
 }
 
 function saveProspectFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const idVal = document.getElementById('prospectFormId').value;
     const company = document.getElementById('prospectCompany').value.trim();
     const oppName = document.getElementById('prospectOppName').value.trim();
@@ -22936,6 +23017,7 @@ function deleteActivity(actId) {
 }
 
 function openWonModal(id) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     document.getElementById('wonProspectId').value = id;
     const p = prospects.find(x => x.id === id);
     if (!p) return;
@@ -22946,6 +23028,7 @@ function openWonModal(id) {
 }
 
 function confirmProspectWon() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const id = document.getElementById('wonProspectId').value;
     const p = prospects.find(x => x.id === id);
     if (!p) return;
@@ -23692,6 +23775,7 @@ function clearProposalsFilters() {
 
 // ===== Form (Create / Edit) =====
 function openProposalForm(id) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #38 — Modal converted to a full-page tab. Navigate via showTab().
     const title = document.getElementById('proposalFormTitle');
     // Warn if Company Profile isn't set up
@@ -24030,6 +24114,7 @@ function onProposalProspectChange() {
 
 // ===== Line item rendering =====
 function renderProposalLineItems() {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     const tbody = document.getElementById('proposalLineItemsBody');
     if (!tbody) return;
     if (proposalFormLineItems.length === 0) {
@@ -24056,7 +24141,7 @@ function renderProposalLineItems() {
             </td>
             <td><input type="text" value="${pEsc(li.hsnSac || '')}" onchange="onLineItemFieldChange(${idx}, 'hsnSac', this.value)" placeholder="998314"></td>
             <td><input type="number" value="${li.qty}" min="0" step="1" onchange="onLineItemFieldChange(${idx}, 'qty', this.value)"></td>
-            <td><input type="number" value="${li.unitPrice}" min="0" step="0.01" onchange="onLineItemFieldChange(${idx}, 'unitPrice', this.value)"></td>
+            <td><input type="text" inputmode="decimal" class="js-money" value="${li.unitPrice}" min="0" step="0.01" onchange="onLineItemFieldChange(${idx}, 'unitPrice', this.value)"></td>
             <td><input type="number" value="${li.discountPct}" min="0" max="100" step="0.1" onchange="onLineItemFieldChange(${idx}, 'discountPct', this.value)"></td>
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td>
@@ -24126,6 +24211,7 @@ function onLineItemProductDropdownReset(idx) {
 }
 
 function onLineItemFieldChange(idx, field, value) {
+    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!proposalFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitPrice' || field === 'discountPct' || field === 'gstPct') {
         const n = parseFloat(value);
@@ -24727,6 +24813,7 @@ function updateProposalTerm() {
 }
 
 function saveProposalFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const client = document.getElementById('proposalClient').value;
     const subject = document.getElementById('proposalSubject').value.trim();
     if (!client) { alert("Please select a client."); return; }
@@ -27543,6 +27630,7 @@ function clearPOsFilters() {
 
 // ===== Form =====
 function openPOForm(id) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #38 — Modal converted to a full-page tab. Navigate via showTab().
     const title = document.getElementById('poFormTitle');
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
@@ -27912,6 +28000,7 @@ function onPOEndClientChange() {
 
 // ===== Line item rendering (same pattern as proposals) =====
 function renderPOLineItems() {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     const tbody = document.getElementById('poLineItemsBody');
     if (!tbody) return;
     if (poFormLineItems.length === 0) {
@@ -27946,7 +28035,7 @@ function renderPOLineItems() {
             <td>${_rowPicker}<input type="text" value="${pEsc(li.product || '')}" onchange="onPOLineItemFieldChange(${idx}, 'product', this.value)" placeholder="Product / description"></td>
             <td><input type="text" value="${pEsc(li.sku || '')}" onchange="onPOLineItemFieldChange(${idx}, 'sku', this.value)" placeholder="SKU / Part #"></td>
             <td><input type="number" value="${li.qty}" min="0" step="1" onchange="onPOLineItemFieldChange(${idx}, 'qty', this.value)"></td>
-            <td><input type="number" value="${li.unitCost}" min="0" step="0.01" onchange="onPOLineItemFieldChange(${idx}, 'unitCost', this.value)"></td>
+            <td><input type="text" inputmode="decimal" class="js-money" value="${li.unitCost}" min="0" step="0.01" onchange="onPOLineItemFieldChange(${idx}, 'unitCost', this.value)"></td>
             <td><input type="number" value="${li.discountPct}" min="0" max="100" step="0.1" onchange="onPOLineItemFieldChange(${idx}, 'discountPct', this.value)"></td>
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onPOLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace;">${(parseFloat(net) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -27989,6 +28078,7 @@ function removePOLineItem(idx) {
 }
 
 function onPOLineItemFieldChange(idx, field, value) {
+    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!poFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitCost' || field === 'discountPct' || field === 'gstPct') {
         const n = parseFloat(value);
@@ -28065,6 +28155,7 @@ function onPOContractDateChange() {
 }
 
 function savePOFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const oem = document.getElementById('poOem').value;
     const subject = document.getElementById('poSubject').value.trim();
     if (!oem) { alert("Please select an OEM."); return; }
@@ -30090,6 +30181,7 @@ function clearInvoicesFilters() {
 
 // ===== Form =====
 function openInvoiceForm(id) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #36 — Modal converted to a full-page tab. We no longer toggle a
     // modal's display; instead we navigate to #invoiceFormTab via showTab() and
     // scroll to the top so the user lands at the page header.
@@ -30674,6 +30766,7 @@ function prefillLineItemFromContract() {
 }
 
 function renderInvoiceLineItems() {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     const tbody = document.getElementById('invLineItemsBody');
     if (!tbody) return;
     if (invFormLineItems.length === 0) {
@@ -30690,7 +30783,7 @@ function renderInvoiceLineItems() {
             <td><input type="text" value="${pEsc(li.hsnCode || '')}" onchange="onInvoiceLineItemFieldChange(${idx}, 'hsnCode', this.value)" class="inv-hsn-input" placeholder="998316"></td>
             <td><input type="number" value="${li.qty}" min="0" step="1" onchange="onInvoiceLineItemFieldChange(${idx}, 'qty', this.value)"></td>
             <td><input type="text" value="${pEsc(li.unit || 'Nos')}" onchange="onInvoiceLineItemFieldChange(${idx}, 'unit', this.value)"></td>
-            <td><input type="number" value="${li.unitPrice}" min="0" step="0.01" onchange="onInvoiceLineItemFieldChange(${idx}, 'unitPrice', this.value)"></td>
+            <td><input type="text" inputmode="decimal" class="js-money" value="${li.unitPrice}" min="0" step="0.01" onchange="onInvoiceLineItemFieldChange(${idx}, 'unitPrice', this.value)"></td>
             <td><input type="number" value="${li.discountPct}" min="0" max="100" step="0.1" onchange="onInvoiceLineItemFieldChange(${idx}, 'discountPct', this.value)"></td>
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onInvoiceLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
             <td style="text-align:right; font-weight:600; font-family:monospace; font-variant-numeric: tabular-nums;">${(parseFloat(net) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -30716,6 +30809,7 @@ function removeInvoiceLineItem(idx) {
 }
 
 function onInvoiceLineItemFieldChange(idx, field, value) {
+    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!invFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitPrice' || field === 'discountPct' || field === 'gstPct') {
         const n = parseFloat(value);
@@ -30769,6 +30863,7 @@ function updateInvoiceTotalsDisplay() {
 }
 
 function saveInvoiceFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const clientName = document.getElementById('invClient').value;
     const subject = document.getElementById('invSubject').value.trim();
     if (!clientName) { alert("Please select a client."); return; }
@@ -31416,6 +31511,7 @@ function openPaymentModal(invoiceId, paymentIdx) {
 function closePaymentModal() { document.getElementById('invPaymentModal').style.display = 'none'; }
 
 function savePaymentFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const invoiceId = document.getElementById('invPaymentInvoiceId').value;
     const inv = invoices.find(x => x.id === invoiceId);
     if (!inv) { alert("Invoice not found."); return; }
@@ -35513,6 +35609,7 @@ function openResellerMasterDetail(key) { return renderResellerMasterDetail(key);
 let _rmInlineOnSave = null;
 
 function openResellerMasterForm(key, opts) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     opts = opts || {};
     _rmInlineOnSave = (typeof opts.onSave === 'function') ? opts.onSave : null;
     // Bug fix #41 — Modal converted to a full-page tab. We must remember which tab
@@ -35602,6 +35699,7 @@ function closeResellerMasterForm() {
 }
 
 function saveResellerMasterEntry() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const name = document.getElementById('rmCompanyName').value.trim();
     if (!name) { alert("Company Name is required."); return; }
 
@@ -37319,6 +37417,7 @@ function buildCommissionSectionForReseller(resellerKey) {
 
 // Phase 4D.3 — Payout modal open/commit/close
 function openCommissionPayoutModal(accrualId) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     if (!commissionLedger || !Array.isArray(commissionLedger.accruals)) return;
     const accrual = commissionLedger.accruals.find(a => a.id === accrualId);
     if (!accrual) { alert('Accrual not found.'); return; }
@@ -37356,6 +37455,7 @@ function closeCommissionPayoutModal() {
 }
 
 function commitCommissionPayout() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const accrualId = document.getElementById('commissionPayoutAccrualId').value;
     const accrual = (commissionLedger.accruals || []).find(a => a.id === accrualId);
     if (!accrual) { alert('Accrual not found.'); return; }
@@ -40213,6 +40313,7 @@ function renderConsultantMaster() {
 
 // ----- Payment Form: open / save / delete -----
 function openConsultantPaymentForm(id, presetConsultantId) {
+    setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     showTab('conPaymentFormTab');
     const title = document.getElementById('conPayFormTitle');
     const delBtn = document.getElementById('conPayDeleteBtn');
@@ -40360,6 +40461,7 @@ function recomputeConPayTotal() {
 }
 
 function saveConsultantPaymentFromForm() {
+    __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const consultantId = document.getElementById('conPayConsultantId').value;
     if (!consultantId) { alert('Please select a consultant.'); return; }
     const invoiceDate = document.getElementById('conPayInvoiceDate').value;
