@@ -10224,6 +10224,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
           <!-- 8U item #9: aging-bucket filter on the AR register. Values match
                getAgingBucket() return keys exactly, so renderARApPage() can
                compare directly without translation. -->
+          <input type="hidden" id="arPendingUrgency" value="ALL">
           <select id="arAgingFilter" onchange="renderARApPage()" style="width:160px;">
             <option value="ALL">All Aging</option>
             <option value="0_30">Current (0–30)</option>
@@ -10343,6 +10344,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <option value="SETTLED">Settled</option>
           </select>
           <!-- 8U item #9: aging-bucket filter on the AP register. Same shape as AR. -->
+          <input type="hidden" id="apPendingUrgency" value="ALL">
           <select id="apAgingFilter" onchange="renderARApPage()" style="width:160px;">
             <option value="ALL">All Aging</option>
             <option value="0_30">Current (0–30)</option>
@@ -38351,6 +38353,21 @@ function bsUrgencyBuckets(list, side) {
              total: pastVal + monthVal + laterVal };
 }
 
+// 8CY — does a register PENDING row fall in the given urgency bucket? Mirrors
+// bsUrgencyBuckets exactly (same billDate basis and today / today+30 cutoffs)
+// so a "Past bill date / Due this month / Later this FY" row click on the
+// Snapshot shortlists precisely the cycles counted on that row.
+function bsRowUrgencyMatches(row, urgency) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const monthOut = new Date(today); monthOut.setDate(monthOut.getDate() + 30);
+    const d = (row && row.billDate) ? new Date(row.billDate) : null;
+    if (!d || isNaN(d.getTime())) return urgency === 'later'; // no date → "later" bucket
+    if (urgency === 'past')  return d < today;
+    if (urgency === 'month') return d >= today && d <= monthOut;
+    if (urgency === 'later') return d > monthOut;
+    return true;
+}
+
 // Click handlers: each navigates and (optionally) sets one or more filter dropdowns.
 // 8U item #9: extended to accept a {filterId: filterVal} map for cases where a
 // click needs to set multiple filters at once (e.g. BS aging-bucket clicks reset
@@ -38374,8 +38391,8 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
     // or status filter), producing a wrong combination. Selects reset to 'ALL',
     // free-text search boxes reset to ''. Then the click's overrides win.
     const RESET_GROUPS = {
-        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL' },
-        purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL' },
+        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL' },
+        purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL', apPendingUrgency: 'ALL' },
         prospectPipelineTab: { pipelineStageFilter: 'ALL' },
         purchaseOrdersTab:   { poStatusFilter: 'ALL' },
         contractsTab:        { portfolioStatusFilter: 'ALL' },
@@ -38481,9 +38498,9 @@ function renderBusinessSnapshot() {
     const rtiEl = document.getElementById('bsRecToIssueRows');
     if (rtiEl) {
         rtiEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'past' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'month' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'later' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
         `;
     }
     // Urgency rows for Box 4 (AP To Be Received)
@@ -38491,9 +38508,9 @@ function renderBusinessSnapshot() {
     const ptrEl = document.getElementById('bsPayToReceiveRows');
     if (ptrEl) {
         ptrEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' })"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'past' })"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'month' })"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
+          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'later' })"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
         `;
     }
 
@@ -43037,6 +43054,12 @@ function renderARApPage() {
     // 8CU — free-text search terms (lowercased) for each register.
     const arSearchVal = (((document.getElementById('arSearch') || {}).value) || '').trim().toLowerCase();
     const apSearchVal = (((document.getElementById('apSearch') || {}).value) || '').trim().toLowerCase();
+    // 8CZ — pending-urgency drill-in now lives in hidden DOM filters
+    // (#arPendingUrgency / #apPendingUrgency) so it is re-read on EVERY render
+    // and cannot be wiped by a stray re-render. Reset to 'ALL' by bsGotoTab's
+    // RESET_GROUPS on any Snapshot navigation.
+    const arUrgVal = (((document.getElementById('arPendingUrgency') || {}).value) || 'ALL');
+    const apUrgVal = (((document.getElementById('apPendingUrgency') || {}).value) || 'ALL');
     const arFyRange = arFyVal !== 'ALL' ? getFYRange(arFyVal) : null;
     const apFyRange = apFyVal !== 'ALL' ? getFYRange(apFyVal) : null;
 
@@ -43350,6 +43373,8 @@ function renderARApPage() {
         // 8CU — free-text search narrows the register table (and its Selected Total),
         // mirroring how the status/aging filters behave. KPI/aging cards above are unaffected.
         if (arSearchVal) filteredAR = filteredAR.filter(r => _arApRowMatches(r, arSearchVal));
+        // 8CZ — pending-urgency drill-in from the Snapshot "To Be Issued" rows.
+        if (arUrgVal && arUrgVal !== 'ALL') filteredAR = filteredAR.filter(r => r.status === 'PENDING' && bsRowUrgencyMatches(r, arUrgVal));
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an invoice has been raised, contract-schedule dueDate otherwise).
         filteredAR.sort((a, b) => {
@@ -43543,6 +43568,8 @@ function renderARApPage() {
             : filteredAP_byStatus.filter(r => (r.status === 'INVOICED' || r.status === 'OVERDUE') && getAgeBucket(getInvoiceAgeDays(r.actualInvoiceDate)) === apAgingVal);
         // 8CU — free-text search for the AP register (table + Selected Total).
         if (apSearchVal) filteredAP = filteredAP.filter(r => _arApRowMatches(r, apSearchVal));
+        // 8CZ — pending-urgency drill-in from the Snapshot "To Be Received" rows.
+        if (apUrgVal && apUrgVal !== 'ALL') filteredAP = filteredAP.filter(r => r.status === 'PENDING' && bsRowUrgencyMatches(r, apUrgVal));
         // Sort by effective Due Date, earliest first — mirrors the leftmost column
         // (uses invoiceDueDate when an OEM invoice has been received, contract-schedule dueDate otherwise).
         filteredAP.sort((a, b) => {
