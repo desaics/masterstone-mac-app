@@ -26137,6 +26137,9 @@ body {
         </div>
     </div>
 
+    <!-- SUPPLIER chunk (8DA) -->
+    <div class="page-chunk">${_buildLetterheadSupplierBlock()}</div>
+
     <!-- SUBJECT + META chunk -->
     <div class="page-chunk">
         <div style="margin-bottom:18px;">
@@ -26570,7 +26573,7 @@ function buildProposalPDFHTMLDefault(proposal) {
             <td style="vertical-align:top; width:50%; text-align:right; font-size:11px; color:var(--text-dim);">
                 ${cp.gstin ? `<div><strong style="color:var(--text-main);">GSTIN:</strong> ${safe(cp.gstin)}</div>` : ''}
                 ${cp.pan ? `<div><strong style="color:var(--text-main);">PAN:</strong> ${safe(cp.pan)}</div>` : ''}
-                ${cp.cin ? `<div><strong style="color:var(--text-main);">CIN:</strong> ${safe(cp.cin)}</div>` : ''}
+                ${cp.cin ? `<div><strong style="color:var(--text-main);">LLPIN:</strong> ${safe(cp.cin)}</div>` : ''}
                 ${cp.phone ? `<div style="margin-top:6px;"><i>☏</i> ${safe(cp.phone)}</div>` : ''}
                 ${cp.email ? `<div><i>✉</i> ${safe(cp.email)}</div>` : ''}
                 ${cp.website ? `<div>${safe(cp.website)}</div>` : ''}
@@ -26793,6 +26796,8 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
 
     <!-- CONTENT LAYER -->
     <div class="pdf-fit-target" style="position: relative; z-index: 2; padding: 140px 50px 50px 120px;">
+
+        ${_buildLetterheadSupplierBlock()}
 
         <!-- TITLE BAR -->
         <div style="background:${COL_HEADER}; color:var(--glass-panel); padding:10px 18px; margin-bottom:20px; border-radius:2px;">
@@ -28961,7 +28966,7 @@ function buildPOPDFHTMLDefault(po) {
             <td style="vertical-align:top; width:50%; text-align:right; font-size:11px; color:var(--text-dim);">
                 ${cp.gstin ? `<div><strong style="color:var(--text-main);">GSTIN:</strong> ${safe(cp.gstin)}</div>` : ''}
                 ${cp.pan ? `<div><strong style="color:var(--text-main);">PAN:</strong> ${safe(cp.pan)}</div>` : ''}
-                ${cp.cin ? `<div><strong style="color:var(--text-main);">CIN:</strong> ${safe(cp.cin)}</div>` : ''}
+                ${cp.cin ? `<div><strong style="color:var(--text-main);">LLPIN:</strong> ${safe(cp.cin)}</div>` : ''}
                 ${cp.phone ? `<div style="margin-top:6px;"><i>☏</i> ${safe(cp.phone)}</div>` : ''}
                 ${cp.email ? `<div><i>✉</i> ${safe(cp.email)}</div>` : ''}
             </td>
@@ -29179,6 +29184,8 @@ function buildPOPDFHTMLWithLetterhead(po) {
 
     <!-- CONTENT LAYER -->
     <div class="pdf-fit-target" style="position: relative; z-index: 2; padding: 140px 50px 50px 120px;">
+
+        ${_buildLetterheadSupplierBlock()}
 
         <!-- TITLE BAR -->
         <div style="background:${COL_HEADER}; color:var(--glass-panel); padding:10px 18px; margin-bottom:20px; border-radius:2px;">
@@ -31710,6 +31717,39 @@ function pdfFitScript() {
 <` + `/scr` + `ipt>`;
 }
 
+// 8DA — Supplier (Masterstone) details block for LETTERHEAD documents.
+// The letterhead image carries only the logo + tagline, so the statutory
+// company details (legal name, address, LLPIN, PAN, GSTIN, contact) must be
+// printed as text. Shared by the invoice / PO / commercial-proposal / service-
+// proposal letterhead builders so they stay consistent. Pulls everything from
+// companyProfile; fixed monochrome palette matches the letterhead aesthetic.
+function _buildLetterheadSupplierBlock() {
+    const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    const esc = (s) => (typeof pEsc === 'function' ? pEsc(s || '') : (s || ''));
+    const name = cp.legalName || cp.tradingName || '';
+    if (!name && !cp.gstin && !cp.pan && !cp.cin) return ''; // nothing to show
+    const addr = [
+        cp.addressLine1, cp.addressLine2,
+        [cp.city, cp.state, cp.pincode].filter(Boolean).join(', '),
+        cp.country
+    ].filter(Boolean).join(', ');
+    const ids = [];
+    if (cp.cin)   ids.push(`<strong>LLPIN:</strong> ${esc(cp.cin)}`);
+    if (cp.pan)   ids.push(`<strong>PAN:</strong> ${esc(cp.pan)}`);
+    if (cp.gstin) ids.push(`<strong>GSTIN:</strong> ${esc(cp.gstin)}`);
+    const contact = [];
+    if (cp.phone)   contact.push(`<strong>Tel:</strong> ${esc(cp.phone)}`);
+    if (cp.email)   contact.push(`<strong>Email:</strong> ${esc(cp.email)}`);
+    if (cp.website) contact.push(`<strong>Web:</strong> ${esc(cp.website)}`);
+    return `
+        <div style="margin-bottom:14px; padding-bottom:9px; border-bottom:1.5px solid #2b2b2b;">
+            <div style="font-size:15px; font-weight:700; color:#2b2b2b; letter-spacing:0.3px;">${esc(name)}</div>
+            ${addr ? `<div style="font-size:10.5px; color:#444; margin-top:2px; line-height:1.5;">${esc(addr)}</div>` : ''}
+            ${ids.length ? `<div style="font-size:10.5px; color:#2b2b2b; margin-top:4px;">${ids.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+            ${contact.length ? `<div style="font-size:10.5px; color:#444; margin-top:2px;">${contact.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+        </div>`;
+}
+
 function buildInvoicePDFHTML(inv, opts) {
     opts = opts || {};
     if (!inv) return '<div>Invalid invoice</div>';
@@ -31857,7 +31897,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
             <td style="vertical-align:top; width:40%; text-align:right; font-size:10.5px; color:var(--text-dim);">
                 ${cp.gstin ? `<div><strong style="color:var(--text-main);">GSTIN:</strong> ${safe(cp.gstin)}</div>` : ''}
                 ${cp.pan ? `<div><strong style="color:var(--text-main);">PAN:</strong> ${safe(cp.pan)}</div>` : ''}
-                ${cp.cin ? `<div><strong style="color:var(--text-main);">CIN:</strong> ${safe(cp.cin)}</div>` : ''}
+                ${cp.cin ? `<div><strong style="color:var(--text-main);">LLPIN:</strong> ${safe(cp.cin)}</div>` : ''}
                 ${cp.phone ? `<div style="margin-top:4px;">☏ ${safe(cp.phone)}</div>` : ''}
                 ${cp.email ? `<div>✉ ${safe(cp.email)}</div>` : ''}
                 ${cp.website ? `<div>🌐 ${safe(cp.website)}</div>` : ''}
@@ -32150,6 +32190,8 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
 
     <!-- CONTENT LAYER -->
     <div class="pdf-fit-target" style="position: relative; z-index: 2; padding: 140px 50px 50px 120px;">
+
+        ${_buildLetterheadSupplierBlock()}
 
         ${exportBanner}
 
