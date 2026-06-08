@@ -8148,14 +8148,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <div class="control-status-bar" id="status-excel"></div>
         </div>
         
-        <div class="card" data-syscat="storage" style="margin-bottom:0;">
-            <h3><i class="fas fa-file-invoice-dollar"></i> Accounting & E-Invoicing Export</h3>
-            <p class="control-info-text">
-                Generates a flattened, line-item report of all Client (AR) and Vendor (AP) invoices. Optimized for sharing with your CA, IRN generation, and direct import into accounting software (e.g. Tally, Zoho Books). Features split GST values.
-            </p>
-            <button class="btn btn-success" onclick="exportAccountingExcel()" style="width:100%"><i class="fas fa-table"></i> Export Accounting Data</button>
-            <div class="control-status-bar" id="status-accounting"></div>
-        </div>
+        <!-- 8DB — "Accounting & E-Invoicing Export" relocated to the CA Export tab
+             (now lives there with FY + Client selectors driving both the
+             flattened AR/AP report and the new Contract-wise Invoice Register). -->
 
         <div class="card" data-syscat="storage" style="margin-bottom:0;">
             <h3><i class="fas fa-database"></i> Manual System Backup</h3>
@@ -10467,6 +10462,48 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             • Foreign-OEM lines: GST shown as IGST only (your CA handles the RCM logic)<br>
             • <strong>Download Invoices (zip):</strong> bundles the actual invoice files (Sales + OEM/Purchase + Consultant) for the same Month + Scope, with an INDEX.txt checklist. CRM-stored files and local files are packed; OneDrive-link-only items are listed in the index.<br>
             • Filename: <code>Masterstone_GST_{Month}_{Year}.xlsx</code> or <code>Masterstone_FY{xx-yy}_thru_{Month}{Year}.xlsx</code>
+        </div>
+    </div>
+
+    <!-- 8DB — "Accounting & E-Invoicing Export" (relocated here from System
+         Controls). FY + Client selectors drive BOTH exports:
+           • Export Accounting Data  → exportAccountingExcel()  (flattened AR/AP)
+           • Contract-wise Register  → exportContractWiseExcel() (per-contract,
+             both-currency invoice register: Contract Summary + Invoices sheets)
+         Both apply dd-mm-yyyy dates + comma-separated value/currency numbers via
+         the _acctXlFormatSheet() helper. -->
+    <div class="card" style="max-width:780px;">
+        <h3 style="margin-top:0;"><i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan);"></i> Accounting &amp; E-Invoicing Export</h3>
+        <p style="font-size:13px; color:var(--text-dim); margin-top:0; line-height:1.5;">
+            Two Excel reports for your CA / accounting software (Tally, Zoho Books) — both filtered by the Financial Year and Client chosen below. Dates print as <code>dd-mm-yyyy</code> and all value/currency columns are comma-separated.
+        </p>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:18px;">
+            <div>
+                <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Financial Year</label>
+                <select id="caAcctFy" style="width:100%; padding:9px 12px;"></select>
+            </div>
+            <div>
+                <label style="font-size:12px; color:var(--text-dim); display:block; margin-bottom:6px;">Client</label>
+                <select id="caAcctClient" style="width:100%; padding:9px 12px;"></select>
+            </div>
+        </div>
+
+        <div style="margin-top:22px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button class="btn btn-success" id="caAcctDataBtn" onclick="exportAccountingExcel()" style="padding:11px 22px;"><i class="fas fa-table"></i> Export Accounting Data</button>
+            <span id="status-accounting" style="font-size:12.5px; color:var(--text-dim);"></span>
+        </div>
+
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button class="btn btn-ghost" id="caAcctRegisterBtn" onclick="exportContractWiseExcel()" style="padding:11px 22px;"><i class="fas fa-file-contract"></i> Export Contract-wise Register</button>
+            <span id="status-acctRegister" style="font-size:12.5px; color:var(--text-dim);"></span>
+        </div>
+
+        <div style="margin-top:22px; padding:12px 14px; background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.2); border-radius:6px; font-size:11.5px; color:var(--text-dim); line-height:1.6;">
+            <div style="font-weight:600; color:var(--text-main); margin-bottom:4px;"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> What each report contains</div>
+            • <strong>Export Accounting Data:</strong> flattened line-item report — two sheets (AR Sales, AP Purchases) with split GST and FY-crossover flags. Filtered to invoices raised in the selected FY (and Client).<br>
+            • <strong>Contract-wise Register:</strong> one workbook with a <em>Contract Summary</em> sheet (one row per contract — sales/purchase totals &amp; margin) and an <em>Invoices</em> sheet (every sales &amp; purchase invoice grouped under its contract, showing both currencies where applicable).<br>
+            • Both honour the FY (invoice-raised date) and Client selectors above; choose <em>All Years</em> / <em>All Clients</em> for the full picture.
         </div>
     </div>
 </div>
@@ -21604,6 +21641,9 @@ function exportPortfolioExcel() {
 function exportAccountingExcel() {
     showStatus('status-accounting', 'Generating Accounting Report...', 'pending');
     if (!contracts) return;
+
+    // 8DB — FY + Client filter (shared with the Contract-wise Register).
+    const flt = _acctExportReadFilters();
     const arData = [];
     const apData = [];
 
@@ -21617,6 +21657,8 @@ function exportAccountingExcel() {
     };
 
     contracts.forEach(c => {
+        // 8DB — Client filter: skip the whole contract if it isn't the chosen client.
+        if (!_acctClientMatch(flt, c.client)) return;
         if(c.billingYears) {
             c.billingYears.forEach((y, yi) => {
                 const cycleFy = toFyLabel(y.billDate);
@@ -21624,6 +21666,8 @@ function exportAccountingExcel() {
                 // AR Invoices
                 if(y.arInvoices && y.arInvoices.length > 0) {
                     y.arInvoices.forEach(inv => {
+                        // 8DB — FY filter on invoice-raised date.
+                        if (!_acctDateInFy(flt, inv.date)) return;
                         let gstAmt = inv.amount * 0.18;
                         let grossAmt = inv.amount + gstAmt;
                         const invFy = toFyLabel(inv.date);
@@ -21639,7 +21683,7 @@ function exportAccountingExcel() {
                             "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
                         });
                     });
-                } else if(y.clientInvoiceNo || y.actualInvoiceDate) {
+                } else if((y.clientInvoiceNo || y.actualInvoiceDate) && _acctDateInFy(flt, y.actualInvoiceDate)) {
                     let amt = c.sellINR * y.ratio;
                     let gstAmt = amt * 0.18;
                     let grossAmt = amt + gstAmt;
@@ -21664,6 +21708,8 @@ function exportAccountingExcel() {
                 
                 if(y.apInvoices && y.apInvoices.length > 0) {
                     y.apInvoices.forEach(inv => {
+                        // 8DB — FY filter on invoice-raised date.
+                        if (!_acctDateInFy(flt, inv.date)) return;
                         let inrGross = inv.amount * (inv.fx || effFx);
                         const invFy = toFyLabel(inv.date);
                         const payFy = toFyLabel(inv.payDate);
@@ -21678,7 +21724,7 @@ function exportAccountingExcel() {
                             "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
                         });
                     });
-                } else if(y.oemInvoiceNo || y.oemInvoiceDate) {
+                } else if((y.oemInvoiceNo || y.oemInvoiceDate) && _acctDateInFy(flt, y.oemInvoiceDate)) {
                     let amtUsd = c.costUSD * y.ratio;
                     let inrGross = amtUsd * effFx;
                     const invFy = toFyLabel(y.oemInvoiceDate);
@@ -21701,16 +21747,286 @@ function exportAccountingExcel() {
     const wb = XLSX.utils.book_new();
     if(arData.length > 0) {
         const wsAr = XLSX.utils.json_to_sheet(arData);
+        _acctXlFormatSheet(wsAr);                 // 8DB — dd-mm-yyyy + comma values
         XLSX.utils.book_append_sheet(wb, wsAr, "AR (Sales) Export");
     } else XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{"Note": "No AR Invoices found"}]), "AR (Sales) Export");
 
     if(apData.length > 0) {
         const wsAp = XLSX.utils.json_to_sheet(apData);
+        _acctXlFormatSheet(wsAp);                 // 8DB — dd-mm-yyyy + comma values
         XLSX.utils.book_append_sheet(wb, wsAp, "AP (Purchases) Export");
     } else XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{"Note": "No AP Invoices found"}]), "AP (Purchases) Export");
 
-    XLSX.writeFile(wb, `Masterstone_Accounting_E-Invoice_${new Date().toISOString().slice(0,10)}.xlsx`);
-    showStatus('status-accounting', 'Accounting Report Exported.');
+    const fname = `Masterstone_Accounting_E-Invoice_${_acctExportScopeSuffix(flt)}_${new Date().toISOString().slice(0,10)}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    showStatus('status-accounting', `Accounting Report Exported (AR: ${arData.length}, AP: ${apData.length}).`);
+}
+
+/* ======================================================================
+   8DB — Accounting & E-Invoicing Export (relocated to the CA Export tab).
+   FY + Client selectors drive BOTH exportAccountingExcel() (flattened AR/AP)
+   and exportContractWiseExcel() (Contract Summary + Invoices). These two
+   exports are the ONLY ones that use _acctXlFormatSheet() — every other
+   exporter in the app is intentionally left unchanged.
+   ====================================================================== */
+
+// Populate the FY + Client dropdowns from contract data.
+function _acctExportPopulateFilters() {
+    const fySel = document.getElementById('caAcctFy');
+    const clSel = document.getElementById('caAcctClient');
+    if (!fySel || !clSel) return;
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return;
+
+    const prevFy = fySel.value;
+    const prevCl = clSel.value;
+
+    const years = new Set();
+    const addFy = (s) => {
+        if (!s) return;
+        const d = new Date(s);
+        if (isNaN(d.getTime())) return;
+        const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+        years.add(`${start}-${start + 1}`);
+    };
+    const clients = new Set();
+    contracts.forEach(c => {
+        if (c && c.client) clients.add(c.client);
+        if (!c || !Array.isArray(c.billingYears)) return;
+        c.billingYears.forEach(y => {
+            if (!y) return;
+            addFy(y.billDate); addFy(y.actualInvoiceDate); addFy(y.oemInvoiceDate);
+            (y.arInvoices || []).forEach(inv => addFy(inv && inv.date));
+            (y.apInvoices || []).forEach(inv => addFy(inv && inv.date));
+        });
+    });
+    const sortedYears = [...years].sort().reverse(); // newest first
+    const sortedClients = [...clients].filter(Boolean).sort();
+
+    fySel.innerHTML = '<option value="ALL">All Years</option>';
+    sortedYears.forEach(y => {
+        const a = y.split('-');
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = `FY ${a[0]}-${String(a[1]).slice(-2)}`;
+        fySel.appendChild(opt);
+    });
+    clSel.innerHTML = '<option value="ALL">All Clients</option>';
+    sortedClients.forEach(cl => {
+        const opt = document.createElement('option');
+        opt.value = cl; opt.textContent = cl;
+        clSel.appendChild(opt);
+    });
+
+    // Restore previous selection if still valid.
+    if (prevFy && [...fySel.options].some(o => o.value === prevFy)) fySel.value = prevFy;
+    if (prevCl && [...clSel.options].some(o => o.value === prevCl)) clSel.value = prevCl;
+}
+
+// Read current selector state into a filter object.
+function _acctExportReadFilters() {
+    const fySel = document.getElementById('caAcctFy');
+    const clSel = document.getElementById('caAcctClient');
+    const fyVal = fySel ? fySel.value : 'ALL';
+    const clVal = clSel ? clSel.value : 'ALL';
+    const allFy = (!fyVal || fyVal === 'ALL');
+    const allClient = (!clVal || clVal === 'ALL');
+    return {
+        fy: fyVal,
+        allFy,
+        fyRange: allFy ? null : (typeof getFYRange === 'function' ? getFYRange(fyVal) : null),
+        client: clVal,
+        allClient
+    };
+}
+
+// Client filter test.
+function _acctClientMatch(flt, clientName) {
+    if (!flt || flt.allClient) return true;
+    return String(clientName || '') === String(flt.client || '');
+}
+
+// FY filter test on an invoice-raised date string.
+function _acctDateInFy(flt, dateStr) {
+    if (!flt || flt.allFy || !flt.fyRange) return true;
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    return d >= flt.fyRange.start && d <= flt.fyRange.end;
+}
+
+// Filename scope suffix, e.g. "FY2024-25_AcmeCorp" / "AllFY_AllClients".
+function _acctExportScopeSuffix(flt) {
+    const safe = (s) => String(s || '').replace(/[^A-Za-z0-9]+/g, '').slice(0, 28) || 'NA';
+    const fyPart = flt.allFy
+        ? 'AllFY'
+        : ('FY' + flt.fy.split('-').map((x, i) => i === 1 ? String(x).slice(-2) : x).join('-'));
+    const clPart = flt.allClient ? 'AllClients' : safe(flt.client);
+    return `${fyPart}_${clPart}`;
+}
+
+// Shared formatter for the TWO accounting exports ONLY. Converts yyyy-mm-dd
+// string cells into real date cells shown as dd-mm-yyyy, and comma-formats
+// value/currency numeric columns (classified by header keyword). FX / rate,
+// percentage, and pure-count columns are deliberately left untouched.
+const _ACCT_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function _acctXlFormatSheet(ws) {
+    if (!ws || typeof XLSX === 'undefined' || !ws['!ref']) return;
+    const range = XLSX.utils.decode_range(ws['!ref']);
+
+    const MONEY_RE = /(inr|usd|amount|amt|value|cost|revenue|margin|sell|price|gst|igst|cgst|sgst|gross|balance|received|paid|subtotal|total)/i;
+    const EXCLUDE_RE = /(fx|rate|%|percent|qty|cts|unit|licen|term|month|count|days)/i;
+
+    const headerIsMoney = {};
+    for (let c = range.s.c; c <= range.e.c; c++) {
+        const hCell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+        const label = hCell && hCell.v != null ? String(hCell.v) : '';
+        headerIsMoney[c] = MONEY_RE.test(label) && !EXCLUDE_RE.test(label);
+    }
+
+    for (let r = range.s.r + 1; r <= range.e.r; r++) {
+        for (let c = range.s.c; c <= range.e.c; c++) {
+            const addr = XLSX.utils.encode_cell({ r, c });
+            const cell = ws[addr];
+            if (!cell) continue;
+            // Dates: ISO string -> real date cell, dd-mm-yyyy
+            if (cell.t === 's' && _ACCT_ISO_DATE_RE.test(cell.v)) {
+                const p = cell.v.split('-');
+                const d = new Date(+p[0], +p[1] - 1, +p[2], 12, 0, 0);
+                if (!isNaN(d.getTime())) {
+                    cell.t = 'd'; cell.v = d; cell.z = 'dd-mm-yyyy';
+                    continue;
+                }
+            }
+            // Money: numeric value columns -> comma format
+            if (cell.t === 'n' && headerIsMoney[c]) {
+                cell.z = '#,##0.00';
+            }
+        }
+    }
+}
+
+// NEW (8DB) — Contract-wise Invoice Register. One workbook, two sheets:
+//   • Contract Summary — one row per in-scope contract (sales/purchase totals,
+//     both-currency purchase totals where applicable, gross margin).
+//   • Invoices — every sales & purchase invoice grouped under its contract,
+//     showing both currencies where applicable.
+// Honours the FY (invoice-raised date) + Client selectors.
+function exportContractWiseExcel() {
+    if (typeof XLSX === 'undefined') { showStatus('status-acctRegister', 'Excel library not loaded — refresh and retry.', 'error'); return; }
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) { showStatus('status-acctRegister', 'No contract data.', 'error'); return; }
+    showStatus('status-acctRegister', 'Generating Contract-wise Register...', 'pending');
+
+    const flt = _acctExportReadFilters();
+    const summaryRows = [];
+    const invoiceRows = [];
+
+    contracts.forEach((c, cIdx) => {
+        if (!c || !Array.isArray(c.billingYears)) return;
+        if (!_acctClientMatch(flt, c.client)) return;
+
+        const oem = (typeof _caExportEffectiveOem === 'function') ? _caExportEffectiveOem(c) : (c.oem || '');
+        const contractLabel = `${c.client || ''} — ${c.product || ''}`.trim();
+
+        let nSales = 0, salesINR = 0, nPurch = 0, purchINR = 0, purchUSD = 0;
+        const contractInvRows = [];
+
+        c.billingYears.forEach((y, yi) => {
+            if (!y) return;
+            const cycleLabel = `Cycle ${yi + 1}`;
+
+            // ---- SALES (AR) — INR only ----
+            const arList = (Array.isArray(y.arInvoices) && y.arInvoices.length)
+                ? y.arInvoices.map(inv => ({
+                    invNo: inv.invNo || '', date: inv.date || '',
+                    amount: parseFloat(inv.amount) || 0, paidDate: inv.paidDate || ''
+                  }))
+                : ((y.clientInvoiceNo || y.actualInvoiceDate)
+                    ? [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '',
+                         amount: (parseFloat(c.sellINR) || 0) * (y.ratio || 0), paidDate: y.paymentDate || '' }]
+                    : []);
+            arList.forEach(s => {
+                if (!_acctDateInFy(flt, s.date)) return;
+                const amount = Math.round(s.amount * 100) / 100;
+                const gst = Math.round(s.amount * 0.18 * 100) / 100;
+                const gross = Math.round((s.amount + gst) * 100) / 100;
+                nSales++; salesINR += s.amount;
+                contractInvRows.push({
+                    'Contract': contractLabel, 'Client': c.client || '', 'Product': c.product || '', 'OEM': oem,
+                    'Direction': 'Sale (AR)', 'Cycle': cycleLabel,
+                    'Invoice No': s.invNo, 'Invoice Date': s.date,
+                    'Currency': 'INR', 'Base Amount': amount, 'FX Rate': '',
+                    'USD Value': '', 'INR Value': amount,
+                    'GST (INR)': gst, 'Gross (INR)': gross,
+                    'Status': s.paidDate ? 'Paid' : 'Pending', 'Payment Date': s.paidDate
+                });
+            });
+
+            // ---- PURCHASE (AP) — both currencies where applicable ----
+            const apList = (Array.isArray(y.apInvoices) && y.apInvoices.length)
+                ? y.apInvoices
+                : ((y.oemInvoiceNo || y.oemInvoiceDate)
+                    ? [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate || '',
+                         amount: (parseFloat(c.costUSD) || 0) * (y.ratio || 0), fx: y.settlementFX, payDate: y.oemPaymentDate || '' }]
+                    : []);
+            apList.forEach(ap => {
+                if (!ap) return;
+                if (!_acctDateInFy(flt, ap.date)) return;
+                const amt = _caExportComputeApAmounts(c, y, yi, ap);
+                const totalGst = (amt.igst || 0) + (amt.cgst || 0) + (amt.sgst || 0);
+                const inrVal = Math.round((amt.inrValue || 0) * 100) / 100;
+                const usdVal = amt.isUSDcontract ? (Math.round((amt.usdValue || 0) * 100) / 100) : '';
+                nPurch++; purchINR += (amt.inrValue || 0); purchUSD += (amt.usdValue || 0);
+                contractInvRows.push({
+                    'Contract': contractLabel, 'Client': c.client || '', 'Product': c.product || '', 'OEM': oem,
+                    'Direction': 'Purchase (AP)', 'Cycle': cycleLabel,
+                    'Invoice No': ap.invNo || '', 'Invoice Date': ap.date || '',
+                    'Currency': amt.isUSDcontract ? (c.costCurrency || 'USD') : 'INR',
+                    'Base Amount': Math.round((parseFloat(ap.amount) || 0) * 100) / 100,
+                    'FX Rate': amt.isUSDcontract ? amt.fxRate : '',
+                    'USD Value': usdVal, 'INR Value': inrVal,
+                    'GST (INR)': Math.round(totalGst * 100) / 100,
+                    'Gross (INR)': Math.round((inrVal + totalGst) * 100) / 100,
+                    'Status': ap.payDate ? 'Settled' : 'Pending', 'Payment Date': ap.payDate || ''
+                });
+            });
+        });
+
+        // Skip contracts with no in-scope invoices (keeps summary clean under filters).
+        if (contractInvRows.length === 0) return;
+
+        invoiceRows.push(...contractInvRows);
+        summaryRows.push({
+            'Client': c.client || '', 'Product': c.product || '', 'OEM': oem,
+            'Start Date': c.start || '', 'Term (Months)': c.term || '',
+            '# Sales Inv': nSales, 'Total Sales (INR)': Math.round(salesINR * 100) / 100,
+            '# Purchase Inv': nPurch, 'Total Purchase (INR)': Math.round(purchINR * 100) / 100,
+            'Total Purchase (USD)': purchUSD ? Math.round(purchUSD * 100) / 100 : '',
+            'Gross Margin (INR)': Math.round((salesINR - purchINR) * 100) / 100
+        });
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    const sumHeaders = ['Client', 'Product', 'OEM', 'Start Date', 'Term (Months)', '# Sales Inv',
+        'Total Sales (INR)', '# Purchase Inv', 'Total Purchase (INR)', 'Total Purchase (USD)', 'Gross Margin (INR)'];
+    const wsSum = summaryRows.length
+        ? XLSX.utils.json_to_sheet(summaryRows, { header: sumHeaders })
+        : XLSX.utils.json_to_sheet([{ 'Note': 'No contracts match the selected FY / Client.' }]);
+    if (summaryRows.length) _acctXlFormatSheet(wsSum);
+    XLSX.utils.book_append_sheet(wb, wsSum, 'Contract Summary');
+
+    const invHeaders = ['Contract', 'Client', 'Product', 'OEM', 'Direction', 'Cycle', 'Invoice No',
+        'Invoice Date', 'Currency', 'Base Amount', 'FX Rate', 'USD Value', 'INR Value',
+        'GST (INR)', 'Gross (INR)', 'Status', 'Payment Date'];
+    const wsInv = invoiceRows.length
+        ? XLSX.utils.json_to_sheet(invoiceRows, { header: invHeaders })
+        : XLSX.utils.json_to_sheet([{ 'Note': 'No invoices match the selected FY / Client.' }]);
+    if (invoiceRows.length) _acctXlFormatSheet(wsInv);
+    XLSX.utils.book_append_sheet(wb, wsInv, 'Invoices');
+
+    const fname = `Masterstone_ContractRegister_${_acctExportScopeSuffix(flt)}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    showStatus('status-acctRegister', `Register Exported — ${summaryRows.length} contracts, ${invoiceRows.length} invoices.`);
 }
 
 function downloadImportTemplate() {
@@ -41107,6 +41423,9 @@ function initCaExportTab() {
         mEl.value = String(curMonth).padStart(2, '0');
     }
     _caExportSyncMonth();
+
+    // 8DB — populate the Accounting Export FY + Client selectors
+    if (typeof _acctExportPopulateFilters === 'function') _acctExportPopulateFilters();
 
     const statusEl = document.getElementById('caExportStatus');
     if (statusEl) statusEl.textContent = '';
