@@ -12677,7 +12677,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="modal-content" style="max-width: 1000px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
             <h2 id="unifiedModalTitle" style="color: var(--text-main);">Manage Cycle Operations</h2>
-            <button class="btn btn-ghost" onclick="closeUnifiedModal()" style="border:none; background:transparent;"><i class="fas fa-times" style="font-size: 20px;"></i></button>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <button class="btn btn-ghost btn-sm" onclick="exportCycleExcel()" title="Export this cycle's AR + AP data to Excel"><i class="fas fa-file-excel"></i> Export to Excel</button>
+                <button class="btn btn-ghost" onclick="closeUnifiedModal()" style="border:none; background:transparent;"><i class="fas fa-times" style="font-size: 20px;"></i></button>
+            </div>
         </div>
         
         <input type="hidden" id="uniContractIdx">
@@ -21222,6 +21225,160 @@ function openUnifiedModal(cIdx, yIdx) {
 
 function closeUnifiedModal() { 
     document.getElementById('unifiedCycleModal').style.display = 'none'; 
+}
+
+// 8DC — Export the currently-open "Manage Cycle" modal (one contract cycle:
+// its AR client invoices + AP vendor invoices) to a single-sheet Excel.
+// Reads the LIVE modal rows (so unsaved edits are captured), mirrors the
+// modal's Live-Realized-Margin math, and applies dd-mm-yyyy dates +
+// comma-separated value/currency numbers (same convention as the CA Export
+// accounting reports).
+function exportCycleExcel() {
+    if (typeof XLSX === 'undefined') {
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Excel library not loaded — refresh and retry.', 4000);
+        return;
+    }
+    if (typeof currentUniCIdx === 'undefined' || currentUniCIdx < 0 || currentUniYIdx < 0) return;
+    const c = contracts[currentUniCIdx];
+    if (!c || !Array.isArray(c.billingYears)) return;
+    const y = c.billingYears[currentUniYIdx];
+    if (!y) return;
+    const isINR = c.costCurrency === 'INR';
+    const costCur = isINR ? 'INR' : (c.costCurrency || 'USD');
+
+    // Targets (same source the modal summary uses).
+    const targetAr = parseFloat((document.getElementById('arSumDisplay') || {}).getAttribute ? document.getElementById('arSumDisplay').getAttribute('data-target') : 0) || 0;
+    const targetAp = parseFloat((document.getElementById('apSumDisplay') || {}).getAttribute ? document.getElementById('apSumDisplay').getAttribute('data-target') : 0) || 0;
+
+    // --- Read LIVE rows from the modal DOM (mirrors saveUnifiedModal) ---
+    const arRows = [];
+    document.querySelectorAll('#arInvoicesContainer .ar-row').forEach(row => {
+        const no = (row.querySelector('.ar-no') ? row.querySelector('.ar-no').value : '').trim();
+        const dt = row.querySelector('.ar-date') ? row.querySelector('.ar-date').value : '';
+        const amt = __msNumVal(row.querySelector('.ar-amt'));
+        const pd = row.querySelector('.ar-paiddate') ? row.querySelector('.ar-paiddate').value : '';
+        const lk = (row.querySelector('.ar-link') ? row.querySelector('.ar-link').value : '').trim();
+        if (no || dt || amt > 0) arRows.push({ no, dt, amt, pd, lk });
+    });
+    const apRows = [];
+    let apSum = 0, apWFx = 0;
+    document.querySelectorAll('#apInvoicesContainer .ap-row').forEach(row => {
+        const no = (row.querySelector('.ap-no') ? row.querySelector('.ap-no').value : '').trim();
+        const dt = row.querySelector('.ap-date') ? row.querySelector('.ap-date').value : '';
+        const amt = __msNumVal(row.querySelector('.ap-amt'));
+        const fx = __msNumVal(row.querySelector('.ap-fx'));
+        const pd = row.querySelector('.ap-paydate') ? row.querySelector('.ap-paydate').value : '';
+        const lk = (row.querySelector('.ap-link') ? row.querySelector('.ap-link').value : '').trim();
+        if (no || dt || amt > 0) { apRows.push({ no, dt, amt, fx, pd, lk }); apSum += amt; apWFx += amt * fx; }
+    });
+
+    // --- FX + realized margin (mirror updateModalSums) ---
+    const baseFX = isINR ? 1.0 : (c.baseFX || 83.5);
+    const projectedFX = isINR ? 1.0 : baseFX * Math.pow(1.05, (y.cycle || currentUniYIdx + 1) - 1);
+    const manualFxRaw = document.getElementById('uniSettlementFX') ? document.getElementById('uniSettlementFX').value : '';
+    const autoFx = apSum > 0 ? (apWFx / apSum) : null;
+    const effFX = (manualFxRaw !== '' && manualFxRaw !== null) ? parseFloat(manualFxRaw) : (autoFx ? autoFx : projectedFX);
+    const realizedCostINR = targetAp * effFX;
+    const realizedMarginINR = targetAr - realizedCostINR;
+    const realizedMarginPct = targetAr > 0 ? (realizedMarginINR / targetAr) * 100 : 0;
+
+    // --- Cycle due date (mirror openUnifiedModal) ---
+    let dueDate = new Date(y.billDate);
+    if (y.cycle === 1) dueDate.setDate(dueDate.getDate() + 15); else dueDate.setDate(dueDate.getDate() - 7);
+
+    // ISO yyyy-mm-dd -> Date at local noon (TZ-safe); blank stays blank.
+    const toD = (s) => {
+        if (!s) return '';
+        const p = String(s).split('-');
+        if (p.length !== 3) return s;
+        const d = new Date(+p[0], +p[1] - 1, +p[2], 12, 0, 0);
+        return isNaN(d.getTime()) ? s : d;
+    };
+    const r2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+    // --- Build the report (array-of-arrays) tracking date + money cells ---
+    const aoa = [];
+    const dateCells = [];
+    const moneyCells = [];
+    const at = () => aoa.length - 1; // row index of the row just pushed
+
+    aoa.push(['Masterstone — Cycle Export']);
+    aoa.push(['Client', c.client || '']);
+    aoa.push(['Product', c.product || '']);
+    aoa.push(['Cycle', 'Cycle ' + (y.cycle || (currentUniYIdx + 1))]);
+    aoa.push(['Cycle Due Date', dueDate]);            dateCells.push({ r: at(), c: 1 });
+    aoa.push(['Client Revenue (INR)', r2(targetAr)]); moneyCells.push({ r: at(), c: 1 });
+    aoa.push(['Vendor Cost (' + costCur + ')', r2(targetAp)]); moneyCells.push({ r: at(), c: 1 });
+    aoa.push(['Projected FX Rate', isINR ? 'Fixed INR (1.00)' : Number(projectedFX.toFixed(4))]);
+    aoa.push(['Settlement FX', (manualFxRaw !== '' && manualFxRaw !== null) ? Number(parseFloat(manualFxRaw)) : (isINR ? 1.0 : '(not set — using avg)')]);
+    aoa.push(['Effective FX (margin basis)', isINR ? 1.0 : Number(effFX.toFixed(4))]);
+    aoa.push(['Realized Cost (INR)', r2(realizedCostINR)]);   moneyCells.push({ r: at(), c: 1 });
+    aoa.push(['Live Realized Margin (INR)', r2(realizedMarginINR)]); moneyCells.push({ r: at(), c: 1 });
+    aoa.push(['Realized Margin %', realizedMarginPct.toFixed(1) + '%']);
+    aoa.push([]);
+
+    // AR table
+    aoa.push(['ACCOUNTS RECEIVABLE (Client Invoices)']);
+    aoa.push(['Invoice #', 'Date Raised', 'Amount (INR)', 'Date Paid', 'Document Link']);
+    let arTot = 0;
+    arRows.forEach(rw => {
+        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), toD(rw.pd), rw.lk]);
+        dateCells.push({ r: at(), c: 1 }); dateCells.push({ r: at(), c: 3 });
+        moneyCells.push({ r: at(), c: 2 });
+        arTot += rw.amt;
+    });
+    if (arRows.length === 0) aoa.push(['(no client invoices entered)']);
+    aoa.push(['', 'Total Entered (INR)', r2(arTot), '', '']); moneyCells.push({ r: at(), c: 2 });
+    aoa.push([]);
+
+    // AP table
+    aoa.push(['ACCOUNTS PAYABLE (Vendor Invoices)']);
+    aoa.push(['OEM Inv #', 'Date Raised', 'Amount (' + costCur + ')', 'FX Rate', 'Date Paid', 'INR Value', 'Document Link']);
+    let apInrTot = 0;
+    apRows.forEach(rw => {
+        const inr = isINR ? rw.amt : rw.amt * (rw.fx || effFX);
+        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), (isINR ? '' : (rw.fx || '')), toD(rw.pd), r2(inr), rw.lk]);
+        dateCells.push({ r: at(), c: 1 }); dateCells.push({ r: at(), c: 4 });
+        moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 5 });
+        apInrTot += inr;
+    });
+    if (apRows.length === 0) aoa.push(['(no vendor invoices entered)']);
+    aoa.push(['', 'Total Entered', r2(apSum), (isINR ? '' : (autoFx ? Number(autoFx.toFixed(2)) : '')), '', r2(apInrTot), '']);
+    moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 5 });
+
+    // --- Sheet + formatting ---
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 42 }];
+    dateCells.forEach(m => {
+        const cell = ws[XLSX.utils.encode_cell({ r: m.r, c: m.c })];
+        // aoa_to_sheet may store the Date as a numeric serial (t='n') or a
+        // date cell (t='d'); either way the dd-mm-yyyy format applies. Blank
+        // dates are empty strings (t='s') and are left untouched.
+        if (cell && (cell.t === 'n' || cell.t === 'd')) cell.z = 'dd-mm-yyyy';
+    });
+    moneyCells.forEach(m => {
+        const cell = ws[XLSX.utils.encode_cell({ r: m.r, c: m.c })];
+        if (cell && cell.t === 'n') cell.z = '#,##0.00';
+    });
+    // Hyperlink the Document Link cells (AR col4, AP col6) where a URL is present.
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let r = range.s.r; r <= range.e.r; r++) {
+        [4, 6].forEach(cc => {
+            const cell = ws[XLSX.utils.encode_cell({ r, c: cc })];
+            if (cell && cell.t === 's' && /^https?:\/\//i.test(cell.v)) {
+                cell.l = { Target: cell.v, Tooltip: 'Open document' };
+            }
+        });
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Cycle');
+    const safe = (s) => String(s || '').replace(/[^A-Za-z0-9]+/g, '').slice(0, 28) || 'Cycle';
+    const fname = `Masterstone_Cycle_${safe(c.client)}_C${(y.cycle || (currentUniYIdx + 1))}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    if (typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Cycle exported — <strong>${fname}</strong>`, 4000);
+    }
 }
 
 function submitUnifiedModal() {
