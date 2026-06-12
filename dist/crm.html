@@ -7093,6 +7093,26 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         </div>
       </div>
     </div>
+    <!-- Phase 8DD — Contract Type toggle. Subscription = traditional reseller deal
+         (OEM products, licenses, vendor cost, billing cycles). Service = one-time
+         professional services engagement (fixed fee, no OEM/cost side; consultant
+         payouts live in the Consultants module). Default Subscription so the
+         existing flow is unchanged. Mirrors the Proposal/Invoice toggles (8E). -->
+    <div class="card" style="margin-bottom:20px; border-top: 3px solid var(--purple);">
+      <div class="kpi-section-title" style="margin-bottom:10px;"><i class="fas fa-shapes" style="color:var(--purple);"></i> Contract Type</div>
+      <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+          <input type="radio" name="contractType" value="subscription" checked onchange="onContractTypeChange()">
+          <span style="font-weight:600; color:var(--text-main);">Subscription / Reseller</span>
+          <span style="font-size:11.5px; color:var(--text-dim);">— OEM products, licenses, billing cycles</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+          <input type="radio" name="contractType" value="service" onchange="onContractTypeChange()">
+          <span style="font-weight:600; color:var(--text-main);">Service / Consultancy</span>
+          <span style="font-size:11.5px; color:var(--text-dim);">— professional services, fixed fee, one-time</span>
+        </label>
+      </div>
+    </div>
     <div class="card" id="formArea">
         <input type="hidden" id="editIndex" value="-1">
         
@@ -7106,14 +7126,38 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 </div>
                 <div id="cmAutofillHint" class="cm-autofill-hint"><i class="fas fa-magic"></i> Client found in master — <a href="#" onclick="fillProvisioningFromMaster(document.getElementById('client').value); return false;" style="color:var(--accent-cyan);">Auto-fill contact & compliance fields</a></div>
             </div>
-            <div>
+            <div class="contract-subscription-only">
                 <label>Number of Licenses (Total)</label>
                 <input type="number" id="licenses" placeholder="e.g. 50">
             </div>
-            <div><label>Internal PO Ref</label><input type="text" id="internalPO" placeholder="Internal Ref No"></div>
+            <div class="contract-subscription-only"><label>Internal PO Ref</label><input type="text" id="internalPO" placeholder="Internal Ref No"></div>
         </div>
 
-        <div style="background: var(--detail-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--glass-border); margin-bottom: 24px;">
+        <!-- Phase 8DD — Service / Consultancy details. Hidden in Subscription mode.
+             Engagement dates = the Start/End fields in Financials & Terms below;
+             the fee = the relabelled "Total Professional Fee (INR for term)" field
+             there. Cost side is always ₹0 — consultant payouts are tracked in the
+             Consultants module, not on the contract. -->
+        <div class="contract-service-only" style="display:none; background: var(--detail-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--glass-border); margin-bottom: 24px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+                <label style="margin:0; font-size:13px; font-weight:600; color:var(--text-main);"><i class="fas fa-briefcase" style="color:var(--purple);"></i> Service / Consultancy Details</label>
+                <span style="font-size:11px; color:var(--text-dim);">Engagement dates = Start/End below · Fee = Total Professional Fee below · Cost stays ₹0 (consultant payouts live in the Consultants module)</span>
+            </div>
+            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; margin-bottom:14px;">
+                <div>
+                    <label>Pre-fill from Services Catalog <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(optional)</span></label>
+                    <select id="ctrServiceId" onchange="onContractServiceChange()"><option value="">— Select a service —</option></select>
+                </div>
+                <div><label>SAC Code</label><input type="text" id="ctrServiceSAC" placeholder="e.g. 998313"></div>
+                <div><label>Engagement Duration</label><input type="text" id="ctrServiceDuration" placeholder="e.g. 6 weeks"></div>
+            </div>
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 14px;">
+                <div><label>Engagement / Service Name <span style="font-size:10.5px; color:var(--text-dim); font-weight:400;">(shown in registers &amp; exports)</span></label><input type="text" id="ctrServiceName" placeholder="e.g. AI Readiness Assessment"></div>
+                <div><label>Payment Terms</label><input type="text" id="ctrServicePaymentTerms" placeholder="e.g. 50% advance, 50% on delivery"></div>
+            </div>
+        </div>
+
+        <div class="contract-subscription-only" style="background: var(--detail-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--glass-border); margin-bottom: 24px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <label style="margin:0; font-size:13px; font-weight:600; color:var(--text-main);"><i class="fas fa-boxes"></i> Contract Products & Licensing</label>
                 <div style="display:flex; gap:16px; align-items:center;">
@@ -7216,7 +7260,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <input type="hidden" id="product">
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom:32px;">
+        <div class="contract-subscription-only" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom:32px;">
             <div><label>Hardware Details</label><input type="text" id="hardware" placeholder="e.g. Dell Servers, Routers..."></div>
             <div><label>Other Services</label><input type="text" id="services" placeholder="e.g. Annual Maintenance..."></div>
             <div><label>Internal PO Date</label><input type="date" id="internalPODate"></div>
@@ -7279,9 +7323,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         <div class="kpi-section-title" style="display:flex; justify-content:space-between; align-items:center;">
             <div>
                 <i class="fas fa-rupee-sign" style="color:var(--success); margin-right:4px;"></i><span>Financials &amp; Terms</span>
-                <span id="liveMarginDisplay" style="margin-left:16px; font-size:13px; font-weight:700; color:var(--text-dim);">Gross Margin: 0.0%</span>
+                <span id="liveMarginDisplay" class="contract-subscription-only" style="margin-left:16px; font-size:13px; font-weight:700; color:var(--text-dim);">Gross Margin: 0.0%</span>
             </div>
-            <label class="toggle-switch-container" style="display:inline-flex; background:transparent; border-color:transparent; padding:0;">
+            <label class="toggle-switch-container contract-subscription-only" style="display:inline-flex; background:transparent; border-color:transparent; padding:0;">
                 <input type="checkbox" id="isVariablePricing" onchange="togglePricingMode()" style="display:none;">
                 <div class="toggle-switch"></div>
                 <span style="font-size:13px; font-weight:500; color:var(--text-main);">Custom Billing Cycles / Variable Pricing</span>
@@ -7301,7 +7345,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         </div>
 
         <div id="standardPricingArea" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-            <div>
+            <div class="contract-subscription-only">
                 <label>Total Vendor Cost (for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total cost for the contract's full term as it appears on the OEM PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label>
                 <div style="display:flex; gap:12px;">
                     <select id="costCurrency" style="width:100px;" onchange="updateCurrencyLabels(); updateLiveMargin();"><option value="USD">USD</option><option value="INR">INR</option></select>
@@ -7309,9 +7353,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 </div>
                 <div id="costAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div>
             </div>
-            <div><label>Total Sell Price (INR for term) <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total sell value for the contract's full term as it appears on the Client PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label><input type="text" inputmode="decimal" class="js-money" id="sellINR" value="0" oninput="updateLiveMargin()"><div id="sellAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div></div>
+            <div><label><span id="sellPriceLabelText">Total Sell Price (INR for term)</span> <span style="font-size:11px; color:var(--text-dim); font-weight:400; cursor:help;" title="Enter the total sell value for the contract's full term as it appears on the Client PO. The system computes the annualised rate for cycle-level reporting.">ⓘ</span></label><input type="text" inputmode="decimal" class="js-money" id="sellINR" value="0" oninput="updateLiveMargin()"><div id="sellAnnualisedSubtext" style="font-size:11px; color:var(--text-dim); margin-top:4px; font-style:italic;"></div></div>
             
-            <div style="align-self:end;">
+            <div class="contract-subscription-only" style="align-self:end;">
                  <label style="color:var(--text-main);">Contract Start FX Rate (Day 1)</label>
                  <div style="display:flex; gap:12px;">
                     <input type="number" step="0.0001" id="globalFX" value="83.50" style="max-width:160px;" oninput="updateLiveMargin()">
@@ -7396,7 +7440,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 </div>
             </div>
             
-            <div>
+            <div class="contract-subscription-only">
                 <label class="toggle-switch-container" style="display:inline-flex;">
                     <input type="checkbox" id="billUpfront" style="display:none;">
                     <div class="toggle-switch"></div>
@@ -16512,6 +16556,84 @@ function updateCurrencyLabels() {
     document.getElementById('lblUnitCostCurr').innerText = `(${curr})`;
 }
 
+// ===== Phase 8DD — Contract Type (Subscription/Reseller vs Service/Consultancy) =====
+// Mirrors the Proposal/Invoice type machinery from 8E. Subscription is the
+// default and behaves exactly as before; legacy contracts have no `type`
+// field and are treated as subscription everywhere.
+
+// Read the current Contract Type radio. Defaults to 'subscription'.
+function getContractFormType() {
+    var checked = document.querySelector('input[name="contractType"]:checked');
+    return (checked && checked.value === 'service') ? 'service' : 'subscription';
+}
+
+// Toggle visibility of subscription-only vs service-only blocks on the
+// Provisioning form, and relabel the title / fee label for the active mode.
+function onContractTypeChange() {
+    var type = getContractFormType();
+    document.querySelectorAll('.contract-subscription-only').forEach(function (el) { el.style.display = (type === 'subscription') ? '' : 'none'; });
+    document.querySelectorAll('.contract-service-only').forEach(function (el) { el.style.display = (type === 'service') ? '' : 'none'; });
+    // Title only changes in NEW mode — Edit mode keeps its "Edit: <client>" title.
+    var isEdit = parseInt((document.getElementById('editIndex') || {}).value || '-1') > -1;
+    var titleEl = document.getElementById('formTitle');
+    if (titleEl && !isEdit) {
+        titleEl.innerHTML = (type === 'service')
+            ? '<i class="fas fa-briefcase" style="color:var(--purple); margin-right:8px;"></i>Provision New Service Engagement'
+            : '<i class="fas fa-cog" style="color:var(--accent-cyan); margin-right:8px;"></i>Provision New Subscription';
+    }
+    var sellLbl = document.getElementById('sellPriceLabelText');
+    if (sellLbl) sellLbl.innerText = (type === 'service') ? 'Total Professional Fee (INR for term)' : 'Total Sell Price (INR for term)';
+    if (type === 'service') {
+        populateContractServiceDropdown();
+        // Service engagements are a single full-term cycle — switch off the
+        // Variable Pricing UI if it was on (save also forces single-cycle).
+        var vp = document.getElementById('isVariablePricing');
+        if (vp && vp.checked) {
+            vp.checked = false;
+            if (typeof togglePricingMode === 'function') togglePricingMode();
+        }
+    }
+}
+
+// Populate the Services Catalog dropdown on the Provisioning form.
+function populateContractServiceDropdown() {
+    var sel = document.getElementById('ctrServiceId');
+    if (!sel) return;
+    var current = sel.value;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var html = '<option value="">— Select a service —</option>';
+    list.forEach(function (s) {
+        var name = s.name || '(unnamed)';
+        var cat = s.category ? ' · ' + s.category : '';
+        html += '<option value="' + pEsc(s.id) + '">' + pEsc(name + cat) + '</option>';
+    });
+    sel.innerHTML = html;
+    if (current && list.some(function (s) { return s.id === current; })) sel.value = current;
+}
+
+// Catalog pick → convenience pre-fill of SAC / duration / name / fee.
+// Only fills BLANK fields — never clobbers what the user already typed.
+function onContractServiceChange() {
+    var sel = document.getElementById('ctrServiceId');
+    if (!sel || !sel.value) return;
+    var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+    var rec = list.find(function (x) { return x.id === sel.value; });
+    if (!rec) return;
+    var sacEl = document.getElementById('ctrServiceSAC');
+    if (sacEl && (!sacEl.value || sacEl.value === '998313')) sacEl.value = rec.sacCode || '998313';
+    var durEl = document.getElementById('ctrServiceDuration');
+    if (durEl && !durEl.value) durEl.value = rec.defaultDuration || '';
+    var nameEl = document.getElementById('ctrServiceName');
+    if (nameEl && !nameEl.value.trim() && rec.name) nameEl.value = rec.name;
+    var feeEl = document.getElementById('sellINR');
+    if (feeEl && (!feeEl.value || (parseFloat(String(feeEl.value).replace(/,/g, '')) || 0) === 0)
+        && rec.defaultFee !== '' && rec.defaultFee != null) {
+        feeEl.value = rec.defaultFee;
+        if (typeof __msFormatAllMoney === 'function') setTimeout(__msFormatAllMoney, 0);
+        if (typeof updateLiveMargin === 'function') updateLiveMargin();
+    }
+}
+
 function addCurrentProduct() {
     const oem = document.getElementById('oemSelect').value;
     const prod = document.getElementById('productSelect').value;
@@ -19800,7 +19922,7 @@ function renderContracts() {
             <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
                 <td class="sp-stacked-cell">
                     <i class="fas fa-chevron-right expand-icon"></i><span class="stacked-main" title="${pEsc(c.product || '')}">${pEsc(formatProductForDisplay(c.product || '-'))}</span>
-                    ${c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(getOemDisplayName(c.oem))}</div>` : ''}
+                    ${(c.type === 'service') ? `<div class="stacked-sub" style="padding-left:18px;"><span style="background:rgba(167,139,250,0.12); color:var(--purple); border:1px solid rgba(167,139,250,0.35); font-size:9.5px; padding:1px 6px; font-weight:700; border-radius:4px; letter-spacing:0.4px;">SERVICE</span></div>` : (c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(getOemDisplayName(c.oem))}</div>` : '')}
                 </td>
                 <td title="${pEsc((expClientPOList.length > 0 ? (posToRender.map(p => p.poNo).filter(Boolean).join(', ')) : ''))}">${poDisplay}</td>
                 <td class="num">${c.licenses || '-'}</td>
@@ -19877,6 +19999,20 @@ function renderContracts() {
                                         };
                                         const ccySymbol = ccy === 'USD' ? '$' : ccy === 'GBP' ? '£' : ccy === 'EUR' ? '€' : ccy;
                                         const fxDisplay = isINR ? dash : ('₹' + baseFx.toFixed(2) + ' / ' + ccySymbol);
+
+                                        // 8DD — Service / Consultancy: one-time engagement. ACV and
+                                        // per-licence maths are meaningless here (a 3-month ₹5L
+                                        // engagement would display as a ₹20L ACV), so show the fee
+                                        // and the service facts instead.
+                                        if (c.type === 'service') {
+                                            return `
+                                    <div class="info-row"><span class="info-label">Engagement Type</span><span class="info-val" style="color:var(--purple); font-weight:600;">Service / Consultancy</span></div>
+                                    <div class="info-row"><span class="info-label">Professional Fee (term)</span><span class="info-val" style="color:var(--success);">${showInr(totalSellInr)}</span></div>
+                                    ${c.serviceSAC ? `<div class="info-row"><span class="info-label">SAC Code</span><span class="info-val">${pEsc(c.serviceSAC)}</span></div>` : ''}
+                                    ${c.serviceDuration ? `<div class="info-row"><span class="info-label">Duration</span><span class="info-val">${pEsc(c.serviceDuration)}</span></div>` : ''}
+                                    ${c.servicePaymentTerms ? `<div class="info-row"><span class="info-label">Payment Terms</span><span class="info-val">${pEsc(c.servicePaymentTerms)}</span></div>` : ''}
+                                        `;
+                                        }
 
                                         return `
                                     <div class="info-row"><span class="info-label">Contract Value</span><span class="info-val" style="color:var(--success);">${showInr(totalSellInr)}</span></div>
@@ -20010,26 +20146,47 @@ function toggleDetail(row) {
 
 function saveContract() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
+    // 8DD — contract type. Service engagements: no OEM/cost side, single
+    // full-term billing cycle, fee lives in sellINR.
+    const contractType = (typeof getContractFormType === 'function') ? getContractFormType() : 'subscription';
+    const isService = contractType === 'service';
     const startEl = document.getElementById('start');
     const endEl = document.getElementById('endDate'); 
     const clientEl = document.getElementById('client');
-    const isUpfront = document.getElementById('billUpfront').checked; 
+    const isUpfront = isService ? true : document.getElementById('billUpfront').checked; // 8DD — service = one cycle spanning the term
     const isReseller = document.getElementById('isReseller').checked;
-    const isVarPricing = document.getElementById('isVariablePricing').checked;
+    const isVarPricing = isService ? false : document.getElementById('isVariablePricing').checked; // 8DD
 
     if (!startEl.value || !endEl.value || !clientEl.value) { alert("Start Date, End Date and Client are required."); return; }
+
+    // 8DD — service engagements: nudge (don't block) if the fee is 0/blank.
+    if (isService) {
+        const _svcFeeChk = parseFloat(document.getElementById('sellINR').value) || 0;
+        if (_svcFeeChk <= 0 && !confirm("Total Professional Fee is 0 — save this service engagement anyway?")) return;
+    }
 
     const s = new Date(startEl.value);
     const e = new Date(endEl.value);
     const termMonths = calcExactTerm(startEl.value, endEl.value);
 
     const idx = parseInt(document.getElementById('editIndex').value);
-    
+
+    // 8DD — switching an existing contract's type rebuilds its billing cycles
+    // (cycle 1's invoice flags survive via the `existing` merge below; cycles
+    // 2+ are dropped when moving to Service). Make that explicit.
+    if (idx > -1 && contracts[idx]) {
+        const _prevType = (contracts[idx].type === 'service') ? 'service' : 'subscription';
+        if (_prevType !== contractType) {
+            const _lbl = t => t === 'service' ? 'Service / Consultancy' : 'Subscription / Reseller';
+            if (!confirm(`This contract was saved as ${_lbl(_prevType)} and is being re-saved as ${_lbl(contractType)}.\n\nBilling cycles will be rebuilt for the new type (cycle 1's invoice/payment flags are preserved; extra cycles are dropped when switching to Service). Continue?`)) return;
+        }
+    }
+
     // Core Fix: Preserve the raw cost and conditionally force FX rate to 1.0 if INR
-    const costCurr = document.getElementById('costCurrency').value;
+    const costCurr = isService ? 'INR' : document.getElementById('costCurrency').value; // 8DD — service cost side is always ₹0/INR
     const isINR = costCurr === 'INR';
     
-    let rawCostVal = parseFloat(document.getElementById('costAmount').value) || 0;
+    let rawCostVal = isService ? 0 : (parseFloat(document.getElementById('costAmount').value) || 0); // 8DD
     let baselineFx = isVarPricing ? parseFloat(document.getElementById('globalFX_Var').value) : parseFloat(document.getElementById('globalFX').value);
     
     if (isINR) {
@@ -20180,8 +20337,10 @@ function saveContract() {
 
     const data = { 
         client: clientEl.value, 
-        product: document.getElementById('product').value, 
-        licenses: document.getElementById('licenses').value, 
+        product: isService
+            ? ((((document.getElementById('ctrServiceName') || {}).value || '')).trim() || document.getElementById('product').value)
+            : document.getElementById('product').value, 
+        licenses: isService ? '' : document.getElementById('licenses').value, 
         hardware: document.getElementById('hardware').value, 
         services: document.getElementById('services').value, 
         
@@ -20247,7 +20406,14 @@ function saveContract() {
         start: startEl.value, 
         endDate: endEl.value, 
         billingYears: billingYears,
-        baseFX: baselineFx || 83.5 
+        baseFX: baselineFx || 83.5, 
+        // 8DD — contract type + service-mode fields. Persisted on every save
+        // (regardless of current type) so flipping the toggle never loses data.
+        type: contractType,
+        serviceId: (((document.getElementById('ctrServiceId') || {}).value || '')),
+        serviceSAC: ((((document.getElementById('ctrServiceSAC') || {}).value || '')).trim()),
+        serviceDuration: ((((document.getElementById('ctrServiceDuration') || {}).value || '')).trim()),
+        servicePaymentTerms: ((((document.getElementById('ctrServicePaymentTerms') || {}).value || '')).trim())
     };
 
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
@@ -20473,7 +20639,25 @@ function editContract(i) {
     
     checkDatesForVarPricing();
     updateLiveMargin();
-    
+
+    // 8DD — restore Contract Type + service fields. Runs AFTER the variance
+    // detection above: for service contracts onContractTypeChange() switches
+    // Variable Pricing back off (a single full-term cycle trips the variance
+    // heuristic whenever the term ≠ 12 months).
+    const _isSvcC = (c.type === 'service');
+    const _ctRadio = document.querySelector('input[name="contractType"][value="' + (_isSvcC ? 'service' : 'subscription') + '"]');
+    if (_ctRadio) _ctRadio.checked = true;
+    if (_isSvcC) {
+        if (typeof populateContractServiceDropdown === 'function') populateContractServiceDropdown();
+        const _setv = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === null || v === undefined) ? '' : v; };
+        _setv('ctrServiceId', c.serviceId || '');
+        _setv('ctrServiceSAC', c.serviceSAC || '');
+        _setv('ctrServiceDuration', c.serviceDuration || '');
+        _setv('ctrServicePaymentTerms', c.servicePaymentTerms || '');
+        _setv('ctrServiceName', c.product || '');
+    }
+    if (typeof onContractTypeChange === 'function') onContractTypeChange();
+
     // Bug fix #38 — Use innerHTML so the cog icon prefix from the sticky page
     // header is preserved when switching into Edit mode.
     document.getElementById('formTitle').innerHTML = '<i class="fas fa-cog" style="color:var(--accent-cyan); margin-right:8px;"></i>Edit: ' + (typeof pEsc === 'function' ? pEsc(c.client) : c.client); 
@@ -20550,6 +20734,14 @@ function resetForm() {
     
     currentProductsList = [];
     renderProductLineItems();
+
+    // 8DD — reset Contract Type to Subscription + clear service fields
+    var _ctSub = document.querySelector('input[name="contractType"][value="subscription"]');
+    if (_ctSub) _ctSub.checked = true;
+    ['ctrServiceId','ctrServiceSAC','ctrServiceDuration','ctrServicePaymentTerms','ctrServiceName'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    if (typeof onContractTypeChange === 'function') onContractTypeChange();
 }
 
 function getSelectedFYs() {
@@ -27615,7 +27807,7 @@ function convertProposalToContract(proposalId) {
     if (p.convertedContractIdx !== null && p.convertedContractIdx !== undefined) {
         if (!confirm(`This proposal has already been converted to a contract. Create another one anyway?`)) return;
     }
-    if (!p.lineItems || p.lineItems.length === 0) {
+    if (p.type !== 'service' && (!p.lineItems || p.lineItems.length === 0)) {
         alert("Proposal has no line items — cannot convert.");
         return;
     }
@@ -27638,7 +27830,42 @@ function convertProposalToContract(proposalId) {
         if (typeof resetForm === 'function') { try { resetForm(); } catch (e) {} }
         const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === null || v === undefined) ? '' : v; };
 
+        const isSvcProp = (p.type === 'service'); // 8DD — service proposals → service engagements
+        if (isSvcProp) {
+            const _svcRadio = document.querySelector('input[name="contractType"][value="service"]');
+            if (_svcRadio) _svcRadio.checked = true;
+            if (typeof onContractTypeChange === 'function') onContractTypeChange();
+        }
+
         setVal('client', p.clientName);
+        if (isSvcProp) {
+            // 8DD — map service-proposal fields onto the service contract form.
+            if (typeof populateContractServiceDropdown === 'function') populateContractServiceDropdown();
+            setVal('ctrServiceId', p.serviceId || '');
+            setVal('ctrServiceSAC', p.serviceSAC || '998313');
+            setVal('ctrServiceDuration', p.serviceDuration || '');
+            setVal('ctrServicePaymentTerms', p.servicePaymentTerms || '');
+            // Engagement name → c.product (what the registers display). Prefer
+            // the catalog service name; fall back to the proposal subject.
+            let _svcName = '';
+            try {
+                const _cat = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
+                const _rec = _cat.find(x => x.id === p.serviceId);
+                if (_rec && _rec.name) _svcName = _rec.name;
+            } catch (e) { /* non-fatal */ }
+            if (!_svcName) _svcName = (p.subject || '').replace(/^Proposal for /i, '').trim();
+            setVal('ctrServiceName', _svcName);
+            // Fee = total professional fee for the engagement (the 8V maths
+            // annualises it for storage on save and converts back on edit).
+            setVal('sellINR', (p.serviceFee && p.serviceFee > 0) ? p.serviceFee : totals.subtotal);
+            setVal('costCurrency', 'INR');
+            // Engagement dates → contract Start/End. Prefer engagementStart/End,
+            // then the proposal-level Start/End, then validUntil/today. End is
+            // left blank if unknown — the save gate requires the user to set it.
+            const _svcStart = p.engagementStart || p.startDate || p.validUntil || new Date().toISOString().slice(0, 10);
+            setVal('start', _svcStart);
+            setVal('endDate', p.engagementEnd || p.endDate || '');
+        } else {
         setVal('product', allProducts || firstLine.product || firstLine.oem || '');
         setVal('licenses', totalLicenses);
         // Currency: contracts use INR for sell
@@ -27658,6 +27885,7 @@ function convertProposalToContract(proposalId) {
             endStr = endD.toISOString().slice(0, 10);
         }
         setVal('endDate', endStr);
+        }
 
         // Phase 4C.2/4C.3 — inherit commercial routing (Q1 Option A)
         setVal('contractCommercialModel', p.commercialModel || 'Direct');
@@ -27682,7 +27910,7 @@ function convertProposalToContract(proposalId) {
                 const banner = document.createElement('div');
                 banner.id = 'convertedFromProposalBanner';
                 banner.style.cssText = 'background:rgba(16,185,129,0.08); border:1px solid var(--success); color:var(--success); padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:12.5px;';
-                banner.innerHTML = `<i class="fas fa-file-invoice"></i> Converting <strong>accepted proposal ${pEsc(p.proposalNumber)}</strong> to a contract. Review pre-populated fields below${allOems.length > 1 ? ` (includes ${allOems.length} OEMs)` : ''}, adjust cost/FX details, and save. ${(p.commercialModel && p.commercialModel !== 'Direct') ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-handshake"></i> Routing inherited from proposal: <strong>${pEsc(p.commercialModel)}</strong>${p.sourcedViaResellerKey ? ' via <strong>' + pEsc(p.sourcedViaResellerKey) + '</strong>' : ''}. (Stored on contract; will pre-fill future invoices.)</span>` : ''}<a href="#" onclick="showTab('proposalsTab'); setTimeout(()=>openProposalDetail('${p.id}'), 200); return false;" style="color:var(--success); text-decoration:underline; margin-left:6px;">← back to proposal</a>`;
+                banner.innerHTML = `<i class="fas fa-file-invoice"></i> Converting <strong>accepted ${isSvcProp ? 'service ' : ''}proposal ${pEsc(p.proposalNumber)}</strong> to a ${isSvcProp ? 'service engagement' : 'contract'}. Review pre-populated fields below${allOems.length > 1 ? ` (includes ${allOems.length} OEMs)` : ''}, ${isSvcProp ? 'confirm the fee and engagement dates' : 'adjust cost/FX details'}, and save. ${(p.commercialModel && p.commercialModel !== 'Direct') ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-handshake"></i> Routing inherited from proposal: <strong>${pEsc(p.commercialModel)}</strong>${p.sourcedViaResellerKey ? ' via <strong>' + pEsc(p.sourcedViaResellerKey) + '</strong>' : ''}. (Stored on contract; will pre-fill future invoices.)</span>` : ''}<a href="#" onclick="showTab('proposalsTab'); setTimeout(()=>openProposalDetail('${p.id}'), 200); return false;" style="color:var(--success); text-decoration:underline; margin-left:6px;">← back to proposal</a>`;
                 provHeader.insertAdjacentElement('afterend', banner);
             }
         }
@@ -33650,6 +33878,7 @@ function initRenewals() {
 // ===== Days-to-expiry computation =====
 function getContractDaysToExpiry(c) {
     if (!c || !c.endDate) return null;
+    if (c.type === 'service') return null; // 8DD — one-time engagements never renew
     const end = new Date(c.endDate); end.setHours(0,0,0,0);
     const now = new Date(); now.setHours(0,0,0,0);
     return Math.floor((end - now) / 86400000);
@@ -33657,6 +33886,7 @@ function getContractDaysToExpiry(c) {
 
 // Is this contract "upcoming for renewal" given a window in days
 function isContractRenewable(c, windowDays) {
+    if (c && c.type === 'service') return false; // 8DD — excluded from renewals
     const days = getContractDaysToExpiry(c);
     if (days === null) return false;
     // Include slightly past-due (up to 14 days past expiry) — these need urgent attention
@@ -33726,7 +33956,7 @@ function populateRenewalClientFilter() {
     if (!sel) return;
     const current = sel.value;
     const clients = new Set();
-    (contracts || []).forEach(c => { if (c.client && c.endDate) clients.add(c.client); });
+    (contracts || []).forEach(c => { if (c.client && c.endDate && c.type !== 'service') clients.add(c.client); }); // 8DD — service excluded
     sel.innerHTML = '<option value="ALL">All Clients</option>' + [...clients].sort().map(c => `<option value="${pEsc(c)}"${current === c ? ' selected' : ''}>${pEsc(c)}</option>`).join('');
 }
 
@@ -34248,7 +34478,7 @@ function copyRenewalOutreachToClipboard() {
 // ===== Excel export =====
 function exportRenewalsExcel() {
     if (typeof XLSX === 'undefined') { alert("SheetJS library not available."); return; }
-    const candidates = (contracts || []).filter(c => c.endDate).map((c, i) => {
+    const candidates = (contracts || []).filter(c => c.endDate && c.type !== 'service').map((c, i) => { // 8DD — service excluded
         const days = getContractDaysToExpiry(c);
         return {
             "Client": c.client,
@@ -39149,6 +39379,7 @@ function renderBusinessSnapshot() {
     // Renewals — contracts expiring in current FY
     const fyExpiring = (Array.isArray(contracts) ? contracts : []).filter(c => {
         if (!c || !c.endDate) return false;
+        if (c.type === 'service') return false; // 8DD — one-time engagements never renew
         const e = new Date(c.endDate);
         return e >= fy.start && e <= fy.end;
     });
@@ -39208,6 +39439,7 @@ function renderBusinessSnapshot() {
     // Column 1: Renewals due this month (≤30 days, not Confirmed/Lost)
     const urgentRenewals = (Array.isArray(contracts) ? contracts : []).filter(c => {
         if (!c || !c.endDate) return false;
+        if (c.type === 'service') return false; // 8DD — one-time engagements never renew
         const e = new Date(c.endDate);
         const daysOut = Math.floor((e - today) / 86400000);
         if (daysOut < 0 || daysOut > 30) return false;
@@ -39404,6 +39636,7 @@ function wbGatherBriefing() {
     let ren3160 = 0, ren6190 = 0;
     cons.forEach(c => {
         if (!c || !c.endDate) return;
+        if (c.type === 'service') return; // 8DD — one-time engagements never renew
         const e = new Date(c.endDate);
         if (isNaN(e.getTime())) return;
         const days = Math.floor((e - today) / 86400000);
@@ -41680,6 +41913,12 @@ function _caExportInferOemFromProduct(productStr) {
 // into c.product without setting c.oem.
 function _caExportEffectiveOem(c) {
     if (!c) return '';
+    // 8DD — service contracts have no OEM by definition. Returning '' here
+    // makes _caExportBusinessHeadForContract fall through to its existing
+    // 'SERVICE' default (the Business Head override on the contract still
+    // wins if set), and prevents product-string inference from mislabelling
+    // an engagement whose name happens to contain an OEM word.
+    if (c.type === 'service') return '';
     if (c.oem && String(c.oem).trim()) return String(c.oem).trim();
     return _caExportInferOemFromProduct(c.product || '');
 }
