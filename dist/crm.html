@@ -34145,6 +34145,7 @@ function renderRenewalList(candidates) {
                     <select class="ren-status-select ren-status-${stSlug}" onchange="quickChangeRenewalStatus(${i}, this.value)" onclick="event.stopPropagation()" title="Change renewal status">
                         ${RENEWAL_STATUSES.map(s => `<option value="${pEsc(s)}"${s === st ? ' selected' : ''}>${pEsc(s)}</option>`).join('')}
                     </select>
+                    <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); generateRenewalProposal(${i})" style="color:var(--accent-cyan);" title="Generate a renewal proposal pre-filled from this contract"><i class="fas fa-file-invoice"></i> Proposal</button>
                     <button class="btn btn-ghost btn-sm" onclick="openRenewalDetail(${i})" title="Renewal details &amp; activity log"><i class="fas fa-info-circle"></i> Details</button>
                     <button class="btn btn-ghost btn-sm" onclick="jumpToContract(${i})" title="Open contract" style="color:var(--text-dim);"><i class="fas fa-external-link-alt"></i></button>
                 </div>
@@ -34341,8 +34342,14 @@ function saveRenewalDetail() {
 }
 
 // ===== Generate Renewal Proposal =====
-function generateRenewalProposal() {
-    const idx = parseInt(document.getElementById('renDetailContractIdx').value);
+function generateRenewalProposal(contractIdx) {
+    // 8DE — accept an optional contract index so the button on each renewal
+    // ROW can call this directly as generateRenewalProposal(i). Called with no
+    // argument (from the Renewal Detail modal footer) it falls back to the
+    // modal's hidden field exactly as before — fully backward-compatible.
+    const idx = (contractIdx !== undefined && contractIdx !== null && contractIdx !== '')
+        ? parseInt(contractIdx)
+        : parseInt((document.getElementById('renDetailContractIdx') || {}).value);
     const c = contracts[idx];
     if (!c) return;
     if (typeof proposals === 'undefined' || typeof openProposalForm !== 'function') {
