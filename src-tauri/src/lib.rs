@@ -1247,6 +1247,20 @@ fn open_external_url<R: tauri::Runtime>(app: tauri::AppHandle<R>, url: String) -
     Ok(())
 }
 
+#[tauri::command]
+fn open_mailto<R: tauri::Runtime>(app: tauri::AppHandle<R>, url: String) -> Result<(), String> {
+    // Phase 8DI — companion to open_external_url for the invoice payment-reminder
+    // "Open in Mail" button. WKWebView won't open a bare mailto: link, and
+    // open_external_url refuses every non-http(s) scheme, so this dedicated
+    // command accepts ONLY the mailto: scheme and hands it to the OS default
+    // mail client via the same opener plugin.
+    if !url.starts_with("mailto:") {
+        return Err(format!("Refusing non-mailto scheme: {url}"));
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
 // ============================================================================
 // Phase 8C — Local file attachment opener
 //
@@ -3001,6 +3015,7 @@ pub fn run() {
             storage_save_consultant_payments,
             install_db_from_path,
             open_external_url,
+            open_mailto,
             reveal_onedrive_folder,
             generate_snapshot,
             get_snapshot_status,
