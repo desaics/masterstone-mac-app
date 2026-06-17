@@ -9692,6 +9692,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             <tr>
               <th>PO #</th>
               <th>OEM</th>
+              <th>End Client</th>
               <th>Subject</th>
               <th>Status</th>
               <th style="text-align:right;">Value</th>
@@ -28288,7 +28289,7 @@ function renderPOsListView(filtered) {
     const tbody = document.getElementById('poListBody');
     if (!tbody) return;
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding:40px 20px; color:var(--text-dim);">No POs match the current filters.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding:40px 20px; color:var(--text-dim);">No POs match the current filters.</td></tr>';
         return;
     }
     const rows = filtered.sort((a, b) => {
@@ -28305,6 +28306,7 @@ function renderPOsListView(filtered) {
         return `<tr class="clickable-row" onclick="openPODetail('${po.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(po.poNumber || '—')}${window.__msRegisterLocalFileIcon(_resolvedPo.localPath, true)}</td>
             <td style="font-weight:600;" title="${pEsc(po.oem || '')}">${pEsc(po.oem ? getOemDisplayName(po.oem) : '—')}${foreign ? '<span class="po-foreign-flag">Foreign</span>' : ''}</td>
+            <td title="${pEsc(po.endClient || '')}" style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${po.endClient ? pEsc(po.endClient) : '<span style="color:var(--text-dim);">—</span>'}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(formatProductForDisplay(po.subject || ''))}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
             <td style="text-align:right; font-weight:700;">${fmtPoCcy(totals.grandTotal, po.currency)}</td>
