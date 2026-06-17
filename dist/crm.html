@@ -11985,7 +11985,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
     <input type="hidden" id="invReminderInvId" value="">
 
-    <div id="invReminderToRow" style="font-size:12.5px; margin-bottom:12px; padding:8px 10px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px;"></div>
+    <div style="margin-bottom:12px;">
+      <label>Send to (email)</label>
+      <input type="text" id="invReminderToEmail" placeholder="name@company.com" style="font-family:inherit;">
+      <div id="invReminderToHint" style="font-size:11px; color:var(--text-dim); margin-top:4px;"></div>
+    </div>
 
     <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
       <select id="invReminderTone" onchange="refreshInvoiceReminderPreview()" style="width:220px;">
@@ -34570,6 +34574,18 @@ function openInvoiceReminderModal(invId) {
     const tone = od <= 0 ? 'gentle' : (od <= 21 ? 'firm' : 'final');
     const toneSel = document.getElementById('invReminderTone');
     if (toneSel) toneSel.value = tone;
+    // 8DI — pre-fill the editable recipient field (ONCE, on open) from the
+    // Client Master. Deliberately not done in refresh() so switching tone
+    // never clobbers an address the user typed in by hand.
+    const who = _invReminderResolveClient(inv);
+    const emailEl = document.getElementById('invReminderToEmail');
+    if (emailEl) emailEl.value = who.email || '';
+    const hintEl = document.getElementById('invReminderToHint');
+    if (hintEl) {
+        hintEl.innerHTML = who.email
+            ? `<i class="fas fa-user" style="color:var(--accent-cyan);"></i> Pre-filled from Client Master (${pEsc(who.contact || who.display)}). Edit if needed.`
+            : `<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> No email on file for ${pEsc(who.display || who.name || 'this client')} — type one above to use Open in Mail.`;
+    }
     refreshInvoiceReminderPreview();
     document.getElementById('invReminderModal').style.display = 'flex';
 }
@@ -34594,12 +34610,9 @@ function refreshInvoiceReminderPreview() {
     const senderName = (companyProfile && companyProfile.signatoryName) || 'Accounts Team';
     const companyName = (companyProfile && (companyProfile.tradingName || companyProfile.legalName)) || 'Masterstone';
 
-    const toRow = document.getElementById('invReminderToRow');
-    if (toRow) {
-        toRow.innerHTML = who.email
-            ? `<i class="fas fa-user" style="color:var(--accent-cyan);"></i> To: <strong>${pEsc(who.contact || who.display)}</strong> &lt;${pEsc(who.email)}&gt;`
-            : `<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> No email on file for <strong>${pEsc(who.display || who.name || 'this client')}</strong> in the Client Master — copy the text below, or add a contact email to enable a pre-filled "Open in Mail".`;
-    }
+    // 8DI — recipient is now an editable field (invReminderToEmail), pre-filled
+    // once on open in openInvoiceReminderModal(); not touched here so switching
+    // tone never clobbers a manually-typed address.
 
     const refLine = `Invoice ${invNo} dated ${invDateStr} for ${amt}`;
     let subject, body;
@@ -34638,25 +34651,37 @@ function _invReminderFallbackCopy(text) {
 }
 
 function openInvoiceReminderInMail() {
-    const inv = _invReminderFind(document.getElementById('invReminderInvId').value);
-    if (!inv) return;
-    const who = _invReminderResolveClient(inv);
+    // 8DI — recipient comes from the editable field now (manual entry).
+    const email = (document.getElementById('invReminderToEmail').value || '').trim();
     const subject = document.getElementById('invReminderSubject').value;
     const body = document.getElementById('invReminderBody').value;
-    const mailto = `mailto:${encodeURIComponent(who.email || '')}` +
+    const mailto = `mailto:${encodeURIComponent(email)}` +
                    `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    // WKWebView: window.open() returns null, but navigating to a mailto: URL
-    // hands off to the OS default mail client (the app already uses mailto:
-    // links elsewhere). Transient anchor click; location.href as a fallback.
+    // Primary path: hand the mailto: to macOS via the Rust opener (open_mailto,
+    // added in 8DI). WKWebView won't open mailto: itself, and the app's
+    // http-only opener (open_external_url) refuses it — hence the dedicated
+    // command. Anchor/location fallback only matters in a non-Tauri (dev) browser.
+    const t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+    if (t && t.invoke) {
+        t.invoke('open_mailto', { url: mailto }).then(() => {
+            if (typeof showProspectToast === 'function') {
+                showProspectToast(email
+                    ? `<i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> Opening your mail app…`
+                    : `<i class="fas fa-info-circle"></i> Opening your mail app — add the recipient there.`, 4000);
+            }
+        }).catch((err) => {
+            console.error('open_mailto failed:', err);
+            _invReminderMailFallback(mailto);
+        });
+        return;
+    }
+    _invReminderMailFallback(mailto);
+}
+function _invReminderMailFallback(mailto) {
     try {
         const a = document.createElement('a');
         a.href = mailto; a.style.display = 'none';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        if (typeof showProspectToast === 'function') {
-            showProspectToast(who.email
-                ? `<i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> Opening your mail app…`
-                : `<i class="fas fa-info-circle"></i> Opened your mail app — add the recipient (no client email on file).`, 4500);
-        }
     } catch (e) {
         try { window.location.href = mailto; } catch (_) {}
     }
