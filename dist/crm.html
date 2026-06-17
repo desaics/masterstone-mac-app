@@ -11972,6 +11972,48 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
   </div>
 </div>
 
+<!-- Phase 8DH — Invoice Payment Reminder modal. Mirrors the renewal-outreach
+     modal: generate an editable draft, then Copy to Clipboard or Open in Mail.
+     The app never sends mail itself (no credentials; WKWebView sandbox). -->
+<div id="invReminderModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 720px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h2 style="font-size:18px; margin:0;"><i class="fas fa-bell" style="color:var(--accent-cyan);"></i> Payment Reminder</h2>
+      <button class="btn btn-ghost" onclick="closeInvoiceReminderModal()" style="border:none;"><i class="fas fa-times" style="font-size:18px;"></i></button>
+    </div>
+    <div style="font-size:12px; color:var(--text-dim); margin-bottom:12px;">Pre-written reminder — review, tweak, then copy it or open it in your mail app.</div>
+
+    <input type="hidden" id="invReminderInvId" value="">
+
+    <div id="invReminderToRow" style="font-size:12.5px; margin-bottom:12px; padding:8px 10px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px;"></div>
+
+    <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+      <select id="invReminderTone" onchange="refreshInvoiceReminderPreview()" style="width:220px;">
+        <option value="gentle">Gentle — friendly nudge</option>
+        <option value="firm">Firm — past due</option>
+        <option value="final">Final Notice — long overdue</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" onclick="copyInvoiceReminderToClipboard()" title="Copy to clipboard"><i class="fas fa-copy"></i> Copy to Clipboard</button>
+      <button class="btn btn-ghost btn-sm" onclick="openInvoiceReminderInMail()" title="Open in your default mail app" style="color:var(--accent-cyan);"><i class="fas fa-paper-plane"></i> Open in Mail</button>
+    </div>
+
+    <div>
+      <label>Subject</label>
+      <input type="text" id="invReminderSubject" style="font-family:inherit;">
+    </div>
+    <div style="margin-top:12px;">
+      <label>Body</label>
+      <textarea id="invReminderBody" rows="14" class="ren-email-preview" style="width:100%;"></textarea>
+    </div>
+
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:18px;">
+      <button class="btn btn-ghost" onclick="closeInvoiceReminderModal()">Close</button>
+      <button class="btn btn-ghost" onclick="copyInvoiceReminderToClipboard()"><i class="fas fa-copy"></i> Copy Email</button>
+      <button class="btn btn-primary" onclick="openInvoiceReminderInMail()"><i class="fas fa-paper-plane"></i> Open in Mail</button>
+    </div>
+  </div>
+</div>
+
 <!-- Global Attachments Manager Modal (Phase 3 ATT-1) -->
 <div id="attachmentsManagerModal" class="modal" style="display:none;">
   <div class="modal-content" style="max-width: 920px;">
@@ -30869,6 +30911,7 @@ function renderInvoicesListView(filtered) {
             <td>${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</td>
             <td>${daysCell}</td>
             <td style="text-align:right;">
+                ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceReminderModal('${inv.id}')" title="Send payment reminder" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i></button>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : 'Download PDF'}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceDetail('${inv.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
@@ -31777,6 +31820,7 @@ function renderInvoiceDetail(inv) {
             ${hasSignedPdf ? `<button class="btn btn-ghost btn-sm" onclick="triggerSignedPdfUpload('${inv.id}')" title="Replace the signed PDF with a new file"><i class="fas fa-redo" style="color:var(--text-dim);"></i> Replace</button>` : ''}
             ${inv.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markInvoiceIssued('${inv.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
             ${isInvoiceOutstanding(inv) ? `<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${inv.id}', null)" style="background:var(--success);"><i class="fas fa-money-check-alt"></i> Record Payment</button>` : ''}
+            ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="openInvoiceReminderModal('${inv.id}')" title="Draft a payment reminder email" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i> Send Reminder</button>` : ''}
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid' || inv.status === 'Paid') ? `<button class="btn btn-ghost btn-sm" onclick="issueCreditNoteForInvoice('${inv.id}')" style="color:var(--purple);" title="Issue credit note against this invoice"><i class="fas fa-file-contract"></i> Credit Note</button>` : ''}
             ${inv.status === 'Credit Note Issued' ? `<button class="btn btn-ghost btn-sm" onclick="editCreditNoteForInvoice('${inv.id}')" style="color:var(--purple);" title="Edit credit note details"><i class="fas fa-edit"></i> Edit CN</button>` : ''}
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid') ? `<button class="btn btn-ghost btn-sm" onclick="markInvoiceCancelled('${inv.id}')" style="color:var(--danger);"><i class="fas fa-ban"></i> Cancel</button>` : ''}
@@ -34481,6 +34525,140 @@ function copyRenewalOutreachToClipboard() {
         ta.select();
         try { document.execCommand('copy'); if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-check"></i> Copied.`); } catch (e) {}
         document.body.removeChild(ta);
+    }
+}
+
+// ===== Phase 8DH — Invoice Payment Reminders =====
+// Same shape as the renewal-outreach generator: build an editable draft, then
+// the user copies it or opens it in their own mail client. The app never sends
+// mail directly (no stored credentials; WKWebView blocks programmatic send) —
+// outbound mail leaving from the user's own client is also the correct boundary.
+
+// Resolve recipient (name + email) for an invoice from the Client Master.
+// Prefers the primary entry in the contacts[] array, then legacy scalar
+// fields. Returns the short display name too (for greetings / the To row).
+function _invReminderResolveClient(inv) {
+    const name = (inv && (inv.clientName || inv.client)) || '';
+    let email = '', contact = '';
+    try {
+        if (typeof clientMaster === 'object' && clientMaster && name && typeof cmKey === 'function') {
+            const rec = clientMaster[cmKey(name)];
+            if (rec) {
+                let primary = null;
+                if (Array.isArray(rec.contacts) && rec.contacts.length) {
+                    primary = rec.contacts.find(c => c && c.isPrimary) || rec.contacts[0];
+                }
+                email = (primary && primary.email) || rec.contactEmail || rec.email || '';
+                contact = (primary && primary.name) || rec.contactName || '';
+            }
+        }
+    } catch (_) {}
+    const display = (typeof getClientDisplayName === 'function') ? getClientDisplayName(name) : name;
+    return { name, display, email: String(email || '').trim(), contact: String(contact || '').trim() };
+}
+
+function _invReminderFind(invId) {
+    return (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices.find(x => x.id === invId) : null;
+}
+
+function openInvoiceReminderModal(invId) {
+    const inv = _invReminderFind(invId);
+    if (!inv) { alert("Invoice not found."); return; }
+    document.getElementById('invReminderInvId').value = invId;
+    // Default tone by how overdue: not yet / barely → gentle; up to 3 weeks → firm; beyond → final.
+    const od = (typeof invDaysOverdue === 'function') ? invDaysOverdue(inv) : 0;
+    const tone = od <= 0 ? 'gentle' : (od <= 21 ? 'firm' : 'final');
+    const toneSel = document.getElementById('invReminderTone');
+    if (toneSel) toneSel.value = tone;
+    refreshInvoiceReminderPreview();
+    document.getElementById('invReminderModal').style.display = 'flex';
+}
+
+function closeInvoiceReminderModal() {
+    const m = document.getElementById('invReminderModal');
+    if (m) m.style.display = 'none';
+}
+
+function refreshInvoiceReminderPreview() {
+    const inv = _invReminderFind(document.getElementById('invReminderInvId').value);
+    if (!inv) return;
+    const tone = document.getElementById('invReminderTone').value;
+    const who = _invReminderResolveClient(inv);
+    const firstName = who.contact ? who.contact.split(' ')[0] : '';
+    const greetName = firstName || who.display || 'there';
+    const invNo = inv.invoiceNumber || '(no number)';
+    const invDateStr = inv.invoiceDate ? formatDateReadable(inv.invoiceDate) : '—';
+    const dueStr = inv.dueDate ? formatDateReadable(inv.dueDate) : '—';
+    const amt = fmtInr((inv.amountOutstanding > 0) ? inv.amountOutstanding : inv.grandTotal);
+    const od = (typeof invDaysOverdue === 'function') ? invDaysOverdue(inv) : 0;
+    const senderName = (companyProfile && companyProfile.signatoryName) || 'Accounts Team';
+    const companyName = (companyProfile && (companyProfile.tradingName || companyProfile.legalName)) || 'Masterstone';
+
+    const toRow = document.getElementById('invReminderToRow');
+    if (toRow) {
+        toRow.innerHTML = who.email
+            ? `<i class="fas fa-user" style="color:var(--accent-cyan);"></i> To: <strong>${pEsc(who.contact || who.display)}</strong> &lt;${pEsc(who.email)}&gt;`
+            : `<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> No email on file for <strong>${pEsc(who.display || who.name || 'this client')}</strong> in the Client Master — copy the text below, or add a contact email to enable a pre-filled "Open in Mail".`;
+    }
+
+    const refLine = `Invoice ${invNo} dated ${invDateStr} for ${amt}`;
+    let subject, body;
+    if (tone === 'gentle') {
+        subject = `Payment reminder — Invoice ${invNo} (${amt})`;
+        body = `Dear ${greetName},\n\nI hope you're doing well. This is a friendly reminder regarding ${refLine}, which ${od > 0 ? `was due on ${dueStr}` : `is due on ${dueStr}`}.\n\nThe amount currently outstanding is ${amt}. If payment is already in process, please disregard this note — otherwise, we'd be grateful if you could arrange it at your earliest convenience.\n\nDo let me know if you'd like a fresh copy of the invoice or any supporting documents.\n\nWarm regards,\n${senderName}\n${companyName}`;
+    } else if (tone === 'final') {
+        subject = `FINAL NOTICE — Invoice ${invNo} overdue ${od} days (${amt})`;
+        body = `Dear ${greetName},\n\nDespite our earlier reminders, ${refLine} remains unpaid and is now ${od} days past its due date of ${dueStr}.\n\nThe outstanding amount of ${amt} is now significantly overdue. We request that you settle this in full within 3 business days to avoid further action and a possible hold on services.\n\nIf payment has been made in the last day or two, kindly share the transaction reference so we can reconcile our records. If there is any dispute or difficulty, please contact me directly so we can resolve it promptly.\n\nRegards,\n${senderName}\n${companyName}`;
+    } else {
+        subject = `Overdue: Invoice ${invNo} — ${od > 0 ? `${od} days past due` : 'payment due'} (${amt})`;
+        body = `Dear ${greetName},\n\nThis is a reminder that ${refLine} ${od > 0 ? `is now ${od} days past due (due date: ${dueStr})` : `is due on ${dueStr}`}.\n\nThe outstanding balance is ${amt}. We'd appreciate prompt settlement to keep the account in good standing. If you've already made the payment, please share the reference details so we can update our records.\n\nPlease let me know if anything is holding up the payment — I'm happy to help resolve it.\n\nRegards,\n${senderName}\n${companyName}`;
+    }
+    document.getElementById('invReminderSubject').value = subject;
+    document.getElementById('invReminderBody').value = body;
+}
+
+function copyInvoiceReminderToClipboard() {
+    const subject = document.getElementById('invReminderSubject').value;
+    const body = document.getElementById('invReminderBody').value;
+    const fullEmail = `Subject: ${subject}\n\n${body}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(fullEmail).then(() => {
+            if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Reminder copied to clipboard. Paste into Gmail/Outlook.`);
+        }).catch(() => _invReminderFallbackCopy(fullEmail));
+    } else {
+        _invReminderFallbackCopy(fullEmail);
+    }
+}
+function _invReminderFallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-check"></i> Copied.`); } catch (e) {}
+    document.body.removeChild(ta);
+}
+
+function openInvoiceReminderInMail() {
+    const inv = _invReminderFind(document.getElementById('invReminderInvId').value);
+    if (!inv) return;
+    const who = _invReminderResolveClient(inv);
+    const subject = document.getElementById('invReminderSubject').value;
+    const body = document.getElementById('invReminderBody').value;
+    const mailto = `mailto:${encodeURIComponent(who.email || '')}` +
+                   `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    // WKWebView: window.open() returns null, but navigating to a mailto: URL
+    // hands off to the OS default mail client (the app already uses mailto:
+    // links elsewhere). Transient anchor click; location.href as a fallback.
+    try {
+        const a = document.createElement('a');
+        a.href = mailto; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        if (typeof showProspectToast === 'function') {
+            showProspectToast(who.email
+                ? `<i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> Opening your mail app…`
+                : `<i class="fas fa-info-circle"></i> Opened your mail app — add the recipient (no client email on file).`, 4500);
+        }
+    } catch (e) {
+        try { window.location.href = mailto; } catch (_) {}
     }
 }
 
