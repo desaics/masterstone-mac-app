@@ -31506,6 +31506,31 @@ function updateInvoiceRoutingBanner() {
     banner.style.display = 'block';
 }
 
+// ===== Phase 8DK — default HSN / SAC for an auto-filled invoice line =====
+// Picks the tax code for a line item pre-filled from a contract:
+//   • Service engagements  → the contract's SAC (carries c.serviceSAC; falls
+//     back to 998313 = IT consulting). This also closes the 8DD follow-up —
+//     invoicing a service cycle now carries the SAC, not just the product name.
+//   • Darktrace contracts  → HSN 85238020 (goods HSN Masterstone bills Darktrace
+//     under), per the standing instruction for all Darktrace invoices.
+//   • Everything else      → 998316 (IT software / SaaS subscription), as before.
+function _isDarktraceOem(oem) {
+    if (!oem) return false;
+    if (String(oem).trim().toLowerCase().indexOf('darktrace') !== -1) return true;
+    // Also match if the OEM's display alias (OEM Master shortName) is Darktrace.
+    try {
+        var m = (typeof oemMetadata === 'object' && oemMetadata) ? oemMetadata[oem] : null;
+        if (m && String(m.shortName || '').trim().toLowerCase().indexOf('darktrace') !== -1) return true;
+    } catch (_) {}
+    return false;
+}
+function _invoiceDefaultTaxCode(c) {
+    if (!c) return '998316';
+    if (c.type === 'service') return (c.serviceSAC && String(c.serviceSAC).trim()) || '998313';
+    if (_isDarktraceOem(c.oem)) return '85238020';
+    return '998316';
+}
+
 // Called automatically on contract change (if invoice blank) and when cycle is selected.
 // Populates: subject, line items (product, HSN, qty=licenses, unit price = cycle or contract sell), GST%.
 // Does NOT overwrite user-entered client, billing address, dates, or terms.
@@ -31534,7 +31559,7 @@ function autoPopulateInvoiceFromContract(c, cycleIdx) {
     // Build single line item
     const li = invoiceLineItemBlank();
     li.product = c.product ? (c.oem ? `${c.oem} ${c.product}` : c.product) : '';
-    li.hsnCode = '998316';                // Standard HSN for IT software/SaaS; user can edit
+    li.hsnCode = _invoiceDefaultTaxCode(c);   // 8DK — Darktrace→85238020, service→SAC, else 998316
     li.qty = parseInt(c.licenses) || 1;
     li.unit = 'Licenses';
     li.unitPrice = li.qty > 0 ? (amount / li.qty) : amount;
@@ -31600,7 +31625,7 @@ function prefillLineItemFromContract() {
     if (!amount) amount = parseFloat(c.sellINR) || 0;
     const li = invoiceLineItemBlank();
     li.product = c.product || '';
-    li.hsnCode = '998316';    // Default HSN for IT software subscription; user can edit
+    li.hsnCode = _invoiceDefaultTaxCode(c);   // 8DK — Darktrace→85238020, service→SAC, else 998316
     li.qty = parseInt(c.licenses) || 1;
     li.unit = 'Licenses';
     li.unitPrice = li.qty > 0 ? (amount / li.qty) : amount;
@@ -33781,7 +33806,7 @@ function generateInvoiceFromContractCycle(cIdx, yIdx) {
             const cycleRev = baseSell * (cycle.ratio || 1);
             const li = invoiceLineItemBlank();
             li.product = `${contract.product || ''}${cycleDateStr ? ' — Cycle ' + cycleNum : ''}`;
-            li.hsnCode = '998316';
+            li.hsnCode = _invoiceDefaultTaxCode(contract);   // 8DK — Darktrace→85238020, service→SAC, else 998316
             li.qty = parseInt(contract.licenses) || 1;
             li.unit = 'Licenses';
             li.unitPrice = li.qty > 0 ? (cycleRev / (1 + ((li.gstPct || 18) / 100)) / li.qty) : cycleRev;
