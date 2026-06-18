@@ -31514,12 +31514,15 @@ function updateInvoiceRoutingBanner() {
 //   • Darktrace contracts  → HSN 85238020 (goods HSN Masterstone bills Darktrace
 //     under), per the standing instruction for all Darktrace invoices.
 //   • Everything else      → 998316 (IT software / SaaS subscription), as before.
-function _isDarktraceOem(oem) {
-    if (!oem) return false;
-    if (String(oem).trim().toLowerCase().indexOf('darktrace') !== -1) return true;
-    // Also match if the OEM's display alias (OEM Master shortName) is Darktrace.
+// 8DK.1 — "Darktrace" can live in the OEM field OR the product name (some
+// contracts carry it in the product, e.g. "Darktrace (DT Network)" with a
+// blank/aliased OEM), so we test BOTH, plus the OEM-Master shortName alias.
+function _mentionsDarktrace(s) {
+    if (!s) return false;
+    if (String(s).trim().toLowerCase().indexOf('darktrace') !== -1) return true;
+    // Also match if this is an OEM key whose display alias (shortName) is Darktrace.
     try {
-        var m = (typeof oemMetadata === 'object' && oemMetadata) ? oemMetadata[oem] : null;
+        var m = (typeof oemMetadata === 'object' && oemMetadata) ? oemMetadata[s] : null;
         if (m && String(m.shortName || '').trim().toLowerCase().indexOf('darktrace') !== -1) return true;
     } catch (_) {}
     return false;
@@ -31527,7 +31530,7 @@ function _isDarktraceOem(oem) {
 function _invoiceDefaultTaxCode(c) {
     if (!c) return '998316';
     if (c.type === 'service') return (c.serviceSAC && String(c.serviceSAC).trim()) || '998313';
-    if (_isDarktraceOem(c.oem)) return '85238020';
+    if (_mentionsDarktrace(c.oem) || _mentionsDarktrace(c.product)) return '85238020';
     return '998316';
 }
 
