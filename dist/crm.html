@@ -6414,6 +6414,30 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             + a + '>' + innerHtml + '</a>';
     };
 
+    // 8DJ — Client-invoice link with saved-PDF priority. If a CRM invoice with
+    // this number has a signed PDF on file (signedPdfAttachmentId), the invoice
+    // number itself opens that PDF (same action as the paperclip pin); otherwise
+    // it falls back to the standard document anchor (local path, then OneDrive
+    // URL). This makes the invoice-number hyperlink behave consistently — saved
+    // PDF if available, else the OneDrive link — across every contract that
+    // references the same invoice.
+    window.__msClientInvoiceLink = function (invNo, localPath, url, attrs, innerHtml) {
+        try {
+            if (invNo && typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+                var inv = invoices.find(function (x) { return x && x.invoiceNumber === invNo; });
+                if (inv && inv.signedPdfAttachmentId && inv.id) {
+                    var safeId = String(inv.id)
+                        .replace(/&/g, '&amp;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;');
+                    return '<a href="#" onclick="event.stopPropagation(); window.__msOpenSignedInvoicePdf(\''
+                        + safeId + '\'); return false;" ' + (attrs || '') + '>' + innerHtml + '</a>';
+                }
+            }
+        } catch (e) { /* fall through to the standard document anchor */ }
+        return window.__msDocAnchor(localPath, url, attrs, innerHtml);
+    };
+
 
     // ---- 5. Production cutover reminder banner -----------------------------
     // Subtle one-time banner shown until the user dismisses or marks cutover.
@@ -19657,6 +19681,10 @@ function scrollToContract(id) {
 
 function renderContracts() {
     const cont = document.querySelector('.contractBody'); if(!cont) return; 
+    // 8DJ — keep shared-invoice paid dates in sync before rendering the
+    // Invoicing Lifecycle tables (self-heals any cycle whose invoice was paid
+    // on a different contract). No-op/idempotent once everything is in sync.
+    try { _reconcileSharedInvoicePaidDates(); } catch (e) { console.warn('Shared-invoice reconcile:', e); }
     const rows = [];
     
     const pf = document.getElementById('portfolioClientFilter');
@@ -19824,8 +19852,8 @@ function renderContracts() {
                 let cInvText = ''; let cInvDate = ''; let cPaidDate = '';
                 if (y.arInvoices && y.arInvoices.length > 0) {
                      cInvText = y.arInvoices.map(inv => {
-                        const anchor = window.__msDocAnchor(inv.localPath, inv.link,
-                            'style="color:var(--accent-cyan); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;" title="Open client invoice"',
+                        const anchor = window.__msClientInvoiceLink(inv.invNo, inv.localPath, inv.link,
+                            'style="color:var(--accent-cyan); text-decoration:none; display:block; white-space:nowrap; margin-bottom:4px;" title="Open client invoice (saved PDF if available)"',
                             `<i class="fas fa-file-invoice"></i> ${inv.invNo || 'View Invoice'}`);
                         // 8AU — append paperclip pin (opens signed PDF) when the
                         // CRM invoice with this number has a signedPdfAttachmentId.
@@ -19838,8 +19866,8 @@ function renderContracts() {
                      cPaidDate = y.arInvoices.map(inv => `<div style="margin-bottom:4px; height:18px;">${inv.paidDate ? '<span class="badge ok" style="padding:2px 4px; font-size:10px;">'+formatDateReadable(inv.paidDate)+'</span>' : '<span class="badge pending" style="padding:2px 4px; font-size:10px;">Pending</span>'}</div>`).join('');
                 } else {
                      let dispInv = y.clientInvoiceNo || 'View Invoice';
-                     const baseInv = (window.__msDocAnchor(y.clientInvoiceLocalPath, y.clientInvoiceLink,
-                            'style="color:var(--accent-cyan); text-decoration:none;" title="Open client invoice"',
+                     const baseInv = (window.__msClientInvoiceLink(y.clientInvoiceNo, y.clientInvoiceLocalPath, y.clientInvoiceLink,
+                            'style="color:var(--accent-cyan); text-decoration:none;" title="Open client invoice (saved PDF if available)"',
                             `<i class="fas fa-file-invoice"></i> ${dispInv}`)
                          ) || (y.clientInvoiceNo ? `<span style="color:var(--text-main); font-weight:500;">${y.clientInvoiceNo}</span>` : '<span style="color:var(--text-dim);">-</span>');
                      // 8AU — also pin in the legacy single-invoice fallback path
@@ -30568,6 +30596,67 @@ function refreshInvoiceComputedFields(inv) {
 // and mirror its state onto the cycle. If none, clear the cycle's invoice
 // fields. This handles the deletion / cancellation cases too — when the only
 // invoice for a cycle is gone, the cycle reverts to "not invoiced".
+// 8DJ — Shared-invoice paid-date reconciliation. A single CRM invoice can
+// appear in more than one contract's Invoicing Lifecycle when one invoice bills
+// cycles across multiple contracts: the invoice links to ONE cycle (via
+// linkedContractIdx / linkedCycleYearIdx) and the other contracts reference the
+// same invoice number through a manual arInvoices[] entry (or the legacy
+// clientInvoiceNo field). _propagateInvoiceToContractCycle only updates the
+// linked cycle, so recording a payment left the OTHER contract(s) showing
+// "Pending". This reconciler pushes each CRM invoice's current paid date onto
+// every contract-cycle reference that shares its number. References whose number
+// does NOT match any CRM invoice (purely manual entries) are left untouched.
+function _reconcileSharedInvoicePaidDates() {
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return;
+    if (typeof invoices === 'undefined' || !Array.isArray(invoices)) return;
+    const byNo = {};
+    invoices.forEach(inv => {
+        if (!inv || !inv.invoiceNumber) return;
+        let d = '';
+        if (inv.status === 'Paid' && inv.paidAt) {
+            d = String(inv.paidAt).slice(0, 10);
+        } else if (Array.isArray(inv.payments) && inv.payments.length > 0) {
+            const ds = inv.payments.map(p => p.date).filter(Boolean).sort();
+            d = ds[ds.length - 1] || '';
+        }
+        byNo[inv.invoiceNumber] = { paidDate: d, fullyPaid: inv.status === 'Paid' };
+    });
+    let changed = false;
+    contracts.forEach(ct => {
+        if (!ct || !Array.isArray(ct.billingYears)) return;
+        ct.billingYears.forEach(by => {
+            if (!by) return;
+            if (Array.isArray(by.arInvoices)) {
+                by.arInvoices.forEach(entry => {
+                    if (!entry || !entry.invNo) return;
+                    const ref = byNo[entry.invNo];
+                    if (ref && (entry.paidDate || '') !== (ref.paidDate || '')) {
+                        entry.paidDate = ref.paidDate || '';
+                        changed = true;
+                    }
+                });
+            }
+            // Legacy single-invoice fields
+            if (by.clientInvoiceNo && byNo[by.clientInvoiceNo]) {
+                const ref = byNo[by.clientInvoiceNo];
+                if ((by.paymentDate || '') !== (ref.paidDate || '')) {
+                    by.paymentDate = ref.paidDate || null;
+                    changed = true;
+                }
+                if (!!by.paid !== !!ref.fullyPaid) {
+                    by.paid = !!ref.fullyPaid;
+                    changed = true;
+                }
+            }
+        });
+    });
+    if (changed) {
+        try {
+            if (typeof safeSetStorage === 'function') safeSetStorage(JSON.stringify(contracts));
+        } catch (e) { console.warn('Contracts save (shared-invoice reconcile):', e); }
+    }
+}
+
 function _propagateInvoiceToContractCycle(inv) {
     if (!inv) return;
     const cIdx = (inv.linkedContractIdx === '' || inv.linkedContractIdx === null || inv.linkedContractIdx === undefined)
@@ -32301,6 +32390,8 @@ function savePaymentFromForm() {
     // propagation and the snapshot refresh, so Net Cash stayed stale until a later
     // reload / Portfolio render synced the cycle (same pattern as Mark Issued / Cancel).
     try { _propagateInvoiceToContractCycle(inv); } catch (e) { console.warn('Cycle propagation:', e); }
+    // 8DJ — also sync the paid date onto any OTHER contract sharing this invoice.
+    try { _reconcileSharedInvoicePaidDates(); } catch (e) { console.warn('Shared-invoice reconcile:', e); }
     closePaymentModal();
     renderInvoiceDetail(inv);
     renderInvoicesPage();
@@ -32322,6 +32413,8 @@ function deletePaymentFromForm() {
     // 8CS — keep the contract cycle + snapshot in sync when a payment is removed
     // (downgrades the cycle's paid status if it's no longer fully paid).
     try { _propagateInvoiceToContractCycle(inv); } catch (e) { console.warn('Cycle propagation:', e); }
+    // 8DJ — re-sync shared-invoice paid dates after a payment is removed.
+    try { _reconcileSharedInvoicePaidDates(); } catch (e) { console.warn('Shared-invoice reconcile:', e); }
     closePaymentModal();
     renderInvoiceDetail(inv);
     renderInvoicesPage();
