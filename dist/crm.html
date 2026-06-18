@@ -14146,6 +14146,24 @@ function migrateClientMasterRecord(rec) {
     // Assign IDs to any entry missing one
     rec.contacts.forEach(c => { if (!c.id) { c.id = meNewId('c'); changed = true; } });
 
+    // 8DL — ensure each contact has a function-routing roles object
+    // ({invoice|proposal|renewal: ''|'to'|'cc'}). Defaults empty; the resolver
+    // falls back to the primary contact when nothing is tagged. POs are not
+    // here — they route from OEM Master (Option A).
+    rec.contacts.forEach(c => {
+        if (!c.roles || typeof c.roles !== 'object' || Array.isArray(c.roles)) {
+            c.roles = { invoice: '', proposal: '', renewal: '' };
+            changed = true;
+        } else {
+            ['invoice', 'proposal', 'renewal'].forEach(k => {
+                if (c.roles[k] !== 'to' && c.roles[k] !== 'cc' && c.roles[k] !== '') {
+                    c.roles[k] = '';
+                    changed = true;
+                }
+            });
+        }
+    });
+
     // GSTINs
     if (!Array.isArray(rec.gstEntries)) { rec.gstEntries = []; changed = true; }
     if (rec.gstEntries.length === 0 && rec.gstin && rec.gstin.trim() !== '') {
@@ -14448,8 +14466,23 @@ function renderShipAddrContainer(entries) {
 
 // ============ Multi-entry CONTACTS (item 3) ============
 
+// 8DL — one To/Cc/— selector for a single document type on a contact row.
+// kind ∈ 'invoice'|'proposal'|'renewal'. (POs route from OEM Master, not here.)
+function _cmRoleSelectHtml(roleKey, label, current) {
+    const v = current || '';
+    return `<div style="display:flex; align-items:center; gap:6px;">
+        <span style="font-size:11px; color:var(--text-dim); min-width:58px;">${label}</span>
+        <select class="me-contact-role" data-role="${roleKey}" style="width:78px; font-size:11.5px; padding:3px 6px;">
+          <option value="">—</option>
+          <option value="to"${v === 'to' ? ' selected' : ''}>To</option>
+          <option value="cc"${v === 'cc' ? ' selected' : ''}>Cc</option>
+        </select>
+      </div>`;
+}
+
 function buildCmContactRow(entry) {
     const e = entry || { id: meNewId('c'), name: '', designation: '', dept: '', email: '', phone: '', isPrimary: false };
+    const r = (e.roles && typeof e.roles === 'object') ? e.roles : {};
     return `
     <div class="multi-entry-row${e.isPrimary ? ' is-primary' : ''}" data-contact-id="${meEsc(e.id)}">
       <div class="me-header">
@@ -14471,6 +14504,14 @@ function buildCmContactRow(entry) {
       <div class="cm-form-grid-2">
         <div><label style="font-size:11px;">Email</label><input type="email" class="me-contact-email" value="${meEsc(e.email)}" placeholder="email@company.com"></div>
         <div><label style="font-size:11px;">Phone</label><input type="tel" class="me-contact-phone" value="${meEsc(e.phone)}" placeholder="+91 XXXXX XXXXX"></div>
+      </div>
+      <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--glass-border);">
+        <label style="font-size:11px; display:block; margin-bottom:6px;"><i class="fas fa-paper-plane" style="color:var(--accent-cyan); font-size:10px;"></i> Receives emails as <span style="color:var(--text-dim); font-weight:normal;">— pre-fills To/Cc when you send each document (still editable at send time)</span></label>
+        <div style="display:flex; gap:18px; flex-wrap:wrap;">
+          ${_cmRoleSelectHtml('invoice', 'Invoice', r.invoice)}
+          ${_cmRoleSelectHtml('proposal', 'Proposal', r.proposal)}
+          ${_cmRoleSelectHtml('renewal', 'Renewal', r.renewal)}
+        </div>
       </div>
     </div>`;
 }
@@ -14494,6 +14535,11 @@ function readCmContactsFromForm() {
     const rows = document.querySelectorAll('#cmContactsContainer .multi-entry-row');
     const out = [];
     rows.forEach(row => {
+        const roles = { invoice: '', proposal: '', renewal: '' };
+        row.querySelectorAll('.me-contact-role').forEach(sel => {
+            const k = sel.getAttribute('data-role');
+            if (k && Object.prototype.hasOwnProperty.call(roles, k)) roles[k] = sel.value || '';
+        });
         out.push({
             id: row.getAttribute('data-contact-id'),
             name: (row.querySelector('.me-contact-name').value || '').trim(),
@@ -14501,6 +14547,7 @@ function readCmContactsFromForm() {
             dept: (row.querySelector('.me-contact-dept').value || '').trim(),
             email: (row.querySelector('.me-contact-email').value || '').trim(),
             phone: (row.querySelector('.me-contact-phone').value || '').trim(),
+            roles: roles,
             isPrimary: row.classList.contains('is-primary')
         });
     });
@@ -14533,6 +14580,51 @@ function cmSetPrimaryContact(id) {
     const current = readCmContactsFromForm();
     current.forEach(c => { c.isPrimary = (c.id === id); });
     renderCmContactsContainer(current);
+}
+
+// 8DL — resolve To/Cc recipients for a document email from a client's
+// function-specific contact routing. kind ∈ 'invoice'|'proposal'|'renewal'.
+// Returns { to: [{name,email}], cc: [{name,email}] }. Contacts with no email
+// are skipped (can't route to them). If nobody is explicitly tagged To for
+// this kind, falls back to the primary contact, then the first contact with
+// an email — so sending still works before any routing is configured.
+// (POs route from OEM Master, not from here — Option A.)
+function resolveDocRecipients(kind, clientName) {
+    const out = { to: [], cc: [] };
+    if (!clientName || typeof clientMaster !== 'object' || !clientMaster || typeof cmKey !== 'function') return out;
+    const rec = clientMaster[cmKey(clientName)];
+    if (!rec || !Array.isArray(rec.contacts)) return out;
+    rec.contacts.forEach(c => {
+        if (!c) return;
+        const email = String(c.email || '').trim();
+        if (!email) return;
+        const role = (c.roles && c.roles[kind]) || '';
+        if (role === 'to') out.to.push({ name: c.name || '', email: email });
+        else if (role === 'cc') out.cc.push({ name: c.name || '', email: email });
+    });
+    if (out.to.length === 0) {
+        const prim = rec.contacts.find(c => c && c.isPrimary && String(c.email || '').trim())
+                  || rec.contacts.find(c => c && String(c.email || '').trim());
+        if (prim) out.to.push({ name: prim.name || '', email: String(prim.email).trim() });
+    }
+    return out;
+}
+
+// 8DL — flatten a recipient list to a de-duplicated, comma-separated email
+// string for an editable To/Cc field (and for building mailto: links).
+function recipientsToEmailString(list) {
+    if (!Array.isArray(list)) return '';
+    const seen = {};
+    const emails = [];
+    list.forEach(r => {
+        const e = String((r && r.email) || '').trim();
+        if (!e) return;
+        const key = e.toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        emails.push(e);
+    });
+    return emails.join(', ');
 }
 
 // When GSTINs change, billing addresses' linked-GST dropdowns need refreshing
