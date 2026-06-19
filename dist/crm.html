@@ -7871,6 +7871,43 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             </div>
         </div>
 
+        <!-- 8DM — Email Templates (subject + body per outbound email type & tone) -->
+        <div style="background:var(--glass-panel); border:1px solid var(--glass-border); border-left:3px solid var(--purple); border-radius:6px; padding:14px 16px; margin-bottom:12px; margin-top:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:12px; font-weight:700; color:var(--purple); text-transform:uppercase; letter-spacing:0.6px;"><i class="fas fa-envelope-open-text"></i> Email Templates</div>
+            </div>
+            <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:12px; line-height:1.5;">
+                The subject &amp; body used when you send invoices, proposals, purchase orders, payment reminders and renewal reminders. Pick a document type and tone, edit the text, then Save. The <strong>{{placeholders}}</strong> below are filled in automatically at send time — and everything stays editable in the send window.
+            </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+                <div style="flex:1; min-width:210px;">
+                    <label>Document type</label>
+                    <select id="cpEmailTplKind" onchange="cpEmailTplOnKindChange()"></select>
+                </div>
+                <div style="flex:1; min-width:150px;">
+                    <label>Tone</label>
+                    <select id="cpEmailTplTone" onchange="cpEmailTplOnToneChange()"></select>
+                </div>
+            </div>
+            <div style="margin-bottom:10px;">
+                <label>Subject</label>
+                <input type="text" id="cpEmailTplSubject" onfocus="window.__cpEmailTplLastFocus='subject'" placeholder="Email subject line">
+            </div>
+            <div style="margin-bottom:8px;">
+                <label>Body</label>
+                <textarea id="cpEmailTplBody" rows="11" style="width:100%; resize:vertical; font-family:inherit;" onfocus="window.__cpEmailTplLastFocus='body'" placeholder="Email body..."></textarea>
+            </div>
+            <div style="margin-bottom:10px;">
+                <div style="font-size:10.5px; color:var(--text-dim); margin-bottom:5px;">Insert a placeholder (click to add at the cursor):</div>
+                <div id="cpEmailTplTokens" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <button type="button" class="tpl-action-btn primary" onclick="cpEmailTplSave()"><i class="fas fa-save"></i> Save Template</button>
+                <button type="button" class="tpl-action-btn" onclick="cpEmailTplReset()"><i class="fas fa-rotate-left"></i> Reset to Default</button>
+                <span id="cpEmailTplSavedNote" style="display:none; font-size:11px; color:var(--success);"><i class="fas fa-check"></i> Saved</span>
+            </div>
+        </div>
+
         </div><!-- end data-syscat=templates -->
 
         <!-- Save bar (visible on both Company and Templates sub-tabs since cpSave persists both) -->
@@ -13461,6 +13498,234 @@ function initCompanyProfile() {
     }
 }
 
+// ===================== Phase 8DM — Email Templates =====================
+// Configurable subject + body for each outbound email type, per tone. Stored
+// in companyProfile.emailTemplates; seeded with the defaults below. The send
+// modals (8DN) read these via getEmailTemplate() and fill {{tokens}} with
+// _emailFillTokens(). Everything stays editable at send time.
+
+function _emailTemplatesDefaults() {
+    return {
+        invoiceReminder: {
+            gentle: {
+                subject: "Gentle reminder: Invoice {{InvoiceNumber}} from {{CompanyName}}",
+                body: "Dear {{ContactName}},\n\nI hope you are well. This is a gentle reminder that invoice {{InvoiceNumber}} dated {{InvoiceDate}} for INR {{Amount}} was due on {{DueDate}}. If payment is already in process, please disregard this note.\n\nDo let me know if you need a copy of the invoice or any supporting documents.\n\nWarm regards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            firm: {
+                subject: "Payment overdue: Invoice {{InvoiceNumber}} ({{DaysOverdue}} days)",
+                body: "Dear {{ContactName}},\n\nOur records show that invoice {{InvoiceNumber}} dated {{InvoiceDate}} for INR {{Amount}} is now {{DaysOverdue}} days overdue (due date: {{DueDate}}). We request you to arrange payment at the earliest to keep services running smoothly.\n\nPlease share the payment reference once processed, or let us know if there is any issue we can help resolve.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            final: {
+                subject: "Final notice: Invoice {{InvoiceNumber}} - immediate attention required",
+                body: "Dear {{ContactName}},\n\nDespite earlier reminders, invoice {{InvoiceNumber}} dated {{InvoiceDate}} for INR {{Amount}} remains unpaid and is now {{DaysOverdue}} days overdue. This is a final reminder requesting payment within 3 working days to avoid suspension of services and applicable interest as per our terms.\n\nIf payment has already been made, kindly share the transaction reference immediately.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            }
+        },
+        sendInvoice: {
+            professional: {
+                subject: "Invoice {{InvoiceNumber}} from {{CompanyName}}",
+                body: "Dear {{ContactName}},\n\nPlease find attached invoice {{InvoiceNumber}} dated {{InvoiceDate}} for INR {{Amount}}, due on {{DueDate}}.\n\nKindly process the payment as per the terms mentioned on the invoice. Do let me know if you require any additional documentation for your records.\n\nThank you for your business.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            friendly: {
+                subject: "Here is your invoice {{InvoiceNumber}}",
+                body: "Hi {{ContactName}},\n\nThanks again for working with us. Attached is invoice {{InvoiceNumber}} for INR {{Amount}}, due {{DueDate}}.\n\nIf anything looks off or you need it in a different format, just let me know and I will sort it out.\n\nBest,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            brief: {
+                subject: "Invoice {{InvoiceNumber}} - INR {{Amount}}",
+                body: "Dear {{ContactName}},\n\nPlease find attached invoice {{InvoiceNumber}} for INR {{Amount}}, due {{DueDate}}.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            }
+        },
+        sendProposal: {
+            professional: {
+                subject: "Proposal {{ProposalNumber}} from {{CompanyName}}",
+                body: "Dear {{ContactName}},\n\nThank you for the opportunity. Please find attached our proposal {{ProposalNumber}} - {{ProposalSubject}} - for your review.\n\nThe proposal is valid until {{ValidUntil}}. I would be glad to walk you through the details or address any questions at your convenience.\n\nLooking forward to your feedback.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            friendly: {
+                subject: "Our proposal for {{ProposalSubject}}",
+                body: "Hi {{ContactName}},\n\nGreat speaking with you. As discussed, I have attached our proposal ({{ProposalNumber}}) for {{ProposalSubject}}.\n\nHave a look whenever you get a chance - happy to jump on a quick call to talk it through. It is valid until {{ValidUntil}}.\n\nBest,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            brief: {
+                subject: "Proposal {{ProposalNumber}} - {{ProposalSubject}}",
+                body: "Dear {{ContactName}},\n\nPlease find attached proposal {{ProposalNumber}} for {{ProposalSubject}}, valid until {{ValidUntil}}.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            }
+        },
+        sendPO: {
+            standard: {
+                subject: "Purchase Order {{PONumber}} from {{CompanyName}}",
+                body: "Dear {{ContactName}},\n\nPlease find attached our Purchase Order {{PONumber}} for {{POSubject}}.\n\nKindly acknowledge receipt and confirm the expected delivery / activation timeline. Please quote our PO number on all invoices and correspondence relating to this order.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            brief: {
+                subject: "PO {{PONumber}} - {{OEMName}}",
+                body: "Dear {{ContactName}},\n\nPlease find attached Purchase Order {{PONumber}} for {{POSubject}}. Kindly acknowledge and confirm the delivery timeline.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            }
+        },
+        renewalReminder: {
+            gentle: {
+                subject: "Upcoming renewal: {{Product}} (expires {{ExpiryDate}})",
+                body: "Dear {{ContactName}},\n\nA quick heads-up that your {{Product}} subscription is due for renewal on {{ExpiryDate}} - {{DaysToExpiry}} days away.\n\nTo ensure uninterrupted coverage, we would recommend initiating the renewal shortly. I would be happy to share a renewal quote or answer any questions.\n\nWarm regards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            firm: {
+                subject: "Action needed: {{Product}} renewal due {{ExpiryDate}}",
+                body: "Dear {{ContactName}},\n\nYour {{Product}} subscription expires on {{ExpiryDate}}, just {{DaysToExpiry}} days from now. To avoid any lapse in protection, please confirm the renewal at the earliest so we can process it in time.\n\nShall I send across the renewal proposal for your approval?\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            },
+            final: {
+                subject: "Final reminder: {{Product}} expires {{ExpiryDate}}",
+                body: "Dear {{ContactName}},\n\nThis is a final reminder that your {{Product}} subscription expires on {{ExpiryDate}} ({{DaysToExpiry}} days remaining). Once it lapses, protection and support will be suspended until renewed.\n\nKindly confirm the renewal urgently so we can prevent any interruption.\n\nRegards,\n{{SenderName}}\n{{CompanyName}}"
+            }
+        }
+    };
+}
+
+var EMAIL_TEMPLATE_KINDS = [
+    { key: 'invoiceReminder', label: 'Invoice Payment Reminder',
+      tones: [{ key: 'gentle', label: 'Gentle' }, { key: 'firm', label: 'Firm' }, { key: 'final', label: 'Final' }],
+      tokens: ['ContactName', 'ClientName', 'CompanyName', 'SenderName', 'InvoiceNumber', 'InvoiceDate', 'DueDate', 'Amount', 'DaysOverdue', 'Date'] },
+    { key: 'sendInvoice', label: 'Send Invoice to Client',
+      tones: [{ key: 'professional', label: 'Professional' }, { key: 'friendly', label: 'Friendly' }, { key: 'brief', label: 'Brief' }],
+      tokens: ['ContactName', 'ClientName', 'CompanyName', 'SenderName', 'InvoiceNumber', 'InvoiceDate', 'DueDate', 'Amount', 'Date'] },
+    { key: 'sendProposal', label: 'Send Proposal',
+      tones: [{ key: 'professional', label: 'Professional' }, { key: 'friendly', label: 'Friendly' }, { key: 'brief', label: 'Brief' }],
+      tokens: ['ContactName', 'ClientName', 'CompanyName', 'SenderName', 'ProposalNumber', 'ProposalSubject', 'ProposalTotal', 'ValidUntil', 'Date'] },
+    { key: 'sendPO', label: 'Send Purchase Order (to OEM)',
+      tones: [{ key: 'standard', label: 'Standard' }, { key: 'brief', label: 'Brief' }],
+      tokens: ['ContactName', 'OEMName', 'CompanyName', 'SenderName', 'PONumber', 'POSubject', 'POTotal', 'Date'] },
+    { key: 'renewalReminder', label: 'Renewal Reminder',
+      tones: [{ key: 'gentle', label: 'Gentle' }, { key: 'firm', label: 'Firm' }, { key: 'final', label: 'Final' }],
+      tokens: ['ContactName', 'ClientName', 'CompanyName', 'SenderName', 'Product', 'ExpiryDate', 'DaysToExpiry', 'Date'] }
+];
+function _emailKindMeta(kind) {
+    for (var i = 0; i < EMAIL_TEMPLATE_KINDS.length; i++) { if (EMAIL_TEMPLATE_KINDS[i].key === kind) return EMAIL_TEMPLATE_KINDS[i]; }
+    return null;
+}
+
+// Replace {{Token}} with values from ctx (case-insensitive). Unknown tokens are
+// left as-is so the user can see anything that did not resolve.
+function _emailFillTokens(text, ctx) {
+    if (!text) return '';
+    ctx = ctx || {};
+    var map = {};
+    Object.keys(ctx).forEach(function (k) { map[k.toLowerCase()] = ctx[k]; });
+    return String(text).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, function (m, key) {
+        var v = map[String(key).toLowerCase()];
+        return (v === undefined || v === null) ? m : String(v);
+    });
+}
+
+// Return {subject, body} for a kind+tone, falling back to the built-in default.
+function getEmailTemplate(kind, tone) {
+    var defs = _emailTemplatesDefaults();
+    var store = (companyProfile && companyProfile.emailTemplates) || {};
+    var k = (store[kind] && store[kind][tone]) ? store[kind][tone]
+          : (defs[kind] && defs[kind][tone]) ? defs[kind][tone]
+          : { subject: '', body: '' };
+    return { subject: k.subject || '', body: k.body || '' };
+}
+
+// Ensure companyProfile.emailTemplates exists and contains every kind+tone
+// (deep-merges in any newly added defaults). Idempotent; saves only if changed.
+function ensureEmailTemplatesInitialized() {
+    var defs = _emailTemplatesDefaults();
+    if (!companyProfile.emailTemplates || typeof companyProfile.emailTemplates !== 'object' || Array.isArray(companyProfile.emailTemplates)) {
+        companyProfile.emailTemplates = {};
+    }
+    var changed = false;
+    Object.keys(defs).forEach(function (kind) {
+        if (!companyProfile.emailTemplates[kind] || typeof companyProfile.emailTemplates[kind] !== 'object') {
+            companyProfile.emailTemplates[kind] = {}; changed = true;
+        }
+        Object.keys(defs[kind]).forEach(function (tone) {
+            var cur = companyProfile.emailTemplates[kind][tone];
+            if (!cur || typeof cur !== 'object' || typeof cur.subject !== 'string' || typeof cur.body !== 'string') {
+                companyProfile.emailTemplates[kind][tone] = { subject: defs[kind][tone].subject, body: defs[kind][tone].body };
+                changed = true;
+            }
+        });
+    });
+    if (changed) { try { saveCompanyProfile(); } catch (e) {} }
+    return companyProfile.emailTemplates;
+}
+
+// ---- System Controls -> Templates -> Email Templates editor ----
+window.__cpEmailTplLastFocus = 'body';
+function cpEmailTplInit() {
+    ensureEmailTemplatesInitialized();
+    var kindSel = document.getElementById('cpEmailTplKind');
+    if (!kindSel) return;
+    if (!kindSel.options.length) {
+        EMAIL_TEMPLATE_KINDS.forEach(function (k) {
+            var o = document.createElement('option'); o.value = k.key; o.textContent = k.label; kindSel.appendChild(o);
+        });
+    }
+    cpEmailTplOnKindChange();
+}
+function cpEmailTplOnKindChange() {
+    var kindSel = document.getElementById('cpEmailTplKind');
+    var toneSel = document.getElementById('cpEmailTplTone');
+    if (!kindSel || !toneSel) return;
+    var meta = _emailKindMeta(kindSel.value) || EMAIL_TEMPLATE_KINDS[0];
+    toneSel.innerHTML = '';
+    meta.tones.forEach(function (t) {
+        var o = document.createElement('option'); o.value = t.key; o.textContent = t.label; toneSel.appendChild(o);
+    });
+    _cpEmailTplRenderTokens(meta);
+    cpEmailTplOnToneChange();
+}
+function cpEmailTplOnToneChange() {
+    var kind = (document.getElementById('cpEmailTplKind') || {}).value;
+    var tone = (document.getElementById('cpEmailTplTone') || {}).value;
+    if (!kind || !tone) return;
+    var t = getEmailTemplate(kind, tone);
+    var subj = document.getElementById('cpEmailTplSubject');
+    var body = document.getElementById('cpEmailTplBody');
+    if (subj) subj.value = t.subject;
+    if (body) body.value = t.body;
+    var note = document.getElementById('cpEmailTplSavedNote'); if (note) note.style.display = 'none';
+}
+function _cpEmailTplRenderTokens(meta) {
+    var box = document.getElementById('cpEmailTplTokens');
+    if (!box) return;
+    box.innerHTML = (meta.tokens || []).map(function (tk) {
+        return '<button type="button" class="tpl-action-btn" style="font-size:10.5px; padding:2px 8px;" onclick="cpEmailTplInsertToken(\'' + tk + '\')">{{' + tk + '}}</button>';
+    }).join(' ');
+}
+function cpEmailTplInsertToken(tk) {
+    var id = (window.__cpEmailTplLastFocus === 'subject') ? 'cpEmailTplSubject' : 'cpEmailTplBody';
+    var el = document.getElementById(id);
+    if (!el) return;
+    var ins = '{{' + tk + '}}';
+    var s = el.selectionStart != null ? el.selectionStart : el.value.length;
+    var e = el.selectionEnd != null ? el.selectionEnd : el.value.length;
+    el.value = el.value.slice(0, s) + ins + el.value.slice(e);
+    var pos = s + ins.length;
+    el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {}
+}
+function cpEmailTplSave() {
+    ensureEmailTemplatesInitialized();
+    var kind = (document.getElementById('cpEmailTplKind') || {}).value;
+    var tone = (document.getElementById('cpEmailTplTone') || {}).value;
+    if (!kind || !tone) return;
+    var subj = (document.getElementById('cpEmailTplSubject') || {}).value || '';
+    var body = (document.getElementById('cpEmailTplBody') || {}).value || '';
+    if (!companyProfile.emailTemplates[kind]) companyProfile.emailTemplates[kind] = {};
+    companyProfile.emailTemplates[kind][tone] = { subject: subj, body: body };
+    saveCompanyProfile();
+    var note = document.getElementById('cpEmailTplSavedNote');
+    if (note) { note.style.display = 'inline'; setTimeout(function () { if (note) note.style.display = 'none'; }, 2500); }
+}
+function cpEmailTplReset() {
+    var kind = (document.getElementById('cpEmailTplKind') || {}).value;
+    var tone = (document.getElementById('cpEmailTplTone') || {}).value;
+    if (!kind || !tone) return;
+    if (!confirm('Reset this template to the built-in default? Your custom text for this type and tone will be lost.')) return;
+    var defs = _emailTemplatesDefaults();
+    if (defs[kind] && defs[kind][tone]) {
+        if (!companyProfile.emailTemplates) companyProfile.emailTemplates = {};
+        if (!companyProfile.emailTemplates[kind]) companyProfile.emailTemplates[kind] = {};
+        companyProfile.emailTemplates[kind][tone] = { subject: defs[kind][tone].subject, body: defs[kind][tone].body };
+        saveCompanyProfile();
+        cpEmailTplOnToneChange();
+    }
+}
+
 function saveCompanyProfile() {
     try { localStorage.setItem(COMPANY_PROFILE_KEY, JSON.stringify(companyProfile)); }
     catch (e) { console.error("Company Profile save failed", e); alert("Unable to save Company Profile. Storage quota may be exceeded — try removing a large letterhead or logo."); }
@@ -13764,6 +14029,7 @@ window.__cpTplActiveId = { proposal: null, po: null, invoice: null };
 // Load the template library UI for all three types in Company Profile
 function cpTplLoadLibraryAll() {
     ensureTermsTemplatesInitialized();
+    try { if (typeof cpEmailTplInit === 'function') cpEmailTplInit(); } catch (e) { console.warn('Email templates init:', e); }
     ['proposal', 'po', 'invoice'].forEach(type => {
         cpTplRefreshPicker(type);
         const def = getDefaultTemplate(type);
