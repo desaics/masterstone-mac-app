@@ -20838,7 +20838,7 @@ function renderContracts() {
                                     </div>
                                 </div>
                                 <div style="display:flex; gap:8px;">
-                                    ${(() => { const _d = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('contract', String(i)) : []; return _d.length ? `<button onclick="event.stopPropagation(); openContractDocsViewer(${i})" class="btn btn-ghost btn-sm" title="View attached documents"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Documents (${_d.length})</button>` : ''; })()}
+                                    ${(() => { const _d = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('contract', String(i)) : []; if (!_d.length) return ''; const _t = _d.map(a => ((a.description || '').trim() || a.filename || 'document')).join(', '); return `<button onclick="event.stopPropagation(); openContractDocsViewer(${i})" class="btn btn-ghost btn-sm" title="${pEsc(_t)}"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Documents (${_d.length})</button>`; })()}
                                     <button onclick="event.stopPropagation(); editContract(${i})" class="btn btn-warn btn-sm"><i class="fas fa-edit"></i> Edit</button>
                                     <button onclick="event.stopPropagation(); deleteContract(${i})" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Delete</button>
                                 </div>
@@ -42736,10 +42736,16 @@ function openContractDocsViewer(contractIdx) {
         cont.innerHTML = list.map(function (a) {
             const canOpen = !!a.dataUrl;
             const sizeStr = (typeof fmtBytes === 'function') ? fmtBytes(a.sizeBytes) : '';
-            const meta = [a.description || '', sizeStr].filter(Boolean).join(' · ');
+            const desc = (a.description || '').trim();
+            const fname = a.filename || 'document';
+            // 8DS — the description is the human label the user gave the file, so
+            // show it prominently; the filename + size go on the line beneath.
+            // Falls back to the filename when no description was entered.
+            const primary = desc || fname;
+            const secondary = [desc ? fname : '', sizeStr].filter(Boolean).join(' · ');
             return '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--glass-border); border-radius:6px; margin-bottom:8px;">'
-                + '<div style="min-width:0;"><div style="font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><i class="fas fa-file-pdf" style="color:var(--accent-cyan); margin-right:6px;"></i>' + pEsc(a.filename || 'document') + '</div>'
-                + (meta ? '<div style="font-size:10.5px; color:var(--text-dim); margin-top:2px;">' + pEsc(meta) + '</div>' : '') + '</div>'
+                + '<div style="min-width:0;"><div style="font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><i class="fas fa-file-pdf" style="color:var(--accent-cyan); margin-right:6px;"></i>' + pEsc(primary) + '</div>'
+                + (secondary ? '<div style="font-size:10.5px; color:var(--text-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + pEsc(secondary) + '</div>' : '') + '</div>'
                 + '<div style="display:flex; gap:6px; flex-shrink:0;">'
                 + '<button class="btn btn-ghost btn-sm" onclick="window.__msOpenAttachmentPdf(\'' + pEsc(a.id) + '\')"' + (canOpen ? '' : ' disabled') + ' title="Open to view"><i class="fas fa-eye"></i> Open</button>'
                 + '<button class="btn btn-ghost btn-sm" onclick="downloadAttachment(\'' + pEsc(a.id) + '\')" title="Download"><i class="fas fa-download"></i></button>'
