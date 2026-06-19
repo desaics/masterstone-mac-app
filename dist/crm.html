@@ -11034,7 +11034,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     <div class="prospect-form-grid-3">
       <div>
         <label>Subtotal (₹) *</label>
-        <input type="text" inputmode="decimal" class="js-money" id="conPaySubtotal" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
+        <input type="text" inputmode="decimal" class="js-money" id="conPaySubtotal" min="0" step="0.01" value="0" oninput="recomputeConPayGst()">
       </div>
       <div>
         <label style="display:flex; align-items:center; gap:8px;">
@@ -11046,7 +11046,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
       <div id="conPayGstAmountWrap" style="display:none;">
         <label>GST Amount (₹)</label>
         <input type="text" inputmode="decimal" class="js-money" id="conPayGstAmount" min="0" step="0.01" value="0" oninput="recomputeConPayTotal()">
-        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Enter directly from invoice. Not computed from %.</div>
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Auto-calculated at 18% of subtotal — edit if your invoice differs.</div>
       </div>
     </div>
     <div style="margin-top:16px; padding:14px 18px; background:var(--detail-bg); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
@@ -42213,10 +42213,12 @@ function onConPayGstToggle() {
     const wrap = document.getElementById('conPayGstAmountWrap');
     if (!cb || !wrap) return;
     wrap.style.display = cb.checked ? '' : 'none';
-    if (!cb.checked) {
+    if (cb.checked) {
+        recomputeConPayGst();
+    } else {
         document.getElementById('conPayGstAmount').value = '0';
+        recomputeConPayTotal();
     }
-    recomputeConPayTotal();
 }
 
 function onConPayStatusChange() {
@@ -42232,10 +42234,23 @@ function onConPayStatusChange() {
     }
 }
 
+// 8DP — GST on consultancy/professional services is 18%. The GST amount field
+// now auto-fills from the subtotal, but stays editable for invoices that differ.
+const CON_PAY_GST_RATE = 0.18;
+function _conPayNum(id) { const el = document.getElementById(id); return parseFloat(__msStripCommas(el ? el.value : '')) || 0; }
+function recomputeConPayGst() {
+    const cb = document.getElementById('conPayGstApplicable');
+    const gstEl = document.getElementById('conPayGstAmount');
+    if (cb && cb.checked && gstEl) {
+        const gst = Math.round(_conPayNum('conPaySubtotal') * CON_PAY_GST_RATE * 100) / 100;
+        gstEl.value = gst.toLocaleString('en-IN', { minimumFractionDigits: (gst % 1 ? 2 : 0), maximumFractionDigits: 2 });
+    }
+    recomputeConPayTotal();
+}
 function recomputeConPayTotal() {
-    const sub = parseFloat(document.getElementById('conPaySubtotal').value) || 0;
+    const sub = _conPayNum('conPaySubtotal');
     const gstApp = document.getElementById('conPayGstApplicable').checked;
-    const gst = gstApp ? (parseFloat(document.getElementById('conPayGstAmount').value) || 0) : 0;
+    const gst = gstApp ? _conPayNum('conPayGstAmount') : 0;
     const total = sub + gst;
     const disp = document.getElementById('conPayTotalDisplay');
     if (disp) disp.innerText = '₹' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
