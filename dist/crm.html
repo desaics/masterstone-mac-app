@@ -14468,11 +14468,14 @@ function renderShipAddrContainer(entries) {
 
 // 8DL — one To/Cc/— selector for a single document type on a contact row.
 // kind ∈ 'invoice'|'proposal'|'renewal'. (POs route from OEM Master, not here.)
-function _cmRoleSelectHtml(roleKey, label, current) {
+// 8DL.1 — shared by Client Master AND Reseller Master; reseller rows pass a
+// distinct class so the two editors' DOM contexts stay isolated.
+function _cmRoleSelectHtml(roleKey, label, current, cls) {
     const v = current || '';
+    const c = cls || 'me-contact-role';
     return `<div style="display:flex; align-items:center; gap:6px;">
         <span style="font-size:11px; color:var(--text-dim); min-width:58px;">${label}</span>
-        <select class="me-contact-role" data-role="${roleKey}" style="width:78px; font-size:11.5px; padding:3px 6px;">
+        <select class="${c}" data-role="${roleKey}" style="width:78px; font-size:11.5px; padding:3px 6px;">
           <option value="">—</option>
           <option value="to"${v === 'to' ? ' selected' : ''}>To</option>
           <option value="cc"${v === 'cc' ? ' selected' : ''}>Cc</option>
@@ -14582,17 +14585,17 @@ function cmSetPrimaryContact(id) {
     renderCmContactsContainer(current);
 }
 
-// 8DL — resolve To/Cc recipients for a document email from a client's
-// function-specific contact routing. kind ∈ 'invoice'|'proposal'|'renewal'.
+// 8DL — resolve To/Cc recipients for a document email from a contact-bearing
+// record's function-specific routing. kind ∈ 'invoice'|'proposal'|'renewal'.
 // Returns { to: [{name,email}], cc: [{name,email}] }. Contacts with no email
 // are skipped (can't route to them). If nobody is explicitly tagged To for
 // this kind, falls back to the primary contact, then the first contact with
 // an email — so sending still works before any routing is configured.
 // (POs route from OEM Master, not from here — Option A.)
-function resolveDocRecipients(kind, clientName) {
+// 8DL.1 — core extracted so the SAME logic serves both Client Master and
+// Reseller Master records (identical contacts[]/roles shape).
+function _resolveRecipientsFromContacts(kind, rec) {
     const out = { to: [], cc: [] };
-    if (!clientName || typeof clientMaster !== 'object' || !clientMaster || typeof cmKey !== 'function') return out;
-    const rec = clientMaster[cmKey(clientName)];
     if (!rec || !Array.isArray(rec.contacts)) return out;
     rec.contacts.forEach(c => {
         if (!c) return;
@@ -14608,6 +14611,38 @@ function resolveDocRecipients(kind, clientName) {
         if (prim) out.to.push({ name: prim.name || '', email: String(prim.email).trim() });
     }
     return out;
+}
+
+// Resolve from the END CLIENT's routing (Client Master).
+function resolveDocRecipients(kind, clientName) {
+    if (!clientName || typeof clientMaster !== 'object' || !clientMaster || typeof cmKey !== 'function') return { to: [], cc: [] };
+    return _resolveRecipientsFromContacts(kind, clientMaster[cmKey(clientName)]);
+}
+
+// 8DL.1 — resolve from a RESELLER's routing (Reseller Master).
+function resolveResellerDocRecipients(kind, resellerKey) {
+    if (!resellerKey || typeof resellerMaster !== 'object' || !resellerMaster || typeof rmKey !== 'function') return { to: [], cc: [] };
+    return _resolveRecipientsFromContacts(kind, resellerMaster[rmKey(resellerKey)]);
+}
+
+// 8DL.1 — top-level recipient resolution for a document email (invoice /
+// proposal / contract-renewal). Honours the document's commercial routing:
+// a RESALE deal billed through a reseller resolves from the RESELLER's
+// contacts (Masterstone bills the reseller, who bills their own end client);
+// Direct and Commission deals resolve from the END CLIENT's contacts.
+// Returns { to, cc, via:'reseller'|'client', party:<name> } — `via`/`party`
+// let the send window show who it's actually addressing.
+function resolveEntityRecipients(kind, entity) {
+    const model = (entity && entity.commercialModel) || 'Direct';
+    const rkey  = (entity && entity.sourcedViaResellerKey) || '';
+    if (model === 'Resale' && rkey && typeof resellerMaster === 'object' && resellerMaster &&
+        typeof rmKey === 'function' && resellerMaster[rmKey(rkey)]) {
+        const r = resolveResellerDocRecipients(kind, rkey);
+        return { to: r.to, cc: r.cc, via: 'reseller', party: rkey };
+    }
+    const clientName = (entity && (entity.clientName || entity.client)) || '';
+    const c = resolveDocRecipients(kind, clientName);
+    return { to: c.to, cc: c.cc, via: 'client', party: clientName };
 }
 
 // 8DL — flatten a recipient list to a de-duplicated, comma-separated email
@@ -36173,6 +36208,7 @@ function rmBlankRecord(name) {
 
 function rmBuildContactRow(entry) {
     const e = entry || { id: meNewId('rc'), name: '', designation: '', dept: '', email: '', phone: '', isPrimary: false };
+    const r = (e.roles && typeof e.roles === 'object') ? e.roles : {};
     return `
     <div class="multi-entry-row${e.isPrimary ? ' is-primary' : ''}" data-rmcontact-id="${meEsc(e.id)}">
       <div class="me-header">
@@ -36195,6 +36231,14 @@ function rmBuildContactRow(entry) {
         <div><label style="font-size:11px;">Email</label><input type="email" class="rm-me-contact-email" value="${meEsc(e.email)}" placeholder="email@company.com"></div>
         <div><label style="font-size:11px;">Phone</label><input type="tel" class="rm-me-contact-phone" value="${meEsc(e.phone)}" placeholder="+91 XXXXX XXXXX"></div>
       </div>
+      <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--glass-border);">
+        <label style="font-size:11px; display:block; margin-bottom:6px;"><i class="fas fa-paper-plane" style="color:var(--accent-cyan); font-size:10px;"></i> Receives emails as <span style="color:var(--text-dim); font-weight:normal;">— used for resale deals billed through this reseller (still editable at send time)</span></label>
+        <div style="display:flex; gap:18px; flex-wrap:wrap;">
+          ${_cmRoleSelectHtml('invoice', 'Invoice', r.invoice, 'rm-me-contact-role')}
+          ${_cmRoleSelectHtml('proposal', 'Proposal', r.proposal, 'rm-me-contact-role')}
+          ${_cmRoleSelectHtml('renewal', 'Renewal', r.renewal, 'rm-me-contact-role')}
+        </div>
+      </div>
     </div>`;
 }
 
@@ -36216,6 +36260,11 @@ function rmReadContactsFromForm() {
     const rows = document.querySelectorAll('#rmContactsContainer .multi-entry-row');
     const out = [];
     rows.forEach(row => {
+        const roles = { invoice: '', proposal: '', renewal: '' };
+        row.querySelectorAll('.rm-me-contact-role').forEach(sel => {
+            const k = sel.getAttribute('data-role');
+            if (k && Object.prototype.hasOwnProperty.call(roles, k)) roles[k] = sel.value || '';
+        });
         out.push({
             id: row.getAttribute('data-rmcontact-id'),
             name: (row.querySelector('.rm-me-contact-name').value || '').trim(),
@@ -36223,6 +36272,7 @@ function rmReadContactsFromForm() {
             dept: (row.querySelector('.rm-me-contact-dept').value || '').trim(),
             email: (row.querySelector('.rm-me-contact-email').value || '').trim(),
             phone: (row.querySelector('.rm-me-contact-phone').value || '').trim(),
+            roles: roles,
             isPrimary: row.classList.contains('is-primary')
         });
     });
