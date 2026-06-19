@@ -12036,6 +12036,53 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 <!-- Phase 8DH — Invoice Payment Reminder modal. Mirrors the renewal-outreach
      modal: generate an editable draft, then Copy to Clipboard or Open in Mail.
      The app never sends mail itself (no credentials; WKWebView sandbox). -->
+<!-- 8DN — Unified compose-email modal (invoice / proposal / PO / reminders) -->
+<div id="composeEmailModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 740px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h2 style="font-size:18px; margin:0;"><i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> <span id="composeEmailTitle">Compose Email</span></h2>
+      <button class="btn btn-ghost" onclick="closeComposeEmail()" style="border:none;"><i class="fas fa-times" style="font-size:18px;"></i></button>
+    </div>
+    <div id="composeEmailParty" style="font-size:12px; color:var(--text-dim); margin-bottom:10px;"></div>
+    <div id="composeEmailWarn" style="display:none; font-size:11.5px; color:var(--warning); background:var(--glass-panel); border:1px solid var(--glass-border); border-radius:6px; padding:8px 10px; margin-bottom:10px;"></div>
+
+    <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:240px;">
+        <label>To</label>
+        <input type="text" id="composeEmailTo" placeholder="name@company.com" style="font-family:inherit;">
+      </div>
+      <div style="flex:1; min-width:240px;">
+        <label>Cc</label>
+        <input type="text" id="composeEmailCc" placeholder="Optional — comma-separated" style="font-family:inherit;">
+      </div>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+      <select id="composeEmailTone" onchange="_composeEmailLoadTone()" style="width:220px;"></select>
+      <button class="btn btn-ghost btn-sm" onclick="composeEmailCopy()" title="Copy to clipboard"><i class="fas fa-copy"></i> Copy to Clipboard</button>
+      <button class="btn btn-ghost btn-sm" onclick="composeEmailOpenMail()" title="Open in your default mail app" style="color:var(--accent-cyan);"><i class="fas fa-paper-plane"></i> Open in Mail</button>
+    </div>
+
+    <div>
+      <label>Subject</label>
+      <input type="text" id="composeEmailSubject" style="font-family:inherit;">
+    </div>
+    <div style="margin-top:12px;">
+      <label>Body</label>
+      <textarea id="composeEmailBody" rows="14" class="ren-email-preview" style="width:100%;"></textarea>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:16px;">
+      <div style="font-size:10.5px; color:var(--text-dim);">Edit anything above. Templates &amp; tones are set in System Controls → Templates.</div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-ghost" onclick="closeComposeEmail()">Close</button>
+        <button class="btn btn-ghost" onclick="composeEmailCopy()"><i class="fas fa-copy"></i> Copy Email</button>
+        <button class="btn btn-primary" onclick="composeEmailOpenMail()"><i class="fas fa-paper-plane"></i> Open in Mail</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="invReminderModal" class="modal" style="display:none;">
   <div class="modal-content" style="max-width: 720px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
@@ -13724,6 +13771,216 @@ function cpEmailTplReset() {
         saveCompanyProfile();
         cpEmailTplOnToneChange();
     }
+}
+
+// ===================== Phase 8DN — Unified send-email engine =====================
+// One compose-email modal serving five document emails. Recipients come from
+// the 8DL/8DL.1 routing (client for Direct/Commission, reseller for Resale;
+// OEM for purchase orders — Option A). The subject/body come from the 8DM
+// templates and are token-filled here. Everything stays editable, then Copy
+// or Open in Mail (via the open_mailto Rust command, with Cc support).
+
+window.__composeEmail = { kind: null, ctx: null };
+
+function _composeAmount(n) {
+    var v = Number(n) || 0;
+    // INR formatting only — Indian digit grouping, two decimals, no symbol
+    // (templates prepend "INR "). Never converts to USD.
+    return v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function _composeCommonCtx() {
+    return {
+        CompanyName: (companyProfile && (companyProfile.tradingName || companyProfile.legalName)) || 'Masterstone',
+        SenderName: (companyProfile && companyProfile.signatoryName) || 'Accounts Team',
+        Date: formatDateReadable(new Date().toISOString().slice(0, 10))
+    };
+}
+// Greeting name: the first To-contact's name, else a neutral fallback.
+function _composeContactName(rcpt) {
+    var nm = (rcpt && rcpt.to && rcpt.to[0] && rcpt.to[0].name) ? String(rcpt.to[0].name).trim() : '';
+    return nm || 'Sir/Madam';
+}
+function _composeClientDisplay(name) {
+    if (!name) return '';
+    return (typeof getClientDisplayName === 'function') ? getClientDisplayName(name) : name;
+}
+// Encode a comma-separated recipient string for a mailto: keep commas as
+// separators, percent-encode each address.
+function _composeEncodeRecipients(str) {
+    return String(str || '').split(',').map(function (e) { return encodeURIComponent(e.trim()); }).filter(Boolean).join(',');
+}
+
+// ---- entry points (one per document) ----
+function composeSendInvoice(invId) {
+    var inv = _invReminderFind(invId);
+    if (!inv) { alert('Invoice not found.'); return; }
+    var rcpt = resolveEntityRecipients('invoice', inv);
+    var ctx = _composeCommonCtx();
+    ctx.ContactName = _composeContactName(rcpt);
+    ctx.ClientName = _composeClientDisplay(inv.clientName || inv.client);
+    ctx.InvoiceNumber = inv.invoiceNumber || '';
+    ctx.InvoiceDate = inv.invoiceDate ? formatDateReadable(inv.invoiceDate) : '';
+    ctx.DueDate = inv.dueDate ? formatDateReadable(inv.dueDate) : '';
+    ctx.Amount = _composeAmount(inv.grandTotal);
+    _openComposeEmail('sendInvoice', ctx, rcpt);
+}
+function composeInvoiceReminder(invId) {
+    var inv = _invReminderFind(invId);
+    if (!inv) { alert('Invoice not found.'); return; }
+    var rcpt = resolveEntityRecipients('invoice', inv);
+    var ctx = _composeCommonCtx();
+    ctx.ContactName = _composeContactName(rcpt);
+    ctx.ClientName = _composeClientDisplay(inv.clientName || inv.client);
+    ctx.InvoiceNumber = inv.invoiceNumber || '';
+    ctx.InvoiceDate = inv.invoiceDate ? formatDateReadable(inv.invoiceDate) : '';
+    ctx.DueDate = inv.dueDate ? formatDateReadable(inv.dueDate) : '';
+    var od = (typeof invDaysOverdue === 'function') ? invDaysOverdue(inv) : 0;
+    ctx.Amount = _composeAmount((inv.amountOutstanding > 0) ? inv.amountOutstanding : inv.grandTotal);
+    ctx.DaysOverdue = String(od);
+    var tone = od <= 0 ? 'gentle' : (od <= 21 ? 'firm' : 'final');
+    _openComposeEmail('invoiceReminder', ctx, rcpt, tone);
+}
+function composeSendProposal(propId) {
+    var p = (typeof proposals !== 'undefined' && Array.isArray(proposals)) ? proposals.find(function (x) { return x.id === propId; }) : null;
+    if (!p) { alert('Proposal not found.'); return; }
+    var rcpt = resolveEntityRecipients('proposal', p);
+    var ctx = _composeCommonCtx();
+    ctx.ContactName = _composeContactName(rcpt);
+    ctx.ClientName = _composeClientDisplay(p.clientName);
+    ctx.ProposalNumber = p.proposalNumber || '';
+    ctx.ProposalSubject = p.subject || '';
+    ctx.ValidUntil = p.validUntil ? formatDateReadable(p.validUntil) : '';
+    try {
+        var totals = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode);
+        ctx.ProposalTotal = _composeAmount(totals.grandTotal);
+    } catch (e) { ctx.ProposalTotal = ''; }
+    _openComposeEmail('sendProposal', ctx, rcpt);
+}
+function composeSendPO(poId) {
+    var po = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) ? purchaseOrders.find(function (x) { return x.id === poId; }) : null;
+    if (!po) { alert('Purchase order not found.'); return; }
+    var meta = (typeof oemMetadata === 'object' && oemMetadata && po.oem) ? oemMetadata[po.oem] : null;
+    var toEmail = (meta && meta.contactEmail) ? String(meta.contactEmail).trim() : '';
+    var contactName = (meta && meta.contactName) ? String(meta.contactName).trim() : '';
+    var rcpt = { to: toEmail ? [{ name: contactName, email: toEmail }] : [], cc: [], via: 'oem', party: po.oem || '' };
+    var ctx = _composeCommonCtx();
+    ctx.ContactName = contactName || 'Sir/Madam';
+    ctx.OEMName = po.oem || '';
+    ctx.PONumber = po.poNumber || '';
+    ctx.POSubject = po.subject || (po.oem ? (po.oem + ' order') : 'order');
+    try {
+        var t = computePOTotals(po.lineItems, determinePOGSTMode(po.oem).mode);
+        ctx.POTotal = _composeAmount(t.grandTotal);
+    } catch (e) { ctx.POTotal = ''; }
+    _openComposeEmail('sendPO', ctx, rcpt);
+}
+function composeRenewalReminder(contractIdx) {
+    var idx = (contractIdx !== undefined && contractIdx !== null && contractIdx !== '') ? parseInt(contractIdx) : -1;
+    var c = (typeof contracts !== 'undefined' && Array.isArray(contracts)) ? contracts[idx] : null;
+    if (!c) { alert('Contract not found.'); return; }
+    var rcpt = resolveEntityRecipients('renewal', c);
+    var ctx = _composeCommonCtx();
+    ctx.ContactName = _composeContactName(rcpt);
+    ctx.ClientName = _composeClientDisplay(c.client);
+    ctx.Product = c.product || (c.oem ? (c.oem + ' subscription') : 'subscription');
+    ctx.ExpiryDate = c.endDate ? formatDateReadable(c.endDate) : '';
+    var days = (typeof getContractDaysToExpiry === 'function') ? getContractDaysToExpiry(c) : null;
+    ctx.DaysToExpiry = (days === null || days === undefined) ? '' : String(days);
+    var tone = (days === null || days === undefined) ? 'gentle' : (days > 30 ? 'gentle' : (days > 7 ? 'firm' : 'final'));
+    _openComposeEmail('renewalReminder', ctx, rcpt, tone);
+}
+
+// ---- the modal ----
+function _openComposeEmail(kind, ctx, rcpt, defaultTone) {
+    ensureEmailTemplatesInitialized();
+    window.__composeEmail = { kind: kind, ctx: ctx };
+    var meta = _emailKindMeta(kind);
+    if (!meta) { alert('Unknown email type.'); return; }
+
+    var toneSel = document.getElementById('composeEmailTone');
+    toneSel.innerHTML = '';
+    meta.tones.forEach(function (t) {
+        var o = document.createElement('option'); o.value = t.key; o.textContent = t.label; toneSel.appendChild(o);
+    });
+    var tone = (defaultTone && meta.tones.some(function (t) { return t.key === defaultTone; })) ? defaultTone : meta.tones[0].key;
+    toneSel.value = tone;
+
+    document.getElementById('composeEmailTo').value = recipientsToEmailString(rcpt.to);
+    // Drop any Cc address that is already in To (can happen in the single-contact
+    // fallback where the primary contact is also tagged Cc for this document).
+    var _toSet = {};
+    (rcpt.to || []).forEach(function (r) { if (r && r.email) _toSet[String(r.email).toLowerCase()] = true; });
+    var _cc = (rcpt.cc || []).filter(function (r) { return r && r.email && !_toSet[String(r.email).toLowerCase()]; });
+    document.getElementById('composeEmailCc').value = recipientsToEmailString(_cc);
+
+    var via = rcpt.via || 'client';
+    var viaWord = (via === 'reseller') ? 'reseller' : (via === 'oem') ? 'OEM' : 'client';
+    var partyEl = document.getElementById('composeEmailParty');
+    if (partyEl) {
+        partyEl.innerHTML = rcpt.party
+            ? '<i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> Addressing <strong>' + pEsc(rcpt.party) + '</strong> (' + viaWord + ')'
+            : '';
+    }
+    var warnEl = document.getElementById('composeEmailWarn');
+    if (warnEl) {
+        var hasTo = rcpt.to && rcpt.to.length;
+        warnEl.style.display = hasTo ? 'none' : 'block';
+        if (!hasTo) warnEl.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> No recipient on file — type an address in the To field to use Open in Mail.';
+    }
+    var titleEl = document.getElementById('composeEmailTitle');
+    if (titleEl) titleEl.textContent = meta.label;
+
+    _composeEmailLoadTone();
+    document.getElementById('composeEmailModal').style.display = 'flex';
+}
+function _composeEmailLoadTone() {
+    var st = window.__composeEmail;
+    if (!st || !st.kind) return;
+    var tone = document.getElementById('composeEmailTone').value;
+    var tpl = getEmailTemplate(st.kind, tone);
+    document.getElementById('composeEmailSubject').value = _emailFillTokens(tpl.subject, st.ctx);
+    document.getElementById('composeEmailBody').value = _emailFillTokens(tpl.body, st.ctx);
+}
+function closeComposeEmail() {
+    var m = document.getElementById('composeEmailModal');
+    if (m) m.style.display = 'none';
+}
+function composeEmailCopy() {
+    var subject = document.getElementById('composeEmailSubject').value;
+    var body = document.getElementById('composeEmailBody').value;
+    var full = 'Subject: ' + subject + '\n\n' + body;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(full).then(function () {
+            if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Email copied to clipboard. Paste into Gmail/Outlook.');
+        }).catch(function () { _composeEmailFallbackCopy(full); });
+    } else { _composeEmailFallbackCopy(full); }
+}
+function _composeEmailFallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check"></i> Copied.'); } catch (e) {}
+    document.body.removeChild(ta);
+}
+function composeEmailOpenMail() {
+    var to = (document.getElementById('composeEmailTo').value || '').trim();
+    var cc = (document.getElementById('composeEmailCc').value || '').trim();
+    var subject = document.getElementById('composeEmailSubject').value;
+    var body = document.getElementById('composeEmailBody').value;
+    var mailto = 'mailto:' + _composeEncodeRecipients(to);
+    var params = [];
+    if (cc) params.push('cc=' + _composeEncodeRecipients(cc));
+    params.push('subject=' + encodeURIComponent(subject));
+    params.push('body=' + encodeURIComponent(body));
+    mailto += '?' + params.join('&');
+    var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+    if (t && t.invoke) {
+        t.invoke('open_mailto', { url: mailto }).then(function () {
+            if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-paper-plane" style="color:var(--accent-cyan);"></i> Opening your mail app\u2026', 4000);
+        }).catch(function (err) { console.error('open_mailto failed:', err); _invReminderMailFallback(mailto); });
+        return;
+    }
+    _invReminderMailFallback(mailto);
 }
 
 function saveCompanyProfile() {
@@ -26338,6 +26595,7 @@ function renderProposalDetail(p) {
                 <button class="btn btn-ghost btn-sm" onclick="previewProposalPDF('${p.id}')" title="Preview the proposal and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
                 ${(p.externalLink || p.externalLinkLocalPath) ? (window.__msDocAnchor(p.externalLinkLocalPath, p.externalLink, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
                 <button class="btn btn-ghost btn-sm" onclick="resyncProposalToPipeline('${p.id}')" title="Create or refresh the linked prospect in Prospect Pipeline"><i class="fas fa-link" style="color:var(--purple);"></i> Sync to Pipeline</button>
+                <button class="btn btn-ghost btn-sm" onclick="composeSendProposal('${p.id}')" title="Email this proposal to the client" style="color:var(--accent-cyan);"><i class="fas fa-paper-plane"></i> Send to Client</button>
                 ${p.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markProposalSent('${p.id}')"><i class="fas fa-paper-plane"></i> Mark Sent</button>` : ''}
                 ${p.status === 'Sent' ? `<button class="btn btn-primary btn-sm" onclick="markProposalAccepted('${p.id}')" style="background:var(--success);"><i class="fas fa-check"></i> Mark Accepted</button><button class="btn btn-ghost btn-sm" onclick="markProposalRejected('${p.id}')" style="color:var(--danger);"><i class="fas fa-times"></i> Mark Rejected</button>` : ''}
                 ${p.status === 'Accepted' ? `<button class="btn btn-primary btn-sm" onclick="convertProposalToContract('${p.id}')" style="background:var(--purple);"><i class="fas fa-file-contract"></i> Convert to Contract</button><button class="btn btn-ghost btn-sm" onclick="generatePOFromProposal('${p.id}')" title="Create a PO to the OEM based on this proposal"><i class="fas fa-file-signature" style="color:var(--purple);"></i> Generate PO</button>` : ''}
@@ -29538,6 +29796,7 @@ function renderPODetail(po) {
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button class="btn btn-ghost btn-sm" onclick="openPOForm('${po.id}')"><i class="fas fa-edit"></i> Edit</button>
                 <button class="btn btn-ghost btn-sm" onclick="previewPOPDF('${po.id}')" title="Preview the PO and print or save as PDF"><i class="fas fa-print" style="color:var(--accent-cyan);"></i> Print / Export PDF</button>
+                <button class="btn btn-ghost btn-sm" onclick="composeSendPO('${po.id}')" title="Email this PO to the OEM" style="color:var(--accent-cyan);"><i class="fas fa-paper-plane"></i> Send to OEM</button>
                 ${(_resolvedPo.link || _resolvedPo.localPath) ? (window.__msDocAnchor(_resolvedPo.localPath, _resolvedPo.link, 'class="btn btn-ghost btn-sm" title="Open original document (external)" style="text-decoration:none;"', '<i class="fas fa-external-link-alt" style="color:var(--accent-cyan);"></i> Open Original') || '') : ''}
                 ${po.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markPOIssued('${po.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
                 ${po.status === 'Issued' ? `<button class="btn btn-primary btn-sm" onclick="markPOAcknowledged('${po.id}')" style="background:var(--purple);"><i class="fas fa-thumbs-up"></i> Mark Acknowledged</button>` : ''}
@@ -31397,7 +31656,7 @@ function renderInvoicesListView(filtered) {
             <td>${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</td>
             <td>${daysCell}</td>
             <td style="text-align:right;">
-                ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceReminderModal('${inv.id}')" title="Send payment reminder" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i></button>` : ''}
+                ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); composeInvoiceReminder('${inv.id}')" title="Send payment reminder" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i></button>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : 'Download PDF'}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceDetail('${inv.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
@@ -32334,7 +32593,8 @@ function renderInvoiceDetail(inv) {
             ${hasSignedPdf ? `<button class="btn btn-ghost btn-sm" onclick="triggerSignedPdfUpload('${inv.id}')" title="Replace the signed PDF with a new file"><i class="fas fa-redo" style="color:var(--text-dim);"></i> Replace</button>` : ''}
             ${inv.status === 'Draft' ? `<button class="btn btn-primary btn-sm" onclick="markInvoiceIssued('${inv.id}')"><i class="fas fa-paper-plane"></i> Mark Issued</button>` : ''}
             ${isInvoiceOutstanding(inv) ? `<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${inv.id}', null)" style="background:var(--success);"><i class="fas fa-money-check-alt"></i> Record Payment</button>` : ''}
-            ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="openInvoiceReminderModal('${inv.id}')" title="Draft a payment reminder email" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i> Send Reminder</button>` : ''}
+            ${inv.invoiceNumber ? `<button class="btn btn-ghost btn-sm" onclick="composeSendInvoice('${inv.id}')" title="Email this invoice to the client" style="color:var(--accent-cyan);"><i class="fas fa-paper-plane"></i> Send Invoice</button>` : ''}
+            ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="composeInvoiceReminder('${inv.id}')" title="Draft a payment reminder email" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i> Send Reminder</button>` : ''}
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid' || inv.status === 'Paid') ? `<button class="btn btn-ghost btn-sm" onclick="issueCreditNoteForInvoice('${inv.id}')" style="color:var(--purple);" title="Issue credit note against this invoice"><i class="fas fa-file-contract"></i> Credit Note</button>` : ''}
             ${inv.status === 'Credit Note Issued' ? `<button class="btn btn-ghost btn-sm" onclick="editCreditNoteForInvoice('${inv.id}')" style="color:var(--purple);" title="Edit credit note details"><i class="fas fa-edit"></i> Edit CN</button>` : ''}
             ${(inv.status === 'Issued' || inv.status === 'Partially Paid') ? `<button class="btn btn-ghost btn-sm" onclick="markInvoiceCancelled('${inv.id}')" style="color:var(--danger);"><i class="fas fa-ban"></i> Cancel</button>` : ''}
@@ -34710,6 +34970,7 @@ function renderRenewalList(candidates) {
                         ${RENEWAL_STATUSES.map(s => `<option value="${pEsc(s)}"${s === st ? ' selected' : ''}>${pEsc(s)}</option>`).join('')}
                     </select>
                     <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); generateRenewalProposal(${i})" style="color:var(--accent-cyan);" title="Generate a renewal proposal pre-filled from this contract"><i class="fas fa-file-invoice"></i> Proposal</button>
+                    <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); composeRenewalReminder(${i})" style="color:var(--accent-cyan);" title="Draft a renewal reminder email to the client"><i class="fas fa-bell"></i> Reminder</button>
                     <button class="btn btn-ghost btn-sm" onclick="openRenewalDetail(${i})" title="Renewal details &amp; activity log"><i class="fas fa-info-circle"></i> Details</button>
                     <button class="btn btn-ghost btn-sm" onclick="jumpToContract(${i})" title="Open contract" style="color:var(--text-dim);"><i class="fas fa-external-link-alt"></i></button>
                 </div>
