@@ -35696,6 +35696,7 @@ const ATT_KNOWN_ENTITY_TYPES = [
     'internalpo',
     'clientpo',
     'gendoc',
+    'contract',
     'invoice'
 ];
 
@@ -35715,10 +35716,19 @@ function splitAttachmentKey(key) {
 function flattenAttachmentsForSave() {
     const out = [];
     Object.keys(attachments).forEach(function(key) {
-        const split = splitAttachmentKey(key);
+        let split = splitAttachmentKey(key);
         if (!split) {
-            try { if (window.__diag) window.__diag.log('ERROR', 'flattenAttachmentsForSave: unknown entity type prefix, skipping key', { key: key }); } catch (e) {}
-            return;
+            // 8DQ — never silently drop an attachment. Fall back to split-on-
+            // first-underscore (same as findAttachmentById) so a new/unlisted
+            // entity type still persists and round-trips via relatedEntityType.
+            const us = key.indexOf('_');
+            if (us > 0) {
+                split = { entityType: key.slice(0, us), entityId: key.slice(us + 1) };
+                try { if (window.__diag) window.__diag.log('WARN', 'flattenAttachmentsForSave: entity type not in known list, using fallback split', { key: key, entityType: split.entityType }); } catch (e) {}
+            } else {
+                try { if (window.__diag) window.__diag.log('ERROR', 'flattenAttachmentsForSave: unparseable attachment key, skipping key', { key: key }); } catch (e) {}
+                return;
+            }
         }
         const list = attachments[key] || [];
         list.forEach(function(rec) {
