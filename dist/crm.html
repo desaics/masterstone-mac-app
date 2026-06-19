@@ -5792,6 +5792,37 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
+    // 8DR — Open ANY attachment (by id) in the native viewer, exactly like the
+    // signed-invoice paperclip: write the bytes to a temp file and hand off to
+    // the system's default app via open_pdf_dataurl. Used by the consultant
+    // paperclip and the contract Documents viewer so every paperclip "opens to
+    // view" instead of downloading.
+    window.__msOpenAttachmentPdf = async function (attId) {
+        var info = (typeof findAttachmentById === 'function') ? findAttachmentById(attId) : null;
+        var att = info && info.att;
+        if (!att) { showActionToast('Attachment not found', 'error'); return; }
+        if (!att.dataUrl) { showActionToast('File content missing for this attachment. Try re-uploading.', 'error'); return; }
+        try {
+            var t = getTauri();
+            if (!t || !t.invoke) {
+                try { window.open(att.dataUrl, '_blank'); } catch (e) {}
+                return;
+            }
+            var filename = att.filename || ('document_' + String(attId).replace(/[^A-Za-z0-9_.-]/g, '_'));
+            var r = await t.invoke('open_pdf_dataurl', {
+                dataUrl: att.dataUrl,
+                suggestedFilename: filename,
+                stableKey: att.id || attId
+            });
+            if (!r || !r.ok) {
+                showActionToast('Could not open file: ' + ((r && r.error) || 'unknown'), 'error');
+            }
+            // Success is silent — same as the invoice paperclip.
+        } catch (e) {
+            showActionToast('Open file error: ' + e, 'error');
+        }
+    };
+
     // Toggles the visibility of the local-file panel for a given trigger button.
     // Looks up the panel as a sibling element inside the same .with-local-file wrapper.
     window.__msToggleLocalPanel = function (toggleBtn) {
@@ -12035,6 +12066,18 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 <!-- Phase 8DH — Invoice Payment Reminder modal. Mirrors the renewal-outreach
      modal: generate an editable draft, then Copy to Clipboard or Open in Mail.
      The app never sends mail itself (no credentials; WKWebView sandbox). -->
+<!-- 8DR — Contract documents chooser (opens attachments in the native viewer) -->
+<div id="contractDocsModal" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width: 560px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <h2 style="font-size:18px; margin:0;"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Contract Documents</h2>
+      <button class="btn btn-ghost" onclick="closeContractDocsModal()" style="border:none;"><i class="fas fa-times" style="font-size:18px;"></i></button>
+    </div>
+    <div id="contractDocsModalSub" style="font-size:12px; color:var(--text-dim); margin-bottom:14px;"></div>
+    <div id="contractDocsModalList"></div>
+  </div>
+</div>
+
 <!-- 8DN — Unified compose-email modal (invoice / proposal / PO / reminders) -->
 <div id="composeEmailModal" class="modal" style="display:none;">
   <div class="modal-content" style="max-width: 740px;">
@@ -20795,6 +20838,7 @@ function renderContracts() {
                                     </div>
                                 </div>
                                 <div style="display:flex; gap:8px;">
+                                    ${(() => { const _d = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('contract', String(i)) : []; return _d.length ? `<button onclick="event.stopPropagation(); openContractDocsViewer(${i})" class="btn btn-ghost btn-sm" title="View attached documents"><i class="fas fa-paperclip" style="color:var(--accent-cyan);"></i> Documents (${_d.length})</button>` : ''; })()}
                                     <button onclick="event.stopPropagation(); editContract(${i})" class="btn btn-warn btn-sm"><i class="fas fa-edit"></i> Edit</button>
                                     <button onclick="event.stopPropagation(); deleteContract(${i})" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Delete</button>
                                 </div>
@@ -42667,6 +42711,49 @@ function downloadConsultantAttachment(entityType, entityId, attId) {
 // tab/window. Called from the files-pin badge on the payment register row.
 // If no Invoice-tagged attachment exists, falls back to opening the edit form
 // so the user can see what's attached.
+// 8DR — View a contract's attached documents without entering edit mode. A
+// single doc opens straight in the native viewer (like the invoice paperclip);
+// multiple docs show a small chooser with Open / Download per file.
+function openContractDocsViewer(contractIdx) {
+    const list = (typeof getAttachmentsFor === 'function') ? getAttachmentsFor('contract', String(contractIdx)) : [];
+    if (!list.length) {
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> No documents attached to this contract yet.');
+        return;
+    }
+    if (list.length === 1 && list[0].dataUrl && typeof window.__msOpenAttachmentPdf === 'function') {
+        window.__msOpenAttachmentPdf(list[0].id);
+        return;
+    }
+    const c = (typeof contracts !== 'undefined' && Array.isArray(contracts)) ? contracts[contractIdx] : null;
+    const sub = document.getElementById('contractDocsModalSub');
+    if (sub) {
+        const prod = c ? (typeof getProductDisplayName === 'function' ? getProductDisplayName(c.product) : (c.product || '')) : '';
+        const cli = c ? (typeof getClientDisplayName === 'function' ? getClientDisplayName(c.client) : (c.client || '')) : '';
+        sub.textContent = (prod || cli) ? (prod + (prod && cli ? ' — ' : '') + cli) : '';
+    }
+    const cont = document.getElementById('contractDocsModalList');
+    if (cont) {
+        cont.innerHTML = list.map(function (a) {
+            const canOpen = !!a.dataUrl;
+            const sizeStr = (typeof fmtBytes === 'function') ? fmtBytes(a.sizeBytes) : '';
+            const meta = [a.description || '', sizeStr].filter(Boolean).join(' · ');
+            return '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--glass-border); border-radius:6px; margin-bottom:8px;">'
+                + '<div style="min-width:0;"><div style="font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><i class="fas fa-file-pdf" style="color:var(--accent-cyan); margin-right:6px;"></i>' + pEsc(a.filename || 'document') + '</div>'
+                + (meta ? '<div style="font-size:10.5px; color:var(--text-dim); margin-top:2px;">' + pEsc(meta) + '</div>' : '') + '</div>'
+                + '<div style="display:flex; gap:6px; flex-shrink:0;">'
+                + '<button class="btn btn-ghost btn-sm" onclick="window.__msOpenAttachmentPdf(\'' + pEsc(a.id) + '\')"' + (canOpen ? '' : ' disabled') + ' title="Open to view"><i class="fas fa-eye"></i> Open</button>'
+                + '<button class="btn btn-ghost btn-sm" onclick="downloadAttachment(\'' + pEsc(a.id) + '\')" title="Download"><i class="fas fa-download"></i></button>'
+                + '</div></div>';
+        }).join('');
+    }
+    const m = document.getElementById('contractDocsModal');
+    if (m) m.style.display = 'flex';
+}
+function closeContractDocsModal() {
+    const m = document.getElementById('contractDocsModal');
+    if (m) m.style.display = 'none';
+}
+
 function openConsultantInvoiceForPayment(paymentId) {
     const key = `consultant_payment_${paymentId}`;
     const list = attachments[key] || [];
@@ -42676,29 +42763,16 @@ function openConsultantInvoiceForPayment(paymentId) {
         openConsultantPaymentForm(paymentId);
         return;
     }
-    // 8AM — Toast helper shared with the two download branches
-    const filename = invoiceAtt.filename || 'invoice';
-    const successToast = function(method) {
-        if (typeof showProspectToast === 'function') {
-            showProspectToast(`<i class="fas fa-check-circle" style="color:var(--success);"></i> Opened: <strong>${pEsc(filename)}</strong> · ${method === 'window' ? 'Cmd+S to save' : 'check your Downloads folder'}`, 5000);
-        }
-    };
-    // Open the dataUrl in a new tab. For PDFs the browser renders inline.
-    // For non-PDF mime types (image, etc.) it still opens viewable.
+    // 8DR — open in the native viewer (same as the invoice paperclip) instead of
+    // window.open(dataUrl), which WKWebView turns into a download.
+    if (invoiceAtt.id && typeof window.__msOpenAttachmentPdf === 'function') {
+        window.__msOpenAttachmentPdf(invoiceAtt.id);
+        return;
+    }
+    // Fallback (non-Tauri): open in a new tab, else download
     try {
         const w = window.open(invoiceAtt.dataUrl, '_blank');
-        if (w) {
-            successToast('window');
-            return;
-        }
-        // Popup blocked — fall back to download
-        const a = document.createElement('a');
-        a.href = invoiceAtt.dataUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        successToast('download');
+        if (!w && typeof downloadAttachment === 'function') downloadAttachment(invoiceAtt.id);
     } catch (e) {
         alert('Could not open invoice. Try downloading it from the payment edit page.');
     }
