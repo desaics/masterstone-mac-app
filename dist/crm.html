@@ -7334,6 +7334,20 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                     <button type="button" class="btn btn-ghost btn-sm" onclick="var i=document.getElementById('internalPOLink__local'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
                 </div>
             </div>
+            <div style="grid-column: span 3;" class="with-local-file"><label>OEM Quote</label>
+                <div style="display:flex; gap:6px; align-items:stretch;">
+                    <input type="text" id="oemQuote" placeholder="OEM quote ref no" style="width:220px;">
+                    <input type="url" id="oemQuoteLink" placeholder="URL to OEM quote document" style="flex:1;">
+                    <button type="button" class="local-file-toggle" onclick="window.__msToggleLocalPanel(this)" title="Attach local file"><i class="fas fa-paperclip"></i></button>
+                </div>
+                <div class="local-file-panel" style="display:none;">
+                    <span class="panel-label">Local file:</span>
+                    <input type="text" id="oemQuoteLink__local" placeholder="/path/to/oem-quote.pdf (or paste a path)" oninput="window.__msUpdateLocalToggleState(this)">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msPickLocalFile('oemQuoteLink__local')"><i class="fas fa-folder-open"></i> Browse…</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="window.__msOpenLocalFile(document.getElementById('oemQuoteLink__local').value)"><i class="fas fa-external-link-alt"></i> Open</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="var i=document.getElementById('oemQuoteLink__local'); i.value=''; window.__msUpdateLocalToggleState(i);"><i class="fas fa-times"></i> Clear</button>
+                </div>
+            </div>
         </div>
 
         <div class="kpi-section-title"><i class="fas fa-clipboard-list" style="color:var(--purple);"></i> Client Procurement Details</div>
@@ -20685,6 +20699,10 @@ function renderContracts() {
                 'style="color:var(--accent-cyan); text-decoration:none;"',
                 pEsc(c.internalPO || 'View Link'));
             const expIntPO = _expIntPoAnchor || (c.internalPO || '-');
+            const _expOemQuoteAnchor = window.__msDocAnchor(c.oemQuoteLocalPath, c.oemQuoteLink,
+                'style="color:var(--accent-cyan); text-decoration:none;" title="Open OEM quote"',
+                pEsc(c.oemQuote || 'View Quote'));
+            const expOemQuote = _expOemQuoteAnchor || (c.oemQuote ? pEsc(c.oemQuote) : '-');
 
             clientRowsHtml += `
             <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
@@ -20805,6 +20823,7 @@ function renderContracts() {
                                     <h5>Procurement</h5>
                                     <div class="info-row" style="align-items:flex-start;"><span class="info-label">Client PO(s)</span><span class="info-val" style="text-align:right;">${expClientPO}</span></div>
                                     <div class="info-row"><span class="info-label">Internal OEM PO</span><span class="info-val">${expIntPO}</span></div>
+                                    <div class="info-row"><span class="info-label">OEM Quote</span><span class="info-val">${expOemQuote}</span></div>
                                     <div class="info-row"><span class="info-label">Int. PO Date</span><span class="info-val">${formatDateReadable(c.internalPODate)}</span></div>
                                     <div class="info-row"><span class="info-label">Contact</span><span class="info-val">${pEsc(c.clientContactName || '-')}</span></div>
                                 </div>
@@ -21118,6 +21137,9 @@ function saveContract() {
         internalPOLocalPath: ((document.getElementById('internalPOLink__local') || {}).value || '').trim(),
         internalPOUploadAttId: ((document.getElementById('internalPOUploadStatus') || {}).getAttribute && (document.getElementById('internalPOUploadStatus').getAttribute('data-attid') || '')) || '',
         internalPODate: document.getElementById('internalPODate').value,
+        oemQuote: document.getElementById('oemQuote').value,
+        oemQuoteLink: document.getElementById('oemQuoteLink').value,
+        oemQuoteLocalPath: ((document.getElementById('oemQuoteLink__local') || {}).value || '').trim(),
         
         clientPO: primaryPO.poNo,
         clientPOLink: primaryPO.poLink,
@@ -21289,6 +21311,13 @@ function editContract(i) {
         try { window.__msUpdateLocalToggleState(ipoLocalEl); } catch (_) {}
     }
     document.getElementById('internalPODate').value = c.internalPODate || '';
+    document.getElementById('oemQuote').value = c.oemQuote || '';
+    document.getElementById('oemQuoteLink').value = c.oemQuoteLink || '';
+    var oqLocalEl = document.getElementById('oemQuoteLink__local');
+    if (oqLocalEl) {
+        oqLocalEl.value = c.oemQuoteLocalPath || '';
+        try { window.__msUpdateLocalToggleState(oqLocalEl); } catch (_) {}
+    }
     
     // Handle Multiple Client POs
     const poContainer = document.getElementById('clientPOContainer');
@@ -21460,6 +21489,7 @@ function resetForm() {
     ['client','product','licenses','hardware','services','costAmount','sellINR','start','endDate'].forEach(id=>document.getElementById(id).value=""); 
     
     ['internalPO','internalPOLink','internalPODate','vendorCode',
+     'oemQuote','oemQuoteLink','oemQuoteLink__local',
      'clientGST','clientPAN','clientCIN','clientContactName','clientEmail','clientPhone',
      'billAddr','shipAddr'].forEach(id => {
          const el = document.getElementById(id);
