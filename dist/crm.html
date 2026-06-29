@@ -6146,6 +6146,200 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return list;
     }
 
+// ============ Phase 8DV — Central "Missing Local Files" manager ============
+// Lists every document across ALL clients that has a reference number or a
+// link but no local file path yet, and lets you point each at a file on disk
+// from one place (Document Export → Client Document Pack). Mirrors the broken-
+// link sweeper's traversal + write-back, but inverted (missing instead of set).
+
+window.__msMissingLocalFiles = [];
+
+function _collectMissingLocalPaths() {
+    var list = [];
+    var has = function (ref, link) { return !!((ref && String(ref).trim()) || (link && String(link).trim())); };
+    var hasLink = function (link) { return !!(link && String(link).trim()); };
+    var noPath = function (p) { return !(p && String(p).trim()); };
+
+    // ----- Contracts -----
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach(function (c, cIdx) {
+            if (!c) return;
+            var client = c.client || '(unnamed)';
+            var product = c.product || '';
+            var ctxBase = client + (product ? ' · ' + product : '');
+
+            if (has(c.internalPO, c.internalPOLink) && noPath(c.internalPOLocalPath)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'internalPOLocalPath',
+                    client: client, docType: 'Internal PO', context: product, ref: c.internalPO || '', link: c.internalPOLink || '', label: ctxBase + ' · Internal PO' });
+            }
+            if (has(c.oemQuote, c.oemQuoteLink) && noPath(c.oemQuoteLocalPath)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'oemQuoteLocalPath',
+                    client: client, docType: 'OEM Quote', context: product, ref: c.oemQuote || '', link: c.oemQuoteLink || '', label: ctxBase + ' · OEM Quote' });
+            }
+            if (Array.isArray(c.clientPOs) && c.clientPOs.length > 0) {
+                c.clientPOs.forEach(function (po, poIdx) {
+                    if (po && has(po.poNo, po.poLink) && noPath(po.localPath)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOs[].localPath', arrIdx: poIdx,
+                            client: client, docType: 'Client PO', context: product, ref: po.poNo || '', link: po.poLink || '', label: ctxBase + ' · Client PO ' + (po.poNo || '#' + (poIdx + 1)) });
+                    }
+                });
+            } else if (has(c.clientPO, c.clientPOLink) && noPath(c.clientPOLocalPath)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOLocalPath',
+                    client: client, docType: 'Client PO', context: product, ref: c.clientPO || '', link: c.clientPOLink || '', label: ctxBase + ' · Client PO' });
+            }
+            if (Array.isArray(c.billingYears)) {
+                c.billingYears.forEach(function (by, yIdx) {
+                    if (!by) return;
+                    var fy = by.fy || ('Year ' + (yIdx + 1));
+                    var pfx = (product ? product + ' · ' : '') + fy;
+                    if (Array.isArray(by.arInvoices) && by.arInvoices.length > 0) {
+                        by.arInvoices.forEach(function (inv, arIdx) {
+                            if (inv && has(inv.invNo, inv.link) && noPath(inv.localPath)) {
+                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].arInvoices[].localPath', cycleIdx: yIdx, arrIdx: arIdx,
+                                    client: client, docType: 'Client Invoice', context: pfx, ref: inv.invNo || '', link: inv.link || '', label: ctxBase + ' · ' + fy + ' · Client Inv ' + (inv.invNo || '#' + (arIdx + 1)) });
+                            }
+                        });
+                    } else if (has(by.clientInvoiceNo, by.clientInvoiceLink) && noPath(by.clientInvoiceLocalPath)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].clientInvoiceLocalPath', cycleIdx: yIdx,
+                            client: client, docType: 'Client Invoice', context: pfx, ref: by.clientInvoiceNo || '', link: by.clientInvoiceLink || '', label: ctxBase + ' · ' + fy + ' · Client Inv' });
+                    }
+                    if (Array.isArray(by.apInvoices) && by.apInvoices.length > 0) {
+                        by.apInvoices.forEach(function (inv, apIdx) {
+                            if (inv && has(inv.invNo, inv.link) && noPath(inv.localPath)) {
+                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].apInvoices[].localPath', cycleIdx: yIdx, arrIdx: apIdx,
+                                    client: client, docType: 'OEM Invoice', context: pfx, ref: inv.invNo || '', link: inv.link || '', label: ctxBase + ' · ' + fy + ' · OEM Inv ' + (inv.invNo || '#' + (apIdx + 1)) });
+                            }
+                        });
+                    } else if (has(by.oemInvoiceNo, by.oemInvoiceLink) && noPath(by.oemInvoiceLocalPath)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].oemInvoiceLocalPath', cycleIdx: yIdx,
+                            client: client, docType: 'OEM Invoice', context: pfx, ref: by.oemInvoiceNo || '', link: by.oemInvoiceLink || '', label: ctxBase + ' · ' + fy + ' · OEM Inv' });
+                    }
+                });
+            }
+        });
+    }
+    // ----- Proposals (only those that reference an external original) -----
+    if (typeof proposals !== 'undefined' && Array.isArray(proposals)) {
+        proposals.forEach(function (p) {
+            if (p && hasLink(p.externalLink) && noPath(p.externalLinkLocalPath)) {
+                list.push({ entityType: 'proposal', entityId: p.id, fieldDescriptor: 'externalLinkLocalPath',
+                    client: p.clientName || '(no client)', docType: 'Proposal', context: (p.subject || ''), ref: p.proposalNumber || '', link: p.externalLink || '', label: (p.proposalNumber || '(unnumbered)') + ' · ' + (p.clientName || '(no client)') });
+            }
+        });
+    }
+    // ----- Standalone POs -----
+    if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
+        purchaseOrders.forEach(function (po) {
+            if (po && hasLink(po.externalLink) && noPath(po.externalLinkLocalPath)) {
+                list.push({ entityType: 'po', entityId: po.id, fieldDescriptor: 'externalLinkLocalPath',
+                    client: po.clientName || po.oemName || '(no context)', docType: 'Purchase Order', context: (po.oemName || ''), ref: po.poNumber || '', link: po.externalLink || '', label: (po.poNumber || '(unnumbered)') + ' · ' + (po.clientName || po.oemName || '') });
+            }
+        });
+    }
+    return list;
+}
+
+// Write a newly-picked local path back to the correct record + persist.
+// Mirrors the broken-link sweeper's clear() field mapping, but sets instead.
+function _writeLocalPathBack(f, newPath) {
+    if (f.entityType === 'contract') {
+        var c = (typeof contracts !== 'undefined') ? contracts[f.entityIdx] : null;
+        if (!c) throw new Error('Contract not found at index ' + f.entityIdx);
+        switch (f.fieldDescriptor) {
+            case 'internalPOLocalPath': c.internalPOLocalPath = newPath; break;
+            case 'oemQuoteLocalPath':   c.oemQuoteLocalPath = newPath; break;
+            case 'clientPOLocalPath':   c.clientPOLocalPath = newPath; break;
+            case 'clientPOs[].localPath':
+                if (c.clientPOs && c.clientPOs[f.arrIdx]) c.clientPOs[f.arrIdx].localPath = newPath; break;
+            case 'billingYears[].clientInvoiceLocalPath':
+                if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].clientInvoiceLocalPath = newPath; break;
+            case 'billingYears[].oemInvoiceLocalPath':
+                if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].oemInvoiceLocalPath = newPath; break;
+            case 'billingYears[].arInvoices[].localPath':
+                if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].arInvoices && c.billingYears[f.cycleIdx].arInvoices[f.arrIdx])
+                    c.billingYears[f.cycleIdx].arInvoices[f.arrIdx].localPath = newPath; break;
+            case 'billingYears[].apInvoices[].localPath':
+                if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].apInvoices && c.billingYears[f.cycleIdx].apInvoices[f.arrIdx])
+                    c.billingYears[f.cycleIdx].apInvoices[f.arrIdx].localPath = newPath; break;
+            default: throw new Error('Unknown contract fieldDescriptor: ' + f.fieldDescriptor);
+        }
+        if (typeof persistData === 'function') persistData();
+    } else if (f.entityType === 'proposal') {
+        var p = (typeof proposals !== 'undefined') ? proposals.find(function (x) { return x.id === f.entityId; }) : null;
+        if (!p) throw new Error('Proposal not found: ' + f.entityId);
+        p.externalLinkLocalPath = newPath;
+        if (typeof saveProposals === 'function') saveProposals();
+    } else if (f.entityType === 'po') {
+        var po = (typeof purchaseOrders !== 'undefined') ? purchaseOrders.find(function (x) { return x.id === f.entityId; }) : null;
+        if (!po) throw new Error('PO not found: ' + f.entityId);
+        po.externalLinkLocalPath = newPath;
+        if (typeof savePurchaseOrders === 'function') savePurchaseOrders();
+    } else {
+        throw new Error('Unknown entityType: ' + f.entityType);
+    }
+}
+
+window.__msSetMissingLocalFile = async function (idx) {
+    var f = (window.__msMissingLocalFiles || [])[idx];
+    if (!f) return;
+    try {
+        var t = getTauri();
+        if (!t || !t.invoke) { showActionToast('Tauri runtime unavailable — needs the Mac app context.', 'error'); return; }
+        var r = await t.invoke('pick_file', { title: 'Select local file for ' + (f.docType || 'document') + (f.ref ? ' ' + f.ref : '') });
+        if (!r || !r.ok || !r.path) { if (r && r.error) showActionToast('Pick file error: ' + r.error, 'error'); return; }
+        _writeLocalPathBack(f, r.path);
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Local file set for <strong>' + pEsc(f.docType + (f.ref ? ' ' + f.ref : '')) + '</strong>.', 4500);
+        window.__msRenderMissingLocalFiles();
+        if (typeof renderContracts === 'function') { try { renderContracts(); } catch (e) {} }
+    } catch (e) {
+        showActionToast('Could not set local file: ' + e, 'error');
+    }
+};
+
+window.__msRenderMissingLocalFiles = function () {
+    var host = document.getElementById('missingLocalFilesBody');
+    if (!host) return;
+    var raw = _collectMissingLocalPaths();
+    window.__msMissingLocalFiles = raw;
+    if (!raw.length) {
+        host.innerHTML = '<div style="padding:22px; text-align:center; color:var(--text-dim); font-size:13px;"><i class="fas fa-check-circle" style="color:var(--success); font-size:22px; display:block; margin-bottom:8px;"></i>Every document with a reference or link already has a local file set.</div>';
+        return;
+    }
+    // index-tagged then sorted by client, then doc type
+    var rows = raw.map(function (f, i) { return { f: f, i: i }; });
+    rows.sort(function (a, b) {
+        var ca = (a.f.client || '').toLowerCase(), cb = (b.f.client || '').toLowerCase();
+        if (ca !== cb) return ca < cb ? -1 : 1;
+        return (a.f.docType || '').localeCompare(b.f.docType || '');
+    });
+    var clients = {};
+    raw.forEach(function (f) { clients[f.client || ''] = true; });
+    var nClients = Object.keys(clients).length;
+
+    var trs = rows.map(function (x) {
+        var f = x.f, idx = x.i;
+        var refHtml = f.ref ? '<span style="font-family:monospace; font-size:11.5px;">' + pEsc(f.ref) + '</span>' : '<span style="color:var(--text-dim); font-style:italic; font-size:11px;">(no ref)</span>';
+        var linkIcon = (f.link && String(f.link).trim()) ? ' <i class="fas fa-link" title="Has URL link: ' + pEsc(f.link) + '" style="color:var(--accent-cyan); font-size:10px; margin-left:5px;"></i>' : '';
+        return '<tr style="border-bottom:1px solid var(--glass-border);">'
+            + '<td style="padding:8px 10px; font-size:12px; white-space:nowrap;">' + pEsc(f.client || '—') + '</td>'
+            + '<td style="padding:8px 10px;"><span class="stage-badge" style="font-size:10px; background:var(--accent-tint-low); color:var(--accent-cyan);">' + pEsc(f.docType) + '</span></td>'
+            + '<td style="padding:8px 10px;">' + refHtml + linkIcon + '</td>'
+            + '<td style="padding:8px 10px; font-size:11px; color:var(--text-dim);">' + pEsc(f.context || '') + '</td>'
+            + '<td style="padding:8px 10px; text-align:right; white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="window.__msSetMissingLocalFile(' + idx + ')" title="Browse to the file on disk and link it"><i class="fas fa-folder-open" style="color:var(--accent-cyan);"></i> Set local file</button></td>'
+            + '</tr>';
+    }).join('');
+
+    host.innerHTML = '<div style="font-size:12px; margin-bottom:12px;"><strong style="color:var(--warning);">' + raw.length + '</strong> document' + (raw.length === 1 ? '' : 's') + ' across <strong>' + nClients + '</strong> client' + (nClients === 1 ? '' : 's') + ' have a reference or link but no local file attached.</div>'
+        + '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">'
+        + '<thead><tr style="border-bottom:2px solid var(--glass-border); text-align:left;">'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Client</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Document</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Reference</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Detail</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim); text-align:right;">Action</th>'
+        + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+};
+
     // Run the scan. Async because each path check is a Tauri invoke round-trip.
     window.__msRunBrokenLinkScan = async function () {
         var t = getTauri();
@@ -10881,6 +11075,14 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 
   <!-- ===== Mode B: Client Document Pack ===== -->
   <div id="docExpClientSection" style="display:none;">
+    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--warning);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open" style="color:var(--warning);"></i> Missing Local Files <span style="font-size:12px; font-weight:400; color:var(--text-dim);">· all clients</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingLocalFiles()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has a reference or link but no local file attached yet. Click <strong>Set local file</strong> to point it at the file on disk — it saves straight to that record, so you don't have to open each contract.</div>
+      <div id="missingLocalFilesBody"></div>
+    </div>
     <div class="card" style="margin-bottom:20px;">
       <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-user-tag"></i> Pick a client</h3>
       <div style="display:grid; grid-template-columns: 1fr 200px 1fr; gap:14px; align-items:end;">
@@ -47138,6 +47340,9 @@ function showDocExportSubtab(which) {
     if (clientS) clientS.style.display = (which === 'client') ? '' : 'none';
     if (remitB) remitB.classList.toggle('active', which === 'remit');
     if (clientB) clientB.classList.toggle('active', which === 'client');
+    if (which === 'client' && typeof window.__msRenderMissingLocalFiles === 'function') {
+        try { window.__msRenderMissingLocalFiles(); } catch (e) {}
+    }
 }
 
 function initDocExportTab() {
