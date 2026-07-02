@@ -10882,6 +10882,10 @@ window.__msRenderMissingLocalFiles = function () {
 
   <!-- LIBRARY LIST -->
   <div id="tplLibraryView">
+    <!-- Phase 8DX — Word-upload tips banner -->
+    <div style="background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px; padding:9px 14px; margin-bottom:14px; font-size:12px; color:var(--text-dim); line-height:1.7;">
+      <i class="fas fa-wand-magic-sparkles" style="color:var(--accent-cyan); margin-right:6px;"></i><strong style="color:var(--text-main);">Upload Word (.docx):</strong> fill spots are detected automatically — a run of 3+ underscores becomes <code>{{Blank N}}</code>, <code>[Field]</code> and <code>&lt;Field&gt;</code> become <code>{{Field}}</code>, and any existing <code>{{Field}}</code> markers are kept as-is. Word formatting (bold, lists, tables) is preserved. Old <code>.doc</code> files aren't supported — re-save as <code>.docx</code> first.
+    </div>
     <div class="card" style="margin-bottom:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
         <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open"></i> Template Library</h3>
@@ -10940,11 +10944,19 @@ window.__msRenderMissingLocalFiles = function () {
         </div>
         <div id="tplMarkupTips" style="flex:1 1 280px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px; padding:10px 14px;">
           <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:6px;">Formatting tips</div>
-          <div style="font-size:12px; color:var(--text-dim); line-height:1.7;">
+          <div id="tplTipsMarkup" style="font-size:12px; color:var(--text-dim); line-height:1.7;">
             • Blank line = new paragraph<br>
             • <code>**text**</code> = <strong>bold</strong><br>
             • Line starting with <code>- </code> = bullet point<br>
             • <code>{{Field Name}}</code> = a blank you fill in each time<br>
+            • <code>{{signature}}</code> = your digital signature/stamp here<br>
+            • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)<br>
+            • <code>{{space}}</code> = a blank line of vertical space (stack for more)
+          </div>
+          <div id="tplTipsHtml" style="display:none; font-size:12px; color:var(--text-dim); line-height:1.7;">
+            • Keep the <code>{{Field Name}}</code> markers — each one becomes a fill-in box<br>
+            • Blanks (<code>___</code>), <code>[Field]</code> and <code>&lt;Field&gt;</code> were already converted when the Word file was imported<br>
+            • Click into the page to edit text directly — Word formatting (bold, lists, tables) is preserved<br>
             • <code>{{signature}}</code> = your digital signature/stamp here<br>
             • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)<br>
             • <code>{{space}}</code> = a blank line of vertical space (stack for more)
@@ -10983,6 +10995,13 @@ window.__msRenderMissingLocalFiles = function () {
               <input id="tplTrackOtherNote" type="text" placeholder="e.g. FedEx customs authorisation" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
             </div>
           </div>
+        </div>
+        <!-- Phase 8DX — per-use file-name suffix -->
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">File name</div>
+          <label style="display:block; font-size:11.5px; color:var(--text-dim); margin-bottom:4px;">Additional name <span style="opacity:0.6;">(optional)</span></label>
+          <input id="tplExtraName" type="text" placeholder="e.g. CAMA_June2026" oninput="__msUpdateSaveNameHint()" style="width:100%; padding:8px 10px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:13px;">
+          <div id="tplSaveNameHint" style="font-size:10.5px; color:var(--text-dim); margin-top:6px; word-break:break-all;"></div>
         </div>
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
           <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Signature &amp; stamp</div>
@@ -46304,7 +46323,7 @@ function __msValidateTrackBeforePrint() {
     return true;
 }
 // Silent save AFTER print dispatch, reading the inline controls. No modal.
-function __msSaveGeneratedDocInline(t) {
+function __msSaveGeneratedDocInline(t, docName) {
     if (!t) return;
     var chk = document.getElementById('tplTrackDoc');
     if (!chk || !chk.checked) return; // not tracking
@@ -46321,7 +46340,7 @@ function __msSaveGeneratedDocInline(t) {
     var rec = {
         id: __msGenDocId(),
         templateId: t.id || null,
-        templateName: t.name || 'Document',
+        templateName: docName || t.name || 'Document',
         clientKey: isOther ? '' : cmKey(val),
         clientName: isOther ? '' : val,
         isOther: isOther,
@@ -46414,7 +46433,7 @@ function viewGeneratedDoc(id) {
     // Draft: rebuild HTML from stored template + field values and print.
     var t = __msLoadTemplates().find(function (x) { return x.id === d.templateId; });
     if (!t) { __msToast('Original template no longer exists — cannot re-print draft.', 'error'); return; }
-    var fullHtml = __msBuildTemplatePageHtml(t, d.fieldValues || {});
+    var fullHtml = __msBuildTemplatePageHtml(t, d.fieldValues || {}, d.templateName || '');
     var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
     if (hasTauri && typeof printHtml === 'function') { printHtml(fullHtml, d.templateName || 'Document'); return; }
     if (typeof openPreviewInPageModal === 'function') {
@@ -47728,16 +47747,19 @@ function __msRenderHtmlChunks(html, values, includeSig, includeStamp) {
     return blocks;
 }
 
-// Editor mode switch: markup textarea (+ formatting tips) vs the imported-HTML
-// contenteditable surface.
+// Editor mode switch: markup textarea vs the imported-HTML contenteditable
+// surface. 8DX — the formatting-tips box now stays visible in BOTH modes;
+// only its inner content swaps (markup tips vs Word-import tips).
 function __msApplyEditorMode() {
     var mk = document.getElementById('tplMarkupWrap');
     var ht = document.getElementById('tplHtmlWrap');
-    var tips = document.getElementById('tplMarkupTips');
+    var tipsMk = document.getElementById('tplTipsMarkup');
+    var tipsHt = document.getElementById('tplTipsHtml');
     var isHtml = (__msEditorFormat === 'html');
     if (mk) mk.style.display = isHtml ? 'none' : '';
     if (ht) ht.style.display = isHtml ? '' : 'none';
-    if (tips) tips.style.display = isHtml ? 'none' : '';
+    if (tipsMk) tipsMk.style.display = isHtml ? 'none' : '';
+    if (tipsHt) tipsHt.style.display = isHtml ? '' : 'none';
 }
 
 function __msTriggerWordUpload() {
@@ -47863,6 +47885,8 @@ function openTemplateFill(id) {
     var gd = document.getElementById('genDocsSection'); if (gd) gd.style.display = 'none';
     var titleEl = document.getElementById('tplFillTitle');
     if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen-to-square"></i> ' + pEsc(t.name || 'Fill Template');
+    var __xn = document.getElementById('tplExtraName'); if (__xn) __xn.value = '';
+    var __xh = document.getElementById('tplSaveNameHint'); if (__xh) __xh.textContent = '';
     __msBuildFillForm(t);
     if (typeof __msPopulateTrackClientDropdown === 'function') __msPopulateTrackClientDropdown();
     if (typeof __msResetTrackControls === 'function') __msResetTrackControls();
@@ -47914,6 +47938,36 @@ function __msFillToday(key) {
     var el = document.getElementById('tplf_' + key);
     if (el) { el.value = s; __msFillValues[key] = s; __msUpdateFillPreview(); }
 }
+
+// ===== Phase 8DX — per-use "Additional name" (file-name suffix) ===========
+// Sanitize the typed suffix for use in a file name: keep letters, digits,
+// underscore, hyphen, dot and spaces; drop everything else; whitespace runs
+// become single underscores; capped at 60 chars; stray edge separators trimmed.
+function __msSanitizeSuffix(s) {
+    var out = String(s || '').replace(/[^A-Za-z0-9._\- ]+/g, ' ');
+    out = out.trim().replace(/\s+/g, '_');
+    if (out.length > 60) out = out.slice(0, 60);
+    out = out.replace(/^[_\-.]+|[_\-.]+$/g, '');
+    return out;
+}
+// Compose the document name used for print/PDF title and Generated Documents.
+// Empty suffix -> plain template name (pre-8DX behaviour, unchanged).
+function __msComposeDocName(t) {
+    var base = (t && t.name) ? String(t.name) : 'Document';
+    var sfx = __msSanitizeSuffix((document.getElementById('tplExtraName') || {}).value);
+    return sfx ? (base + '_' + sfx) : base;
+}
+// Live "Will save as: ..." hint under the Additional-name box.
+function __msUpdateSaveNameHint() {
+    var hint = document.getElementById('tplSaveNameHint');
+    if (!hint) return;
+    var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
+    if (!t) { hint.textContent = ''; return; }
+    var sfx = __msSanitizeSuffix((document.getElementById('tplExtraName') || {}).value);
+    if (!sfx) { hint.textContent = ''; return; }
+    hint.innerHTML = 'Will save as: <strong>' + pEsc(__msComposeDocName(t)) + '.pdf</strong>';
+}
+// ===== /8DX ================================================================
 function __msUpdateFillPreview() {
     var page = document.getElementById('tplPreviewPage');
     if (!page) return;
@@ -47947,7 +48001,7 @@ function __msUpdateSigStampHint() {
 // companyProfile.letterheadDataUrl is set (content layer padded 140/50/50/120 to
 // clear the letterhead), else a plain-margin layout. Output mode (previewMode
 // false) so unfilled fields render blank, not highlighted.
-function __msBuildTemplatePageHtml(t, values) {
+function __msBuildTemplatePageHtml(t, values, docName) {
     var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     var sigEl = document.getElementById('tplIncludeSignature');
     var stampEl = document.getElementById('tplIncludeStamp');
@@ -47955,7 +48009,7 @@ function __msBuildTemplatePageHtml(t, values) {
     var includeStamp = stampEl ? stampEl.checked : true;
     var hasLetterhead = !!cp.letterheadDataUrl;
     var lhUrl = cp.letterheadDataUrl || '';
-    var titleName = pEsc(t.name || 'Document');
+    var titleName = pEsc(docName || t.name || 'Document');
 
     // Phase 8BR — proposal-style JS pagination (the 8S/8T technique). Content is
     // emitted as discrete .page-chunk blocks; an inline paginator fills A4 pages
@@ -48054,8 +48108,8 @@ function printTemplate() {
     }
     // 8BU — guard: if Track is on but no client/Other assigned, block before print.
     if (typeof __msValidateTrackBeforePrint === 'function' && !__msValidateTrackBeforePrint()) return;
-    var fullHtml = __msBuildTemplatePageHtml(t, __msFillValues);
-    var docTitle = (t.name || 'Document');
+    var docTitle = (typeof __msComposeDocName === 'function') ? __msComposeDocName(t) : (t.name || 'Document');
+    var fullHtml = __msBuildTemplatePageHtml(t, __msFillValues, docTitle);
     var hasTauri = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
     if (hasTauri && typeof printHtml === 'function') {
         printHtml(fullHtml, docTitle);
@@ -48068,7 +48122,7 @@ function printTemplate() {
     }
     // Phase 8BU — silent inline save (client already chosen on the fill screen).
     if (typeof __msSaveGeneratedDocInline === 'function') {
-        __msSaveGeneratedDocInline(t);
+        __msSaveGeneratedDocInline(t, docTitle);
     }
 }
 function __msFmtDateShort(ts) {
