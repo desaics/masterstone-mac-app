@@ -48016,6 +48016,9 @@ function __msBuildTemplatePageHtml(t, values, docName) {
     // one at a time, repeating the letterhead on every page, so long documents
     // (e.g. with the signature/stamp block) flow onto extra pages instead of
     // being clipped by a fixed-height single page.
+    // 8DY — additionally table-aware: a table chunk taller than a page is
+    // split row-by-row across pages, repeating any thead and locking column
+    // widths so continuation pages align (single oversized rows still clip).
     var chunks = (t.format === 'html')
         ? __msRenderHtmlChunks(t.body, values, includeSig, includeStamp)
         : __msRenderFullDocChunks(t.body, values, includeSig, includeStamp);
@@ -48073,10 +48076,135 @@ function __msBuildTemplatePageHtml(t, values, docName) {
         '      container.appendChild(page); return { page: page, content: content };\n' +
         '    }\n' +
         '    var current = createPage();\n' +
-        '    for (var i = 0; i < chunks.length; i++) {\n' +
-        '      var clone = chunks[i].cloneNode(true); current.content.appendChild(clone);\n' +
-        '      if (current.content.scrollHeight > PAGE_HEIGHT_PX) {\n' +
-        '        if (current.content.children.length > 1) { current.content.removeChild(clone); current = createPage(); current.content.appendChild(clone); }\n' +
+        '    function overflows(){ return current.content.scrollHeight > PAGE_HEIGHT_PX; }\n' +
+        '    function bodyRows(t){\n' +
+        '      var out = [];\n' +
+        '      for (var b = 0; b < t.tBodies.length; b++) { var rs = t.tBodies[b].rows; for (var i = 0; i < rs.length; i++) out.push(rs[i]); }\n' +
+        '      return out;\n' +
+        '    }\n' +
+        '    function splittableTable(el){\n' +
+        '      if (!el) return null;\n' +
+        '      var t = (el.tagName === "TABLE") ? el : (el.querySelector ? el.querySelector("table") : null);\n' +
+        '      if (!t || !t.tBodies || t.tBodies.length === 0) return null;\n' +
+        '      return (bodyRows(t).length >= 2) ? t : null;\n' +
+        '    }\n' +
+        '    function breakAllowed(rows){\n' +
+        '      var no = [], i, c, j;\n' +
+        '      for (i = 0; i < rows.length; i++) no.push(false);\n' +
+        '      for (i = 0; i < rows.length; i++) {\n' +
+        '        var cells = rows[i].cells || [];\n' +
+        '        for (c = 0; c < cells.length; c++) {\n' +
+        '          var k = parseInt(cells[c].getAttribute("rowspan") || "1", 10);\n' +
+        '          if (isNaN(k) || k < 1) k = 1;\n' +
+        '          for (j = i + 1; j < rows.length && j <= i + k - 1; j++) no[j] = true;\n' +
+        '        }\n' +
+        '      }\n' +
+        '      var flags = [];\n' +
+        '      for (i = 0; i < rows.length; i++) flags.push(!no[i]);\n' +
+        '      return flags;\n' +
+        '    }\n' +
+        '    function directChild(t, tag){\n' +
+        '      for (var i = 0; i < t.children.length; i++) { if (t.children[i].tagName === tag) return t.children[i]; }\n' +
+        '      return null;\n' +
+        '    }\n' +
+        '    function lockWidths(t){\n' +
+        '      try {\n' +
+        '        var rows = [];\n' +
+        '        if (t.tHead) { for (var h = 0; h < t.tHead.rows.length; h++) rows.push(t.tHead.rows[h]); }\n' +
+        '        rows = rows.concat(bodyRows(t));\n' +
+        '        var best = null, bestN = 0, r, c;\n' +
+        '        for (r = 0; r < rows.length; r++) {\n' +
+        '          var cells = rows[r].cells, simple = true;\n' +
+        '          for (c = 0; c < cells.length; c++) {\n' +
+        '            var cs = parseInt(cells[c].getAttribute("colspan") || "1", 10);\n' +
+        '            if (cs > 1) { simple = false; break; }\n' +
+        '          }\n' +
+        '          if (simple && cells.length > bestN) { best = rows[r]; bestN = cells.length; }\n' +
+        '        }\n' +
+        '        if (!best || bestN === 0) return;\n' +
+        '        var widths = [], total = 0, w;\n' +
+        '        for (c = 0; c < best.cells.length; c++) { w = best.cells[c].getBoundingClientRect().width; widths.push(w); total += w; }\n' +
+        '        if (!(total > 0)) return;\n' +
+        '        var cg = document.createElement("colgroup");\n' +
+        '        for (w = 0; w < widths.length; w++) {\n' +
+        '          var col = document.createElement("col");\n' +
+        '          col.style.width = ((100 * widths[w] / total).toFixed(3)) + "%";\n' +
+        '          cg.appendChild(col);\n' +
+        '        }\n' +
+        '        t.insertBefore(cg, t.firstChild);\n' +
+        '        t.style.tableLayout = "fixed";\n' +
+        '      } catch (e) {}\n' +
+        '    }\n' +
+        '    function makeContinuation(t){\n' +
+        '      var shell = t.cloneNode(false);\n' +
+        '      var cg = directChild(t, "COLGROUP");\n' +
+        '      if (cg) shell.appendChild(cg.cloneNode(true));\n' +
+        '      if (t.tHead) shell.appendChild(t.tHead.cloneNode(true));\n' +
+        '      var tb = document.createElement("tbody");\n' +
+        '      shell.appendChild(tb);\n' +
+        '      var wrap = document.createElement("div");\n' +
+        '      wrap.className = "page-chunk";\n' +
+        '      wrap.appendChild(shell);\n' +
+        '      return { chunk: wrap, tbody: tb };\n' +
+        '    }\n' +
+        '    function splitTableChunk(chunkEl, t){\n' +
+        '      lockWidths(t);\n' +
+        '      var rows = bodyRows(t);\n' +
+        '      var flags = breakAllowed(rows);\n' +
+        '      var queue = [], i;\n' +
+        '      for (i = 0; i < rows.length; i++) queue.push({ tr: rows[i], brk: flags[i] });\n' +
+        '      for (i = 0; i < rows.length; i++) rows[i].parentNode.removeChild(rows[i]);\n' +
+        '      var target = t.tBodies[0];\n' +
+        '      var placed = 0;\n' +
+        '      var guard = 0;\n' +
+        '      while (queue.length) {\n' +
+        '        if (++guard > 5000) break;\n' +
+        '        var group = [queue[0]], g = 1;\n' +
+        '        while (g < queue.length && !queue[g].brk) { group.push(queue[g]); g++; }\n' +
+        '        var a;\n' +
+        '        for (a = 0; a < group.length; a++) target.appendChild(group[a].tr);\n' +
+        '        if (overflows()) {\n' +
+        '          var others = current.content.children.length > 1;\n' +
+        '          if (placed > 0 || others) {\n' +
+        '            for (a = group.length - 1; a >= 0; a--) target.removeChild(group[a].tr);\n' +
+        '            if (placed === 0 && others) {\n' +
+        '              current.content.removeChild(chunkEl);\n' +
+        '              current = createPage();\n' +
+        '              current.content.appendChild(chunkEl);\n' +
+        '              continue;\n' +
+        '            }\n' +
+        '            current = createPage();\n' +
+        '            var cont = makeContinuation(t);\n' +
+        '            current.content.appendChild(cont.chunk);\n' +
+        '            target = cont.tbody;\n' +
+        '            placed = 0;\n' +
+        '            continue;\n' +
+        '          }\n' +
+        '          for (a = 0; a < group.length; a++) queue.shift();\n' +
+        '          placed += group.length;\n' +
+        '          if (queue.length) {\n' +
+        '            current = createPage();\n' +
+        '            var cont2 = makeContinuation(t);\n' +
+        '            current.content.appendChild(cont2.chunk);\n' +
+        '            target = cont2.tbody;\n' +
+        '            placed = 0;\n' +
+        '          }\n' +
+        '          continue;\n' +
+        '        }\n' +
+        '        for (a = 0; a < group.length; a++) queue.shift();\n' +
+        '        placed += group.length;\n' +
+        '      }\n' +
+        '    }\n' +
+        '    for (var ci = 0; ci < chunks.length; ci++) {\n' +
+        '      var clone = chunks[ci].cloneNode(true);\n' +
+        '      current.content.appendChild(clone);\n' +
+        '      if (!overflows()) continue;\n' +
+        '      var st = splittableTable(clone);\n' +
+        '      if (st) { splitTableChunk(clone, st); continue; }\n' +
+        '      if (current.content.children.length > 1) {\n' +
+        '        current.content.removeChild(clone);\n' +
+        '        current = createPage();\n' +
+        '        current.content.appendChild(clone);\n' +
         '      }\n' +
         '    }\n' +
         '  }\n' +
