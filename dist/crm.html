@@ -43583,6 +43583,43 @@ function _caExportConsultantAddressString(con) {
     return parts.filter(Boolean).join(', ');
 }
 
+// 8DZ — Decide a consultant's GST split for the CA export Payments sheets.
+// Intra-state (consultant state == company state) → CGST+SGST 50/50 (legacy
+// behaviour); inter-state → the full amount in IGST. The consultant's state
+// comes from the first two digits of their GSTIN; fallback: their address
+// State field matched against GST_STATE_CODES (as a 2-digit code or a state
+// name, case-insensitive). If either state can't be determined, the legacy
+// CGST+SGST split is kept. gstAmt <= 0 → all zeros.
+function _caExportConsultantGstSplit(con, gstAmt) {
+    const amt = parseFloat(gstAmt) || 0;
+    if (!(amt > 0)) return { igst: 0, cgst: 0, sgst: 0 };
+    let myState = '';
+    try {
+        if (typeof companyProfile === 'object' && companyProfile) {
+            myState = String(companyProfile.stateCode || '').trim();
+            if (!myState && companyProfile.gstin) myState = String(companyProfile.gstin).trim().substring(0, 2);
+        }
+    } catch (e) { myState = ''; }
+    let conState = '';
+    if (con && con.gstRegistered && con.gstNumber) {
+        const m = String(con.gstNumber).trim().match(/^(\d{2})/);
+        if (m) conState = m[1];
+    }
+    if (!conState && con && con.state && typeof GST_STATE_CODES !== 'undefined') {
+        const raw = String(con.state).trim();
+        if (/^\d{2}$/.test(raw) && GST_STATE_CODES[raw]) {
+            conState = raw;
+        } else {
+            const want = raw.toLowerCase();
+            for (const code in GST_STATE_CODES) {
+                if (String(GST_STATE_CODES[code]).trim().toLowerCase() === want) { conState = code; break; }
+            }
+        }
+    }
+    if (myState && conState && myState !== conState) return { igst: amt, cgst: 0, sgst: 0 };
+    return { igst: 0, cgst: amt / 2, sgst: amt / 2 };
+}
+
 // 8BC.1 hotfix — compute INR/USD values + GST for a single AP invoice row.
 // Authoritative FX resolution: ap.fx if set on the record, else getEffectiveFX()
 // from the cycle (same logic the rest of the CRM uses for AP records).
@@ -43875,11 +43912,10 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
             const con = (typeof getConsultantById === 'function') ? getConsultantById(p.consultantId) : null;
             const businessHead = _caExportBusinessHeadForConsultant(con);
 
-            // Consultant payments are always domestic — split GST as CGST+SGST evenly
+            // 8DZ — state-aware GST split: intra-state → CGST+SGST, inter-state → IGST
             const subtotal = parseFloat(p.subtotal) || 0;
             const gstAmt = p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0;
-            const cgst = gstAmt / 2;
-            const sgst = gstAmt / 2;
+            const gstSplit = _caExportConsultantGstSplit(con, gstAmt);
 
             const row = {
                 'SR. NO': rows.length + 1,
@@ -43899,9 +43935,9 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
                 'USD VALUE': '',
                 'USD:INR INVOICE DATE RATE': '',
                 'INR VALUE': subtotal,
-                'IGST': 0,
-                'CGST': cgst,
-                'SGST': sgst,
+                'IGST': gstSplit.igst,
+                'CGST': gstSplit.cgst,
+                'SGST': gstSplit.sgst,
                 'TOTAL GST': gstAmt,
                 'PAYMENT VALUE': subtotal + gstAmt,
                 'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
@@ -44254,7 +44290,7 @@ async function generateCaExport() {
                 const businessHead = _caExportBusinessHeadForConsultant(con);
                 const subtotal = parseFloat(p.subtotal) || 0;
                 const gstAmt = p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0;
-                const cgst = gstAmt / 2; const sgst = gstAmt / 2;
+                const gstSplit = _caExportConsultantGstSplit(con, gstAmt); // 8DZ — state-aware
                 paymentsAcc.push({
                     _link: p.link || '',  // future-compat: if link is added to consultantPaymentBlank
                     'SR. NO': 0,
@@ -44272,7 +44308,7 @@ async function generateCaExport() {
                     'UNIT': 1, 'PRICE/UNIT': 0,
                     'USD VALUE': '', 'USD:INR INVOICE DATE RATE': '',
                     'INR VALUE': subtotal,
-                    'IGST': 0, 'CGST': cgst, 'SGST': sgst,
+                    'IGST': gstSplit.igst, 'CGST': gstSplit.cgst, 'SGST': gstSplit.sgst,
                     'TOTAL GST': gstAmt,
                     'PAYMENT VALUE': subtotal + gstAmt,
                     'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
