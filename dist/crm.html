@@ -6741,7 +6741,10 @@ window.__msRenderMissingLocalFiles = function () {
 
   <div class="nav-section-header">Overview</div>
   <div class="nav-item active" title="Business Snapshot" onclick="showTab('businessSnapshotTab')"><i class="fas fa-gauge-high"></i> Business Snapshot</div>
-  <div class="nav-item" title="Financial Intelligence" onclick="showTab('dashboard')"><i class="fas fa-chart-pie"></i> Financial Intelligence</div>
+  <!-- 8EA — Financial Intelligence nav item retired. The #dashboard tab stays
+       dormant in the file (its calcDashboard engine now feeds the Performance
+       & History section on the Business Snapshot); physical deletion of the
+       dead markup is planned for a later cleanup phase. -->
 
   <div class="nav-section-header">Sales &amp; CRM</div>
   <div class="nav-item" title="Client Master" onclick="showTab('clientMasterTab')"><i class="fas fa-address-card"></i> Client Master</div>
@@ -6914,9 +6917,12 @@ window.__msRenderMissingLocalFiles = function () {
       </div>
     </div>
 
-    <!-- Row 4: Activity tiles -->
-    <div class="bs-section-lbl">Activity</div>
-    <div class="bs-activity-row">
+    <!-- Row 4: Activity tiles — 8EA: retired from view (Prospects/Contracts
+         live in the KPI strip; Renewals/POs live in the Action Center). Kept
+         in the DOM so renderBusinessSnapshot's element fillers stay valid;
+         physical deletion planned for the FI cleanup phase. -->
+    <div class="bs-section-lbl" style="display:none;">Activity</div>
+    <div class="bs-activity-row" style="display:none;">
       <div class="bs-activity-tile">
         <div class="bs-tile-head"><i class="fas fa-seedling bs-tile-icon"></i><div class="bs-tile-lbl">Prospects</div></div>
         <div class="bs-tile-desc">Open deals you're working on</div>
@@ -6968,6 +6974,70 @@ window.__msRenderMissingLocalFiles = function () {
         </div>
       </div>
     </div>
+
+    <!-- Phase 8EA — Performance & History (moved verbatim from Financial
+         Intelligence; element ids unchanged so the existing calcDashboard
+         engine fills them). Figures reflect All Clients / All Years on the
+         default FY basis — the old page's filter dropdowns are retired. -->
+    <div class="bs-section-lbl" style="margin-top:24px;">Performance &amp; History · all years</div>
+    <div class="kpi-section-title">Core Performance Metrics</div>
+    <div class="stat-grid-4">
+          <div class="stat-card" onclick="openDrillDown('ARR')">
+            <div class="stat-label">Total Realized Revenue</div>
+            <div class="stat-val" id="d_arr">₹0</div>
+          </div>
+          <div class="stat-card" onclick="openDrillDown('COST')">
+            <div class="stat-label">Realized Vendor Cost</div>
+            <div class="stat-val" id="d_cost" style="color:var(--text-dim)">₹0</div>
+          </div>
+          <div class="stat-card" onclick="openDrillDown('MARGIN')">
+            <div class="stat-label">Net Operating Margin</div>
+            <div class="stat-val" id="d_margin" style="color:var(--success)">₹0</div>
+          </div>
+          <div class="stat-card" onclick="openDrillDown('EFFICIENCY')">
+            <div class="stat-label">Margin Efficiency</div>
+            <div class="stat-val" id="d_margin_pct" style="color:var(--accent-cyan)">0%</div>
+          </div>
+    </div>
+
+    <div class="kpi-section-title">Risk & Variance Analysis</div>
+    <div class="stat-grid-3">
+             <div class="stat-card" onclick="openDrillDown('CONCENTRATION')">
+              <div class="stat-label">Portfolio Concentration</div>
+              <div class="stat-val" id="d_conc" style="color:var(--warning)">0%</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Top client rev share</div>
+             </div>
+             <div class="stat-card" onclick="openDrillDown('FX_REALIZED')">
+              <div class="stat-label">FX Impact Realized</div>
+              <div class="stat-val" id="d_fx" style="color:var(--text-dim)">₹0</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Gain/Loss vs Booking Rate</div>
+             </div>
+             <div class="stat-card" onclick="openDrillDown('FX_PCT')">
+              <div class="stat-label">FX Impact %</div>
+              <div class="stat-val" id="d_fx_pct" style="color:var(--text-dim)">0%</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Impact on Margin</div>
+             </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px;">
+          <h3><i class="fas fa-chess"></i> Strategic Insights (Historical)</h3>
+          <div class="scroll-container">
+              <table id="strategyTable">
+                  <thead>
+                      <tr>
+                          <th>Financial Year</th>
+                          <th style="text-align:right;">Total Revenue</th>
+                          <th style="text-align:right;">YoY Growth</th>
+                          <th style="text-align:right;">Total Margin</th>
+                          <th style="text-align:right;">Margin %</th>
+                          <th style="text-align:right;">Avg FX Rate</th>
+                          <th style="text-align:right;">Contract Count</th>
+                      </tr>
+                  </thead>
+                  <tbody id="strategyBody"></tbody>
+              </table>
+          </div>
+    </div>
   </div>
 
   <div id="dashboard" class="hidden">
@@ -7010,45 +7080,8 @@ window.__msRenderMissingLocalFiles = function () {
         </div>
     </div>
     
-    <div class="kpi-section-title">Core Performance Metrics</div>
-    <div class="stat-grid-4">
-          <div class="stat-card" onclick="openDrillDown('ARR')">
-            <div class="stat-label">Total Realized Revenue</div>
-            <div class="stat-val" id="d_arr">₹0</div>
-          </div>
-          <div class="stat-card" onclick="openDrillDown('COST')">
-            <div class="stat-label">Realized Vendor Cost</div>
-            <div class="stat-val" id="d_cost" style="color:var(--text-dim)">₹0</div>
-          </div>
-          <div class="stat-card" onclick="openDrillDown('MARGIN')">
-            <div class="stat-label">Net Operating Margin</div>
-            <div class="stat-val" id="d_margin" style="color:var(--success)">₹0</div>
-          </div>
-          <div class="stat-card" onclick="openDrillDown('EFFICIENCY')">
-            <div class="stat-label">Margin Efficiency</div>
-            <div class="stat-val" id="d_margin_pct" style="color:var(--accent-cyan)">0%</div>
-          </div>
-    </div>
-
-    <div class="kpi-section-title">Risk & Variance Analysis</div>
-    <div class="stat-grid-3">
-             <div class="stat-card" onclick="openDrillDown('CONCENTRATION')">
-              <div class="stat-label">Portfolio Concentration</div>
-              <div class="stat-val" id="d_conc" style="color:var(--warning)">0%</div>
-              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Top client rev share</div>
-             </div>
-             <div class="stat-card" onclick="openDrillDown('FX_REALIZED')">
-              <div class="stat-label">FX Impact Realized</div>
-              <div class="stat-val" id="d_fx" style="color:var(--text-dim)">₹0</div>
-              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Gain/Loss vs Booking Rate</div>
-             </div>
-             <div class="stat-card" onclick="openDrillDown('FX_PCT')">
-              <div class="stat-label">FX Impact %</div>
-              <div class="stat-val" id="d_fx_pct" style="color:var(--text-dim)">0%</div>
-              <div style="font-size:11px; color:var(--text-dim); margin-top:8px;">Impact on Margin</div>
-             </div>
-    </div>
-
+    <!-- 8EA: Core Performance Metrics + Risk & Variance tiles moved to the
+         Business Snapshot (Performance & History section). -->
     <!-- FORWARD PIPELINE VIEW — committed contract revenue + weighted pipeline -->
     <div class="kpi-section-title" style="margin-top:24px;">Forward Pipeline View <span style="font-size:11px; color:var(--text-dim); font-weight:500; margin-left:8px;">(Next 12 Months)</span></div>
     <div class="card" style="border-top: 3px solid var(--purple); margin-bottom: 24px;">
@@ -7227,26 +7260,8 @@ window.__msRenderMissingLocalFiles = function () {
         </div>
     </div>
 
-    <div class="card" style="margin-bottom: 24px;">
-          <h3><i class="fas fa-chess"></i> Strategic Insights (Historical)</h3>
-          <div class="scroll-container">
-              <table id="strategyTable">
-                  <thead>
-                      <tr>
-                          <th>Financial Year</th>
-                          <th style="text-align:right;">Total Revenue</th>
-                          <th style="text-align:right;">YoY Growth</th>
-                          <th style="text-align:right;">Total Margin</th>
-                          <th style="text-align:right;">Margin %</th>
-                          <th style="text-align:right;">Avg FX Rate</th>
-                          <th style="text-align:right;">Contract Count</th>
-                      </tr>
-                  </thead>
-                  <tbody id="strategyBody"></tbody>
-              </table>
-          </div>
-    </div>
-
+    <!-- 8EA: Strategic Insights (Historical) table moved to the Business
+         Snapshot (Performance & History section). -->
     <div class="card" style="margin-bottom: 24px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <h3><i class="fas fa-users-viewfinder"></i> Client Performance Leaderboard</h3>
@@ -40992,6 +41007,15 @@ function renderBusinessSnapshot() {
     wireClick('bsPoCount', () => bsGotoTab('purchaseOrdersTab'));
     wireClick('bsRnCount', () => bsGotoTab('renewalsTab'));
     wireClick('bsCtCount', () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
+
+    // 8EA — the Performance & History section (moved from Financial
+    // Intelligence) is computed by the existing calcDashboard engine; refresh
+    // it whenever the Snapshot re-renders. Debounced wrapper preferred — the
+    // engine also repaints dormant FI leftovers, which is cheap and harmless.
+    try {
+        if (typeof debouncedCalcDashboard === 'function') debouncedCalcDashboard();
+        else if (typeof calcDashboard === 'function') calcDashboard();
+    } catch (_) {}
 }
 
 /* ======================================================================
