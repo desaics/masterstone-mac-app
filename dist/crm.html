@@ -10990,6 +10990,12 @@ window.__msRenderMissingLocalFiles = function () {
         <button class="btn btn-primary btn-sm" onclick="printTemplate()"><i class="fas fa-print"></i> Print / Save as PDF</button>
       </div>
     </div>
+    <!-- 8EC — edit-mode banner: shown only while editing an existing draft -->
+    <div id="tplEditBanner" style="display:none; margin-bottom:14px; padding:10px 14px; border:1px solid var(--warning); border-radius:8px; background:rgba(210,153,34,0.10); font-size:13px; align-items:center; gap:10px;">
+      <i class="fas fa-pen" style="color:var(--warning);"></i>
+      <div style="flex:1;">Editing draft: <strong id="tplEditBannerName"></strong> &mdash; printing will <strong>update this document</strong>, not create a new one.</div>
+      <button class="btn btn-ghost btn-sm" onclick="__msCancelGenDocEdit()"><i class="fas fa-times"></i> Cancel edit</button>
+    </div>
     <div style="display:grid; grid-template-columns: 380px 1fr; gap:18px; align-items:start;">
       <!-- FORM -->
       <div class="card" style="margin:0;">
@@ -46400,6 +46406,32 @@ function __msSaveGeneratedDocInline(t, docName) {
     } else if (!val) {
         return; // guard already warned
     }
+    // 8EC — edit mode: update the existing draft in place (no duplicate row).
+    if (__msEditingGenDocId) {
+        var __d0 = __msLoadGenDocs().find(function (x) { return x.id === __msEditingGenDocId; });
+        if (__d0 && (__d0.status || 'draft') === 'draft') {
+            __d0.templateName = docName || t.name || 'Document';
+            __d0.clientKey = isOther ? '' : cmKey(val);
+            __d0.clientName = isOther ? '' : val;
+            __d0.isOther = isOther;
+            __d0.otherNote = otherNote;
+            __d0.fieldValues = JSON.parse(JSON.stringify(__msFillValues || {}));
+            __d0.includeSignature = !!(document.getElementById('tplIncludeSignature') || {}).checked;
+            __d0.includeStamp = !!(document.getElementById('tplIncludeStamp') || {}).checked;
+            __d0.extraName = __msSanitizeSuffix((document.getElementById('tplExtraName') || {}).value);
+            __d0.updatedAt = new Date().toISOString();
+            __msPersistGenDocs();
+            if (typeof showProspectToast === 'function') {
+                showProspectToast('<i class="fas fa-pen" style="color:var(--success);"></i> Updated <strong>' + pEsc(__d0.templateName) + '</strong> in Generated Documents.', 4500);
+            }
+            return;
+        }
+        // The draft vanished or was issued mid-edit — keep the work as a NEW draft.
+        __msEditingGenDocId = null;
+        if (typeof showProspectToast === 'function') {
+            showProspectToast('<i class="fas fa-info-circle" style="color:var(--warning);"></i> Original draft was no longer editable &mdash; saved as a new draft instead.', 5000);
+        }
+    }
     var rec = {
         id: __msGenDocId(),
         templateId: t.id || null,
@@ -46411,6 +46443,7 @@ function __msSaveGeneratedDocInline(t, docName) {
         fieldValues: JSON.parse(JSON.stringify(__msFillValues || {})),
         includeSignature: !!(document.getElementById('tplIncludeSignature') || {}).checked,
         includeStamp: !!(document.getElementById('tplIncludeStamp') || {}).checked,
+        extraName: (typeof __msSanitizeSuffix === 'function') ? __msSanitizeSuffix((document.getElementById('tplExtraName') || {}).value) : '', // 8EC
         status: 'draft',
         issuedAttachmentId: null,
         createdAt: new Date().toISOString(),
@@ -46471,6 +46504,7 @@ function renderGeneratedDocs() {
         if (issued) {
             actions += '<button class="btn btn-primary btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="View issued PDF"><i class="fas fa-file-pdf"></i> View</button> ';
         } else {
+            actions += '<button class="btn btn-ghost btn-sm" onclick="editGeneratedDoc(\'' + d.id + '\')" title="Edit this draft — reopens the fill screen; printing updates this document, not a new one"><i class="fas fa-pen"></i> Edit</button> ';
             actions += '<button class="btn btn-ghost btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="Re-print draft"><i class="fas fa-print"></i> Re-print</button> ';
             actions += '<button class="btn btn-primary btn-sm" onclick="markGeneratedDocIssued(\'' + d.id + '\')" title="Upload signed/issued PDF"><i class="fas fa-file-upload"></i> Mark Issued</button> ';
         }
@@ -46478,7 +46512,7 @@ function renderGeneratedDocs() {
         return '<tr>' +
             '<td><strong>' + pEsc(d.templateName || 'Document') + '</strong></td>' +
             '<td>' + who + '</td>' +
-            '<td>' + __msFmtDateShort(d.createdAt) + '</td>' +
+            '<td>' + __msFmtDateShort(d.createdAt) + (d.updatedAt ? ' <span style="color:var(--text-dim); font-size:11px;" title="Last edited ' + pEsc(__msFmtDateShort(d.updatedAt)) + '">· edited</span>' : '') + '</td>' +
             '<td>' + statusBadge + '</td>' +
             '<td style="text-align:right; white-space:nowrap;">' + actions + '</td>' +
         '</tr>';
@@ -46504,6 +46538,76 @@ function viewGeneratedDoc(id) {
     }
     var w = window.open('', '_blank', 'width=900,height=1000');
     if (w) { w.document.write(fullHtml); w.document.close(); }
+}
+
+// ---- 8EC — Edit a draft generated document ----------------------------
+// Reopens the fill screen pre-loaded from the stored record. While editing,
+// printing UPDATES that record in place (no duplicate row). Issued documents
+// never reach here — the Edit button only renders on drafts.
+var __msEditingGenDocId = null;
+function editGeneratedDoc(id) {
+    var d = __msLoadGenDocs().find(function (x) { return x.id === id; });
+    if (!d) { __msToast('Document not found', 'error'); return; }
+    if (d.status === 'issued') { __msToast('Issued documents are locked and can no longer be edited.', 'error'); return; }
+    var t = __msLoadTemplates().find(function (x) { return x.id === d.templateId; });
+    if (!t) { __msToast('Original template no longer exists — cannot edit this draft.', 'error'); return; }
+    openTemplateFill(t.id);            // fresh screen (this also nulls the edit id)
+    __msEditingGenDocId = d.id;
+    __msApplyGenDocRecordToFill(d, t); // then restore the record's saved state
+}
+// Restore a record's saved state onto the already-opened fill screen.
+function __msApplyGenDocRecordToFill(d, t) {
+    __msFillValues = JSON.parse(JSON.stringify(d.fieldValues || {}));
+    var inputs = document.querySelectorAll('#tplFillForm [data-key]');
+    for (var i = 0; i < inputs.length; i++) {
+        var k = inputs[i].getAttribute('data-key');
+        if (k != null && Object.prototype.hasOwnProperty.call(__msFillValues, k)) inputs[i].value = __msFillValues[k];
+    }
+    var sigEl = document.getElementById('tplIncludeSignature');
+    if (sigEl) sigEl.checked = (d.includeSignature !== false);
+    var stampEl = document.getElementById('tplIncludeStamp');
+    if (stampEl) stampEl.checked = (d.includeStamp !== false);
+    // Track assignment. A client removed from the Client Master since the
+    // draft was made falls back to "Other" carrying the old name in the note.
+    var chk = document.getElementById('tplTrackDoc');
+    if (chk) chk.checked = true;
+    var sel = document.getElementById('tplTrackClient');
+    var fellBack = false;
+    if (sel) {
+        if (d.isOther) { sel.value = '__OTHER__'; }
+        else {
+            sel.value = d.clientName || '';
+            if (sel.value !== (d.clientName || '')) { sel.value = '__OTHER__'; fellBack = true; }
+        }
+    }
+    var note = document.getElementById('tplTrackOtherNote');
+    if (note) note.value = d.isOther ? (d.otherNote || '') : (fellBack ? (d.clientName || '') : '');
+    __msTrackToggleChanged();
+    __msTrackAssignChanged();
+    // Additional-name suffix: stored on newer records; recovered by stripping
+    // the template-name prefix on older ones.
+    var sfx = (d.extraName !== undefined && d.extraName !== null) ? String(d.extraName) : '';
+    if (!sfx) {
+        var base = (t.name || '') + '_';
+        if (base.length > 1 && String(d.templateName || '').indexOf(base) === 0) sfx = String(d.templateName).slice(base.length);
+    }
+    var xn = document.getElementById('tplExtraName');
+    if (xn) xn.value = sfx;
+    if (typeof __msUpdateSaveNameHint === 'function') __msUpdateSaveNameHint();
+    var bn = document.getElementById('tplEditBanner');
+    if (bn) {
+        bn.style.display = 'flex';
+        var lbl = document.getElementById('tplEditBannerName');
+        if (lbl) lbl.textContent = d.templateName || 'Document';
+    }
+    __msUpdateFillPreview();
+}
+function __msCancelGenDocEdit() {
+    __msEditingGenDocId = null;
+    var bn = document.getElementById('tplEditBanner');
+    if (bn) bn.style.display = 'none';
+    showTemplateLibrary();
+    __msToast('Edit cancelled — draft unchanged', 'success');
 }
 
 // ---- Mark Issued (browser file input → addAttachment) -----------------
@@ -47939,6 +48043,8 @@ function openTemplateFill(id) {
     if (!t) { __msToast('Template not found', 'error'); return; }
     __msFillTemplateId = id;
     __msFillValues = {};
+    __msEditingGenDocId = null; // 8EC — fresh fills never edit; editGeneratedDoc re-sets it after
+    var __eb = document.getElementById('tplEditBanner'); if (__eb) __eb.style.display = 'none';
     var lib = document.getElementById('tplLibraryView');
     var ed = document.getElementById('tplEditorView');
     var fill = document.getElementById('tplFillView');
@@ -48354,6 +48460,8 @@ function __msFmtDateShort(ts) {
 // ---- View switching --------------------------------------------------
 function showTemplateLibrary() {
     __msMaybeSeedTemplates();
+    __msEditingGenDocId = null; // 8EC — leaving the fill screen ends any edit
+    var __eb2 = document.getElementById('tplEditBanner'); if (__eb2) __eb2.style.display = 'none';
     var lib = document.getElementById('tplLibraryView');
     var ed = document.getElementById('tplEditorView');
     var fill = document.getElementById('tplFillView');
