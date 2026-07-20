@@ -11026,6 +11026,9 @@ window.__msRenderMissingLocalFiles = function () {
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
             <input type="checkbox" id="tplIncludeStamp" checked onchange="__msUpdateFillPreview()"> Include stamp
           </label>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:6px; cursor:pointer;" title="Prints the Masterstone details block (name, address, LLPIN/PAN/GSTIN, contact) at the top of page 1 — same block as on your POs">
+            <input type="checkbox" id="tplIncludeCompanyHeader" onchange="__msOnCompanyHeaderToggle()"> Include company details
+          </label>
           <div id="tplSigStampHint" style="font-size:10.5px; color:var(--text-dim); margin-top:8px;"></div>
         </div>
       </div>
@@ -47947,6 +47950,7 @@ function openTemplateFill(id) {
     if (titleEl) titleEl.innerHTML = '<i class="fas fa-pen-to-square"></i> ' + pEsc(t.name || 'Fill Template');
     var __xn = document.getElementById('tplExtraName'); if (__xn) __xn.value = '';
     var __xh = document.getElementById('tplSaveNameHint'); if (__xh) __xh.textContent = '';
+    var __ch = document.getElementById('tplIncludeCompanyHeader'); if (__ch) __ch.checked = !!t.includeCompanyHeader; // 8EB
     __msBuildFillForm(t);
     if (typeof __msPopulateTrackClientDropdown === 'function') __msPopulateTrackClientDropdown();
     if (typeof __msResetTrackControls === 'function') __msResetTrackControls();
@@ -48037,9 +48041,13 @@ function __msUpdateFillPreview() {
     var stampEl = document.getElementById('tplIncludeStamp');
     var includeSig = sigEl ? sigEl.checked : true;
     var includeStamp = stampEl ? stampEl.checked : true;
-    page.innerHTML = (t.format === 'html')
+    var __supPrev = '';
+    if (t.includeCompanyHeader && typeof _buildLetterheadSupplierBlock === 'function') {
+        try { __supPrev = _buildLetterheadSupplierBlock() || ''; } catch (e) { __supPrev = ''; }
+    }
+    page.innerHTML = __supPrev + ((t.format === 'html')
         ? __msRenderHtmlFullDoc(t.body, __msFillValues, true, includeSig, includeStamp)
-        : __msRenderFullDoc(t.body, __msFillValues, true, includeSig, includeStamp);
+        : __msRenderFullDoc(t.body, __msFillValues, true, includeSig, includeStamp));
     __msUpdateSigStampHint();
 }
 // Hint under the checkboxes when the chosen image isn't uploaded yet.
@@ -48052,7 +48060,23 @@ function __msUpdateSigStampHint() {
     var msgs = [];
     if (sigEl && sigEl.checked && !cp.signatureImageDataUrl) msgs.push('No signature image uploaded — add one in System Controls.');
     if (stampEl && stampEl.checked && !cp.stampImageDataUrl) msgs.push('No stamp image uploaded — add one in System Controls.');
+    // 8EB — warn when company details are requested but the profile is empty.
+    var chEl = document.getElementById('tplIncludeCompanyHeader');
+    if (chEl && chEl.checked) {
+        var __sb = (typeof _buildLetterheadSupplierBlock === 'function') ? _buildLetterheadSupplierBlock() : '';
+        if (!__sb) msgs.push('Company details are empty — fill them in System Controls.');
+    }
     hint.innerHTML = msgs.length ? '<span style="color:var(--warning);">' + msgs.join('<br>') + '</span>' : '';
+}
+
+// 8EB — the company-details choice is remembered on the template itself, so
+// each template keeps its own setting (salary slip: tick once, done forever).
+function __msOnCompanyHeaderToggle() {
+    var cb = document.getElementById('tplIncludeCompanyHeader');
+    var list = __msLoadTemplates();
+    var t = list.find(function (x) { return x.id === __msFillTemplateId; });
+    if (t && cb) { t.includeCompanyHeader = !!cb.checked; t.updatedAt = Date.now(); __msPersistTemplates(); }
+    __msUpdateFillPreview();
 }
 
 // ---- Phase 8BM3 — letterhead output + print/save-as-PDF ---------------
@@ -48067,6 +48091,12 @@ function __msBuildTemplatePageHtml(t, values, docName) {
     var stampEl = document.getElementById('tplIncludeStamp');
     var includeSig = sigEl ? sigEl.checked : true;
     var includeStamp = stampEl ? stampEl.checked : true;
+    // 8EB — optional company-details header: same shared block the PO /
+    // proposal / invoice letterhead builders use, per the template's setting.
+    var supplierHtml = '';
+    if (t && t.includeCompanyHeader && typeof _buildLetterheadSupplierBlock === 'function') {
+        try { supplierHtml = _buildLetterheadSupplierBlock() || ''; } catch (e) { supplierHtml = ''; }
+    }
     var hasLetterhead = !!cp.letterheadDataUrl;
     var lhUrl = cp.letterheadDataUrl || '';
     var titleName = pEsc(docName || t.name || 'Document');
@@ -48085,6 +48115,7 @@ function __msBuildTemplatePageHtml(t, values, docName) {
     var sourceChunks = chunks.map(function (c) {
         return '<div class="page-chunk">' + c + '</div>';
     }).join('\n');
+    if (supplierHtml) sourceChunks = '<div class="page-chunk">' + supplierHtml + '</div>\n' + sourceChunks; // 8EB
 
     // Content padding: with letterhead, clear the header/footer art; without, normal margins.
     var contentPad = hasLetterhead ? '36mm 18mm 24mm 32mm' : '18mm 18mm 18mm 18mm';
@@ -48424,6 +48455,7 @@ function duplicateTemplate(id) {
     var now = Date.now();
     var __rec = { id: __msTplId(), name: (t.name || 'Template') + ' (Copy)', category: t.category || '', body: t.body || '', createdAt: now, updatedAt: now };
     if (t.format === 'html') __rec.format = 'html';
+    if (t.includeCompanyHeader) __rec.includeCompanyHeader = true; // 8EB
     list.push(__rec);
     __msPersistTemplates();
     __msToast('Template duplicated', 'success');
