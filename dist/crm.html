@@ -26225,6 +26225,24 @@ function attachTermsToolbar(elementId, key, opts) {
         toolbar.appendChild(sep());
     }
 
+    // Phase 8EF — inline rich formatting. Wraps the selection in plain-text
+    // tags that render as styled HTML on PDFs, detail pages and the preview.
+    if (!opts.payment) {
+        toolbar.appendChild(btn('bold', 'Bold', 'Wrap selection in [b]…[/b] — prints bold', () => termsWrapSelection(el, '[b]', '[/b]')));
+        toolbar.appendChild(btn('italic', 'Italic', 'Wrap selection in [i]…[/i] — prints italic', () => termsWrapSelection(el, '[i]', '[/i]')));
+        toolbar.appendChild(btn('underline', 'Underline', 'Wrap selection in [u]…[/u] — prints underlined', () => termsWrapSelection(el, '[u]', '[/u]')));
+        const _mkColorBtn = (name, hex, lbl) => {
+            const b = btn('font', lbl, `Wrap selection in [${name}]…[/${name}] — prints in ${lbl.toLowerCase()}`, () => termsWrapSelection(el, '[' + name + ']', '[/' + name + ']'));
+            const ic = b.querySelector('i'); if (ic) ic.style.color = hex;
+            return b;
+        };
+        toolbar.appendChild(_mkColorBtn('red', '#b91c1c', 'Red'));
+        toolbar.appendChild(_mkColorBtn('blue', '#1d4ed8', 'Blue'));
+        toolbar.appendChild(_mkColorBtn('green', '#15803d', 'Green'));
+        toolbar.appendChild(btn('eraser', 'Plain', 'Remove bold/italic/underline/colour tags from the selection (whole text if nothing selected) — back to default black', () => termsClearInlineFormat(el)));
+        toolbar.appendChild(sep());
+    }
+
     // Font family dropdown
     toolbar.appendChild(label('Font'));
     const ffSel = document.createElement('select');
@@ -26320,6 +26338,77 @@ function termsRenumber(el) {
         el.value = newValue;
         el.dispatchEvent(new Event('input', { bubbles: true }));
     }
+}
+
+// =============================================================================
+// Phase 8EF — inline rich formatting for Terms fields.
+// Plain-text tags ([b] [i] [u] [red] [blue] [green]) live inside the stored
+// text — zero storage-format change, existing terms unaffected. The toolbar
+// wraps the selection; __msRichTermsHtml converts the tags to styled HTML at
+// display time (PDF builders, detail pages, terms preview). Escaping happens
+// FIRST (pEsc), then tag conversion, so no unescaped user HTML can pass.
+// =============================================================================
+
+// Wrap the current selection in open/close tags. No selection: insert an empty
+// pair and place the caret between them. Works on textarea and text input.
+function termsWrapSelection(el, open, close) {
+    if (!el) return;
+    var s = el.selectionStart || 0, e = el.selectionEnd || 0;
+    var v = el.value;
+    if (s === e) {
+        el.value = v.slice(0, s) + open + close + v.slice(e);
+        el.focus();
+        el.selectionStart = el.selectionEnd = s + open.length;
+    } else {
+        var sel = v.slice(s, e);
+        el.value = v.slice(0, s) + open + sel + close + v.slice(e);
+        el.focus();
+        el.selectionStart = s;
+        el.selectionEnd = e + open.length + close.length;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Remove every 8EF inline tag from the selection (or the whole field when
+// nothing is selected) — "back to plain black text".
+function termsClearInlineFormat(el) {
+    if (!el) return;
+    var strip = function (t) { return t.replace(/\[\/?(?:b|i|u|red|blue|green)\]/g, ''); };
+    var s = el.selectionStart || 0, e = el.selectionEnd || 0;
+    if (s === e) {
+        var nv = strip(el.value);
+        if (nv !== el.value) el.value = nv;
+        el.focus();
+    } else {
+        var mid = strip(el.value.slice(s, e));
+        el.value = el.value.slice(0, s) + mid + el.value.slice(e);
+        el.focus();
+        el.selectionStart = s;
+        el.selectionEnd = s + mid.length;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Escape-then-render. Tags survive pEsc (brackets aren't escaped). The pass
+// loop resolves nested tags in any order; it stabilises in <= 6 passes and
+// stray/unmatched tags are left as visible literal text (honest feedback).
+// Colours are print-safe: red #b91c1c, blue #1d4ed8, green #15803d.
+function __msRichTermsHtml(text) {
+    var s = (typeof pEsc === 'function') ? pEsc(text || '') : String(text || '');
+    var rules = [
+        [/\[b\]([\s\S]*?)\[\/b\]/g, '<strong>$1</strong>'],
+        [/\[i\]([\s\S]*?)\[\/i\]/g, '<em>$1</em>'],
+        [/\[u\]([\s\S]*?)\[\/u\]/g, '<span style="text-decoration:underline;">$1</span>'],
+        [/\[red\]([\s\S]*?)\[\/red\]/g, '<span style="color:#b91c1c;">$1</span>'],
+        [/\[blue\]([\s\S]*?)\[\/blue\]/g, '<span style="color:#1d4ed8;">$1</span>'],
+        [/\[green\]([\s\S]*?)\[\/green\]/g, '<span style="color:#15803d;">$1</span>']
+    ];
+    for (var pass = 0; pass < 6; pass++) {
+        var prev = s;
+        for (var i = 0; i < rules.length; i++) s = s.replace(rules[i][0], rules[i][1]);
+        if (s === prev) break;
+    }
+    return s;
 }
 
 // Strip numbering/bullets from selected lines
@@ -26649,7 +26738,7 @@ function previewTermsBlock(type) {
     if (hasTerms) {
         html += `<div style="padding:12px 14px; background:var(--detail-bg); border-left:3px solid var(--text-dim); border-radius:2px;">
             <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; font-weight:600;">Terms &amp; Conditions</div>
-            <div style="font-size:11px; color:var(--text-main); line-height:1.6; white-space:pre-line;">${pEsc(terms)}</div>
+            <div style="font-size:11px; color:var(--text-main); line-height:1.6; white-space:pre-line;">${__msRichTermsHtml(terms)}</div>
         </div>`;
     }
     if (!hasTerms && !hasPayment) {
@@ -27259,7 +27348,7 @@ function renderProposalDetail(p) {
         ${linkedProspect ? `<div class="cm-info-row"><span class="cm-info-lbl">Linked Prospect</span><span class="cm-info-val"><a href="#" onclick="openProspectDetail('${linkedProspect.id}'); return false;" style="color:var(--accent-cyan);">${pEsc(linkedProspect.oppName)}</a></span></div>` : ''}
         ${p.terms ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Terms &amp; Conditions</div>
-            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${pEsc(p.terms)}</div>
+            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${__msRichTermsHtml(p.terms)}</div>
         </div>` : ''}
         ${p.notes ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Internal Notes</div>
@@ -28192,7 +28281,7 @@ body {
     <div class="page-chunk">
         <div style="margin-top:14px; padding-top:10px; border-top:1px solid ${COL_HAIRLINE};">
             <div style="font-size:11.5px; font-weight:700; color:${COL_HEADER}; margin-bottom:6px;">Terms &amp; Conditions</div>
-            <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.55;">${safe(proposal.terms)}</div>
+            <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.55;">${__msRichTermsHtml(proposal.terms)}</div>
         </div>
     </div>` : ''}
 
@@ -28454,7 +28543,7 @@ function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
     ${proposal.terms ? `
     <div style="margin-top:20px; padding-top:14px; border-top:1px solid var(--text-subtle);">
         <div style="font-size:12px; font-weight:700; color:var(--accent-blue); margin-bottom:8px;">Terms &amp; Conditions</div>
-        <div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6;">${safe(proposal.terms)}</div>
+        <div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6;">${__msRichTermsHtml(proposal.terms)}</div>
     </div>` : ''}
 
     <!-- SIGNATORY BLOCK -->
@@ -28722,7 +28811,7 @@ function buildProposalPDFHTMLDefault(proposal) {
     ${proposal.terms ? `
     <div style="margin-bottom:20px; padding-top:14px; border-top:1px solid var(--text-subtle);">
         <div style="font-size:12px; font-weight:700; color:var(--accent-blue); margin-bottom:8px;">Terms & Conditions</div>
-        <div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6;">${safe(proposal.terms)}</div>
+        <div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6;">${__msRichTermsHtml(proposal.terms)}</div>
     </div>` : ''}
 
     <!-- SIGNATORY (no bank details in proposal — item 4) -->
@@ -28973,7 +29062,7 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
         ${proposal.terms ? `
         <div style="margin-bottom:20px; padding-top:14px; border-top:1px solid ${COL_HAIRLINE};">
             <div style="font-size:12px; font-weight:700; color:${COL_HEADER}; margin-bottom:8px;">Terms &amp; Conditions</div>
-            <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6;">${safe(proposal.terms)}</div>
+            <div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6;">${__msRichTermsHtml(proposal.terms)}</div>
         </div>` : ''}
 
         <!-- SIGNATORY (no bank details in proposal — item 4) -->
@@ -30593,7 +30682,7 @@ function renderPODetail(po) {
         </div><!-- /meta-horizontal-grid -->
         ${po.terms ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Additional Terms</div>
-            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${pEsc(po.terms)}</div>
+            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${__msRichTermsHtml(po.terms)}</div>
         </div>` : ''}
         ${po.notes ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Internal Notes</div>
@@ -31217,7 +31306,7 @@ function buildPOPDFHTMLDefault(po) {
         <div style="font-size:12px; font-weight:700; color:var(--purple); margin-bottom:8px;">Terms &amp; Conditions</div>
         ${po.paymentTerms ? `<div style="font-size:11px; margin-bottom:4px;"><strong>Payment:</strong> ${safe(po.paymentTerms)}</div>` : ''}
         ${po.deliveryTerms ? `<div style="font-size:11px; margin-bottom:4px;"><strong>Delivery:</strong> ${safe(po.deliveryTerms)}</div>` : ''}
-        ${po.terms ? `<div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
+        ${po.terms ? `<div style="font-size:10.5px; color:var(--text-dim); white-space:pre-line; line-height:1.6; margin-top:6px;">${__msRichTermsHtml(po.terms)}</div>` : ''}
     </div>` : ''}
 
     <!-- REMITTANCE / BANK DETAILS (only if this PO has the toggle on AND OEM Master has bank data) -->
@@ -31430,7 +31519,7 @@ function buildPOPDFHTMLWithLetterhead(po) {
             <div style="font-size:12px; font-weight:700; color:${COL_HEADER}; margin-bottom:8px;">Terms &amp; Conditions</div>
             ${po.paymentTerms ? `<div style="font-size:11px; margin-bottom:4px;"><strong>Payment:</strong> ${safe(po.paymentTerms)}</div>` : ''}
             ${po.deliveryTerms ? `<div style="font-size:11px; margin-bottom:4px;"><strong>Delivery:</strong> ${safe(po.deliveryTerms)}</div>` : ''}
-            ${po.terms ? `<div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6; margin-top:6px;">${safe(po.terms)}</div>` : ''}
+            ${po.terms ? `<div style="font-size:10.5px; color:${COL_BODY}; white-space:pre-line; line-height:1.6; margin-top:6px;">${__msRichTermsHtml(po.terms)}</div>` : ''}
         </div>` : ''}
 
         <!-- REMITTANCE / BANK DETAILS (only if this PO has the toggle on AND OEM Master has bank data) -->
@@ -33452,7 +33541,7 @@ function renderInvoiceDetail(inv) {
 
         ${inv.terms ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Additional Terms (on invoice)</div>
-            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${pEsc(inv.terms)}</div>
+            <div style="font-size:12px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;">${__msRichTermsHtml(inv.terms)}</div>
         </div>` : ''}
         ${inv.notes ? `<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--glass-border);">
             <div style="font-size:10.5px; color:var(--text-dim); font-weight:700; text-transform:uppercase; margin-bottom:6px;">Internal Notes</div>
@@ -34248,7 +34337,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
     ${inv.terms ? `
     <div style="margin-bottom:14px; padding:8px 12px; background:var(--detail-bg); border-left:3px solid var(--text-dim); font-size:10.5px; color:var(--text-dim); line-height:1.6;">
         <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:4px; font-weight:600;">Terms &amp; Conditions</div>
-        <div style="white-space:pre-line;">${safe(inv.terms)}</div>
+        <div style="white-space:pre-line;">${__msRichTermsHtml(inv.terms)}</div>
     </div>` : ''}
 
     ${bankBlock}
@@ -34539,7 +34628,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
         ${inv.terms ? `
         <div style="margin-bottom:14px; padding:8px 12px; background:var(--detail-bg); border-left:3px solid ${COL_ACCENT}; font-size:10.5px; color:${COL_BODY}; line-height:1.6;">
             <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:4px; font-weight:600;">Terms &amp; Conditions</div>
-            <div style="white-space:pre-line;">${safe(inv.terms)}</div>
+            <div style="white-space:pre-line;">${__msRichTermsHtml(inv.terms)}</div>
         </div>` : ''}
 
         ${bankBlock}
