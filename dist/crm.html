@@ -28555,6 +28555,23 @@ function buildProposalPDFHTMLDefault(proposal) {
     const _showDisc = !!proposal.showDiscountOnPdf;
     const _showGst  = !!proposal.showGstOnPdf;
 
+    // Phase 8EE — multi-year ACV/TCV. Line items are per-annum (ACV) figures;
+    // when the contract term (Start → End) exceeds 12 months the PDF adds a
+    // TCV column (per-line ACV × term years, pro-rata: 36 mo = ×3, 18 mo =
+    // ×1.5), a two-column totals box, and Amount-in-Words for BOTH figures.
+    // 12 months or less, or no dates set: single-column, unchanged.
+    const _termMonths8ee = (proposal.startDate && proposal.endDate && typeof msComputeTermMonths === 'function')
+        ? msComputeTermMonths(proposal.startDate, proposal.endDate) : null;
+    const _isMultiYear = !!(_termMonths8ee && _termMonths8ee > 12);
+    const _termMult = _isMultiYear ? (_termMonths8ee / 12) : 1;
+    const _tcv = (n) => (parseFloat(n) || 0) * _termMult;
+    // Phase 8EE — when "Show GST %" is OFF the PDF is a genuinely tax-exclusive
+    // quote: Grand Total = pre-GST subtotal, labelled "(excl. GST)", and the
+    // Amount in Words follows the same figure. (Pre-8EE the grand total kept
+    // GST baked in while the GST rows were hidden — misleading to clients.)
+    const _grandShown = _showGst ? totals.grandTotal : totals.subtotal;
+    const _grandLabel = _showGst ? 'Grand Total' : 'Grand Total (excl. GST)';
+
     // Line items HTML
     const lineItemsHtml = (proposal.lineItems || []).map((li, idx) => {
         const { net } = computeLineItemSubtotal(li);
@@ -28573,22 +28590,26 @@ function buildProposalPDFHTMLDefault(proposal) {
             ${_showDisc ? `<td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
             ${_showGst  ? `<td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-weight:600;">${fmtInr(net)}</td>
+            ${_isMultiYear ? `<td style="padding:8px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-weight:600;">${fmtInr(_tcv(net))}</td>` : ''}
         </tr>`;
     }).join('');
 
     // GST rows (gated on _showGst — matches PO 8K behaviour)
     let gstRows = '';
     if (_showGst) {
+        // 8EE — second (TCV) value cell appears only on multi-year proposals
+        const _gc = (v) => `<td style="padding:6px 10px; text-align:right;">${fmtInr(v)}</td>`;
+        const _gcT = (v) => _isMultiYear ? _gc(_tcv(v)) : '';
         if (gst.mode === 'intra') {
             gstRows = `
-                <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
-                <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
+                <tr><td style="padding:6px 10px; text-align:right;">CGST</td>${_gc(totals.cgst)}${_gcT(totals.cgst)}</tr>
+                <tr><td style="padding:6px 10px; text-align:right;">SGST</td>${_gc(totals.sgst)}${_gcT(totals.sgst)}</tr>`;
         } else {
-            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td>${_gc(totals.igst)}${_gcT(totals.igst)}</tr>`;
         }
     }
     // Phase 8O — colspan for empty-state cell tracks visible column count
-    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0);
+    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0) + (_isMultiYear ? 1 : 0); // 8EE
 
     // Build the full HTML — all styles inline for reliable PDF rendering
     return `
@@ -28660,7 +28681,7 @@ function buildProposalPDFHTMLDefault(proposal) {
                 <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:90px;">Unit Price</th>
                 ${_showDisc ? `<th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
                 ${_showGst  ? `<th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
-                <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:100px;">Amount</th>
+                <th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:100px;">${_isMultiYear ? 'Amount (ACV p.a.)' : 'Amount'}</th>${_isMultiYear ? `<th style="padding:8px 6px; border:1px solid var(--accent-blue); text-align:right; font-weight:600; width:100px;">TCV</th>` : ''}
             </tr>
         </thead>
         <tbody>${lineItemsHtml || `<tr><td colspan="${_liColspan}" style="padding:20px; text-align:center; border:1px solid var(--text-subtle); color:var(--text-subtle); font-style:italic;">No line items</td></tr>`}</tbody>
@@ -28669,22 +28690,28 @@ function buildProposalPDFHTMLDefault(proposal) {
     <!-- TOTALS -->
     <table style="width:100%; margin-bottom:20px;">
         <tr>
-            <td style="width:55%; vertical-align:top; padding-right:20px;">
+            <td style="width:${_isMultiYear ? '40%' : '55%'}; vertical-align:top; padding-right:20px;">
                 <div style="background:var(--detail-bg); padding:10px 14px; border-radius:4px; font-size:11px; color:var(--text-dim);">
                     <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Amount in Words</div>
-                    <div style="font-style:italic; color:var(--text-main);">${safe(proposalAmountWords(totals.grandTotal, _pdfCur))}</div>
+                    ${_isMultiYear ? `
+                    <div style="font-size:10px; color:var(--text-dim); margin-bottom:2px;">Per Annum (ACV):</div>
+                    <div style="font-style:italic; color:var(--text-main);">${safe(proposalAmountWords(_grandShown, _pdfCur))}</div>
+                    <div style="font-size:10px; color:var(--text-dim); margin-top:6px; margin-bottom:2px;">Total Contract (TCV &middot; ${_termMonths8ee} months):</div>
+                    <div style="font-style:italic; color:var(--text-main);">${safe(proposalAmountWords(_tcv(_grandShown), _pdfCur))}</div>` : `
+                    <div style="font-style:italic; color:var(--text-main);">${safe(proposalAmountWords(_grandShown, _pdfCur))}</div>`}
                     ${_pdfCur === 'USD' ? `<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--text-subtle); font-size:10px; color:var(--text-dim); line-height:1.5;">All amounts in this proposal are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</div>` : ''}
                 </div>
             </td>
-            <td style="width:45%; vertical-align:top;">
+            <td style="width:${_isMultiYear ? '60%' : '45%'}; vertical-align:top;">
                 <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                    <tr><td style="padding:6px 10px; text-align:right; color:var(--text-dim);">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.grossTotal)}</td></tr>
-                    ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:var(--text-dim);">Discount</td><td style="padding:6px 10px; text-align:right; color:#b91c1c;">− ${fmtInr(totals.discountTotal)}</td></tr>` : ''}
-                    <tr style="border-top:1px solid var(--text-subtle);"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.subtotal)}</td></tr>
+                    ${_isMultiYear ? `<tr><td></td><td style="padding:4px 10px 2px; text-align:right; font-size:9.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.6px; white-space:nowrap;">Per Annum (ACV)</td><td style="padding:4px 10px 2px; text-align:right; font-size:9.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.6px; white-space:nowrap;">Total Contract (TCV)</td></tr>` : ''}
+                    <tr><td style="padding:6px 10px; text-align:right; color:var(--text-dim);">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.grossTotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right;">${fmtInr(_tcv(totals.grossTotal))}</td>` : ''}</tr>
+                    ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:var(--text-dim);">Discount</td><td style="padding:6px 10px; text-align:right; color:#b91c1c;">− ${fmtInr(totals.discountTotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right; color:#b91c1c;">− ${fmtInr(_tcv(totals.discountTotal))}</td>` : ''}</tr>` : ''}
+                    <tr style="border-top:1px solid var(--text-subtle);"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.subtotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right;">${fmtInr(_tcv(totals.subtotal))}</td>` : ''}</tr>
                     ${gstRows}
                     <tr style="background:var(--accent-blue); color:var(--glass-panel); font-weight:700; font-size:14px;">
-                        <td style="padding:10px; text-align:right;">Grand Total</td>
-                        <td style="padding:10px; text-align:right;">${fmtInr(totals.grandTotal)}</td>
+                        <td style="padding:10px; text-align:right; white-space:nowrap;">${_grandLabel}</td>
+                        <td style="padding:10px; text-align:right;">${fmtInr(_grandShown)}</td>${_isMultiYear ? `<td style="padding:10px; text-align:right;">${fmtInr(_tcv(_grandShown))}</td>` : ''}
                     </tr>
                 </table>
             </td>
@@ -28780,6 +28807,23 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
     const _showDisc = !!proposal.showDiscountOnPdf;
     const _showGst  = !!proposal.showGstOnPdf;
 
+    // Phase 8EE — multi-year ACV/TCV. Line items are per-annum (ACV) figures;
+    // when the contract term (Start → End) exceeds 12 months the PDF adds a
+    // TCV column (per-line ACV × term years, pro-rata: 36 mo = ×3, 18 mo =
+    // ×1.5), a two-column totals box, and Amount-in-Words for BOTH figures.
+    // 12 months or less, or no dates set: single-column, unchanged.
+    const _termMonths8ee = (proposal.startDate && proposal.endDate && typeof msComputeTermMonths === 'function')
+        ? msComputeTermMonths(proposal.startDate, proposal.endDate) : null;
+    const _isMultiYear = !!(_termMonths8ee && _termMonths8ee > 12);
+    const _termMult = _isMultiYear ? (_termMonths8ee / 12) : 1;
+    const _tcv = (n) => (parseFloat(n) || 0) * _termMult;
+    // Phase 8EE — when "Show GST %" is OFF the PDF is a genuinely tax-exclusive
+    // quote: Grand Total = pre-GST subtotal, labelled "(excl. GST)", and the
+    // Amount in Words follows the same figure. (Pre-8EE the grand total kept
+    // GST baked in while the GST rows were hidden — misleading to clients.)
+    const _grandShown = _showGst ? totals.grandTotal : totals.subtotal;
+    const _grandLabel = _showGst ? 'Grand Total' : 'Grand Total (excl. GST)';
+
     // Line items HTML
     const lineItemsHtml = (proposal.lineItems || []).map((li, idx) => {
         const { net } = computeLineItemSubtotal(li);
@@ -28798,21 +28842,25 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
             ${_showDisc ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${disc.toFixed(2)}%</td>` : ''}
             ${_showGst  ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600;">${fmtInr(net)}</td>
+            ${_isMultiYear ? `<td style="padding:8px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600;">${fmtInr(_tcv(net))}</td>` : ''}
         </tr>`;
     }).join('');
 
     // GST rows (gated on _showGst)
     let gstRows = '';
     if (_showGst) {
+        // 8EE — second (TCV) value cell appears only on multi-year proposals
+        const _gc = (v) => `<td style="padding:6px 10px; text-align:right;">${fmtInr(v)}</td>`;
+        const _gcT = (v) => _isMultiYear ? _gc(_tcv(v)) : '';
         if (gst.mode === 'intra') {
             gstRows = `
-                <tr><td style="padding:6px 10px; text-align:right;">CGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.cgst)}</td></tr>
-                <tr><td style="padding:6px 10px; text-align:right;">SGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.sgst)}</td></tr>`;
+                <tr><td style="padding:6px 10px; text-align:right;">CGST</td>${_gc(totals.cgst)}${_gcT(totals.cgst)}</tr>
+                <tr><td style="padding:6px 10px; text-align:right;">SGST</td>${_gc(totals.sgst)}${_gcT(totals.sgst)}</tr>`;
         } else {
-            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.igst)}</td></tr>`;
+            gstRows = `<tr><td style="padding:6px 10px; text-align:right;">IGST</td>${_gc(totals.igst)}${_gcT(totals.igst)}</tr>`;
         }
     }
-    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0);
+    const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0) + (_isMultiYear ? 1 : 0); // 8EE
 
     // Signature
     const signatureHtml = (proposal.signatureShown === false) ? "" : (cp.signatureImageDataUrl
@@ -28884,7 +28932,7 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
                     <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:90px;">Unit Price</th>
                     ${_showDisc ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">Disc</th>` : ''}
                     ${_showGst  ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:60px;">GST</th>` : ''}
-                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:100px;">Amount</th>
+                    <th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:100px;">${_isMultiYear ? 'Amount (ACV p.a.)' : 'Amount'}</th>${_isMultiYear ? `<th style="padding:8px 6px; border:1px solid ${COL_HEADER}; text-align:right; font-weight:600; width:100px;">TCV</th>` : ''}
                 </tr>
             </thead>
             <tbody>${lineItemsHtml || `<tr><td colspan="${_liColspan}" style="padding:20px; text-align:center; border:1px solid ${COL_HAIRLINE}; color:${COL_MUTED}; font-style:italic;">No line items</td></tr>`}</tbody>
@@ -28893,22 +28941,28 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
         <!-- TOTALS -->
         <table style="width:100%; margin-bottom:20px;">
             <tr>
-                <td style="width:55%; vertical-align:top; padding-right:20px;">
+                <td style="width:${_isMultiYear ? '40%' : '55%'}; vertical-align:top; padding-right:20px;">
                     <div style="background:var(--detail-bg); padding:10px 14px; border-radius:2px; font-size:11px; color:${COL_BODY}; border-left:3px solid ${COL_ACCENT};">
                         <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Amount in Words</div>
-                        <div style="font-style:italic;">${safe(proposalAmountWords(totals.grandTotal, _pdfCur))}</div>
+                        ${_isMultiYear ? `
+                        <div style="font-size:10px; color:${COL_MUTED}; margin-bottom:2px;">Per Annum (ACV):</div>
+                        <div style="font-style:italic;">${safe(proposalAmountWords(_grandShown, _pdfCur))}</div>
+                        <div style="font-size:10px; color:${COL_MUTED}; margin-top:6px; margin-bottom:2px;">Total Contract (TCV &middot; ${_termMonths8ee} months):</div>
+                        <div style="font-style:italic;">${safe(proposalAmountWords(_tcv(_grandShown), _pdfCur))}</div>` : `
+                        <div style="font-style:italic;">${safe(proposalAmountWords(_grandShown, _pdfCur))}</div>`}
                         ${_pdfCur === 'USD' ? `<div style="margin-top:8px; padding-top:8px; border-top:1px solid ${COL_HAIRLINE}; font-size:10px; color:${COL_MUTED}; line-height:1.5;">All amounts in this proposal are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</div>` : ''}
                     </div>
                 </td>
-                <td style="width:45%; vertical-align:top;">
+                <td style="width:${_isMultiYear ? '60%' : '45%'}; vertical-align:top;">
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                        <tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.grossTotal)}</td></tr>
-                        ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Discount</td><td style="padding:6px 10px; text-align:right;">− ${fmtInr(totals.discountTotal)}</td></tr>` : ''}
-                        <tr style="border-top:1px solid ${COL_HAIRLINE};"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.subtotal)}</td></tr>
+                        ${_isMultiYear ? `<tr><td></td><td style="padding:4px 10px 2px; text-align:right; font-size:9.5px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:0.6px; white-space:nowrap;">Per Annum (ACV)</td><td style="padding:4px 10px 2px; text-align:right; font-size:9.5px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:0.6px; white-space:nowrap;">Total Contract (TCV)</td></tr>` : ''}
+                        <tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Gross</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.grossTotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right;">${fmtInr(_tcv(totals.grossTotal))}</td>` : ''}</tr>
+                        ${totals.discountTotal > 0 ? `<tr><td style="padding:6px 10px; text-align:right; color:${COL_MUTED};">Discount</td><td style="padding:6px 10px; text-align:right;">− ${fmtInr(totals.discountTotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right;">− ${fmtInr(_tcv(totals.discountTotal))}</td>` : ''}</tr>` : ''}
+                        <tr style="border-top:1px solid ${COL_HAIRLINE};"><td style="padding:6px 10px; text-align:right;">Subtotal</td><td style="padding:6px 10px; text-align:right;">${fmtInr(totals.subtotal)}</td>${_isMultiYear ? `<td style="padding:6px 10px; text-align:right;">${fmtInr(_tcv(totals.subtotal))}</td>` : ''}</tr>
                         ${gstRows}
                         <tr style="background:${COL_HEADER}; color:var(--glass-panel); font-weight:700; font-size:14px;">
-                            <td style="padding:10px; text-align:right;">Grand Total</td>
-                            <td style="padding:10px; text-align:right;">${fmtInr(totals.grandTotal)}</td>
+                            <td style="padding:10px; text-align:right; white-space:nowrap;">${_grandLabel}</td>
+                            <td style="padding:10px; text-align:right;">${fmtInr(_grandShown)}</td>${_isMultiYear ? `<td style="padding:10px; text-align:right;">${fmtInr(_tcv(_grandShown))}</td>` : ''}
                         </tr>
                     </table>
                 </td>
