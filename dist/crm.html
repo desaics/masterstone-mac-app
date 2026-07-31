@@ -9609,6 +9609,26 @@ window.__msRenderMissingLocalFiles = function () {
     </div>
   </div>
 
+  <!-- Phase 8ED — Proposal Currency. INR default (every pre-8ED proposal is
+       INR). USD proposals are quoted in dollars across the form, lists and
+       PDFs, but the client is invoiced and pays in INR — the PDF carries a
+       fixed note saying so. GST behaviour is identical in both currencies. -->
+  <div class="card" style="margin-bottom:20px; border-top: 3px solid var(--accent-cyan);">
+    <div class="kpi-section-title" style="margin-bottom:10px;"><i class="fas fa-coins" style="color:var(--accent-cyan);"></i> Proposal Currency</div>
+    <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="proposalCurrency" value="INR" checked onchange="onProposalCurrencyChange()">
+        <span style="font-weight:600; color:var(--text-main);">₹ INR</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— default</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--detail-bg);">
+        <input type="radio" name="proposalCurrency" value="USD" onchange="onProposalCurrencyChange()">
+        <span style="font-weight:600; color:var(--text-main);">$ USD</span>
+        <span style="font-size:11.5px; color:var(--text-dim);">— dollar quote · invoicing &amp; payment stay in INR</span>
+      </label>
+    </div>
+  </div>
+
   <!-- SECTION 1: Proposal & Client -->
   <div class="card" style="margin-bottom:20px;">
     <div class="kpi-section-title" style="margin-bottom:14px;"><i class="fas fa-file-alt" style="color:var(--accent-cyan);"></i> Proposal &amp; Client</div>
@@ -9768,7 +9788,7 @@ window.__msRenderMissingLocalFiles = function () {
             <th style="min-width:160px;">Product / Description</th>
             <th style="min-width:90px;">HSN/SAC</th>
             <th style="min-width:70px;">Qty</th>
-            <th style="min-width:100px;">Unit Price (₹)</th>
+            <th style="min-width:100px;">Unit Price (<span id="proposalUnitCurSym">₹</span>)</th>
             <th style="min-width:80px;">Disc %</th>
             <th style="min-width:80px;">GST %</th>
             <th style="min-width:110px; text-align:right;">Subtotal</th>
@@ -9829,7 +9849,7 @@ window.__msRenderMissingLocalFiles = function () {
 
     <div class="prospect-form-grid-2" style="margin-bottom:14px;">
       <div>
-        <label>Total Professional Fee (₹) <span style="color:var(--danger);">*</span></label>
+        <label>Total Professional Fee (<span id="proposalFeeCurSym">₹</span>) <span style="color:var(--danger);">*</span></label>
         <input type="text" inputmode="decimal" class="js-money" id="proposalServiceFee" placeholder="e.g. 1100000" min="0" step="1" oninput="updateProposalServiceFeeWords()">
         <div id="proposalServiceFeeWords" style="font-size:10.5px; color:var(--accent-cyan); margin-top:4px; font-style:italic;"></div>
       </div>
@@ -14174,7 +14194,12 @@ function composeSendProposal(propId) {
     ctx.ValidUntil = p.validUntil ? formatDateReadable(p.validUntil) : '';
     try {
         var totals = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode);
-        ctx.ProposalTotal = _composeAmount(totals.grandTotal);
+        // 8ED — USD proposals: Western grouping with explicit "USD " prefix.
+        // (Default templates don't use this token; custom templates that
+        // hardcode "INR" before it should be adjusted before USD use.)
+        ctx.ProposalTotal = (getProposalCurrency(p) === 'USD')
+            ? 'USD ' + (Number(totals.grandTotal) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : _composeAmount(totals.grandTotal);
     } catch (e) { ctx.ProposalTotal = ''; }
     _openComposeEmail('sendProposal', ctx, rcpt);
 }
@@ -19179,7 +19204,11 @@ function updateProposalServiceFeeWords() {
     if (!feeEl || !wordsEl) return;
     var v = parseFloat(feeEl.value);
     if (!isFinite(v) || v <= 0) { wordsEl.textContent = ''; return; }
-    wordsEl.textContent = 'Rupees ' + _inrInWords(v) + ' Only';
+    // 8ED — words follow the form's Currency selection
+    var _cur8ed = (typeof getProposalFormCurrency === 'function') ? getProposalFormCurrency() : 'INR';
+    wordsEl.textContent = (_cur8ed === 'USD')
+        ? 'US Dollars ' + _usdInWords(v) + ' Only'
+        : 'Rupees ' + _inrInWords(v) + ' Only';
 }
 
 // =============================================================================
@@ -24666,7 +24695,7 @@ function renderProspectDetail(p) {
                         <div style="font-size:12px; font-weight:600; color:var(--text-main); margin-top:3px;">${pEsc(pr.subject)}</div>
                         <div style="font-size:11px; color:var(--text-dim); margin-top:2px; display:flex; justify-content:space-between;">
                             <span>${pr.issueDate ? formatDateReadable(pr.issueDate) : ''}</span>
-                            <span style="font-weight:600; color:var(--accent-cyan);">${fmtMoneyShort(totals.grandTotal)}</span>
+                            <span style="font-weight:600; color:var(--accent-cyan);">${fmtProposalMoneyShort(totals.grandTotal, getProposalCurrency(pr))}</span>
                         </div>
                     </div>`;
                 }).join('')}
@@ -25091,6 +25120,11 @@ function proposalBlank() {
         startDate: '',                    // 8CJ — contract/licence start (subscription)
         endDate: '',                      // 8CJ — contract/licence end (subscription)
         status: 'Draft',
+        // Phase 8ED — proposal currency. 'INR' (default) | 'USD'. Records saved
+        // before 8ED have no currency field and are treated as INR everywhere
+        // (getProposalCurrency). USD proposals are quoted in dollars end-to-end
+        // but invoicing/payment stays INR (fixed note on the PDF).
+        currency: 'INR',
         lineItems: [],  // [{ id, oem, product, hsnSac, qty, unitPrice, discountPct, gstPct }]
         terms: '',
         notes: '',
@@ -25315,6 +25349,114 @@ function fmtCurrency(n) {
     return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// =============================================================================
+// Phase 8ED — Proposal currency helpers (INR / USD)
+// USD proposals: "$" symbol, Western digit grouping (en-US), "US Dollars … Only"
+// words. INR behaviour is byte-for-byte what it was before 8ED.
+// =============================================================================
+function getProposalCurrency(p) {
+    return (p && p.currency === 'USD') ? 'USD' : 'INR';
+}
+
+// Reads the form's Currency radio (proposal form only). Defaults INR.
+function getProposalFormCurrency() {
+    var el = document.querySelector('input[name="proposalCurrency"]:checked');
+    return (el && el.value === 'USD') ? 'USD' : 'INR';
+}
+
+function fmtProposalMoney(n, cur) {
+    if (cur === 'USD') {
+        if (typeof n !== 'number' || isNaN(n)) return '$0.00';
+        return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return fmtCurrency(n);
+}
+
+function fmtProposalMoneyShort(n, cur) {
+    if (cur === 'USD') {
+        if (typeof n !== 'number' || isNaN(n)) return '$0';
+        if (n >= 1000000000) return '$' + (n / 1000000000).toFixed(2) + 'B';
+        if (n >= 1000000)    return '$' + (n / 1000000).toFixed(2) + 'M';
+        if (n >= 1000)       return '$' + (n / 1000).toFixed(1) + 'k';
+        return '$' + Math.round(n).toLocaleString('en-US');
+    }
+    return fmtMoneyShort(n);
+}
+
+// Dual display for mixed-currency aggregates ("₹X + $Y"). acc = {INR, USD}.
+// Never converts between currencies.
+function fmtProposalDualTotals(acc) {
+    var hasInr = !!(acc && acc.INR > 0);
+    var hasUsd = !!(acc && acc.USD > 0);
+    if (hasUsd && hasInr) return fmtMoneyShort(acc.INR) + ' + ' + fmtProposalMoneyShort(acc.USD, 'USD');
+    if (hasUsd) return fmtProposalMoneyShort(acc.USD, 'USD');
+    return fmtMoneyShort(acc ? acc.INR : 0);
+}
+
+// Sum proposal grand totals per currency. Used by Proposals KPIs + kanban.
+function sumProposalTotalsByCurrency(arr) {
+    var acc = { INR: 0, USD: 0 };
+    (arr || []).forEach(function (p) {
+        var v = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode).grandTotal;
+        acc[getProposalCurrency(p)] += (isFinite(v) ? v : 0);
+    });
+    return acc;
+}
+
+// Integer amount → words, Western grouping (Thousand / Million / Billion).
+// Mirrors _inrInWords' structure; used only for USD proposals.
+function _usdInWords(n) {
+    n = Math.round(n);
+    if (!isFinite(n) || n < 0) return '';
+    if (n === 0) return 'Zero';
+    var ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+                'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+                'Seventeen', 'Eighteen', 'Nineteen'];
+    var tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    function below100(num) {
+        if (num < 20) return ones[num];
+        return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '');
+    }
+    function below1000(num) {
+        if (num < 100) return below100(num);
+        return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 ? ' ' + below100(num % 100) : '');
+    }
+    var parts = [];
+    var billion = Math.floor(n / 1000000000); n %= 1000000000;
+    var million = Math.floor(n / 1000000);    n %= 1000000;
+    var thousand = Math.floor(n / 1000);      n %= 1000;
+    var rest = n;
+    if (billion)  parts.push(below1000(billion) + ' Billion');
+    if (million)  parts.push(below1000(million) + ' Million');
+    if (thousand) parts.push(below1000(thousand) + ' Thousand');
+    if (rest) parts.push(below1000(rest));
+    return parts.join(' ');
+}
+
+// Amount-in-words for proposal PDFs. INR path delegates to the existing
+// numberToIndianWords ("… Rupees … Only"). USD: "US Dollars X and NN/100 Only".
+function proposalAmountWords(n, cur) {
+    if (cur === 'USD') {
+        var v = Math.round((parseFloat(n) || 0) * 100) / 100;
+        var intPart = Math.floor(v);
+        var cents = Math.round((v - intPart) * 100);
+        var w = _usdInWords(intPart) || 'Zero';
+        return 'US Dollars ' + w + (cents > 0 ? ' and ' + String(cents).padStart(2, '0') + '/100' : '') + ' Only';
+    }
+    return numberToIndianWords(n);
+}
+
+// Currency radio change → refresh symbols + every live money display on the form.
+function onProposalCurrencyChange() {
+    var cur = getProposalFormCurrency();
+    var sym = (cur === 'USD') ? '$' : '₹';
+    var s1 = document.getElementById('proposalUnitCurSym'); if (s1) s1.textContent = sym;
+    var s2 = document.getElementById('proposalFeeCurSym'); if (s2) s2.textContent = sym;
+    if (typeof renderProposalLineItems === 'function') renderProposalLineItems();
+    if (typeof updateProposalTotalsDisplay === 'function') updateProposalTotalsDisplay();
+    if (typeof updateProposalServiceFeeWords === 'function') updateProposalServiceFeeWords();
+}
+
 // ===== Rendering =====
 function renderProposalsPage() {
     if (!document.getElementById('proposalsTab')) return;
@@ -25357,7 +25499,7 @@ function getFilteredProposals() {
 function renderProposalsKPIs(filtered) {
     // Active (open status only) — from ALL proposals, not filtered
     const allOpen = proposals.filter(p => isProposalOpen(p.status));
-    const activeVal = allOpen.reduce((s, p) => s + computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode).grandTotal, 0);
+    const activeAcc = sumProposalTotalsByCurrency(allOpen); // 8ED — per-currency, never mixed
 
     // YTD accepted
     const ytdStart = new Date(new Date().getFullYear(), 0, 1);
@@ -25366,7 +25508,7 @@ function renderProposalsKPIs(filtered) {
         const d = new Date(p.acceptedAt || p.updatedAt);
         return !isNaN(d.getTime()) && d >= ytdStart;
     });
-    const acceptedVal = acceptedYTD.reduce((s, p) => s + computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode).grandTotal, 0);
+    const acceptedAcc = sumProposalTotalsByCurrency(acceptedYTD); // 8ED — per-currency
 
     // 12-month win rate
     const twelveMonthsAgo = new Date(); twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
@@ -25389,8 +25531,8 @@ function renderProposalsKPIs(filtered) {
     const set = (id, t) => { const el = document.getElementById(id); if (el) el.innerText = t; };
     set('propk_activeCount', allOpen.length);
     set('propk_activeSub', `${allOpen.filter(p => p.status === 'Draft').length} Draft, ${allOpen.filter(p => p.status === 'Sent').length} Sent`);
-    set('propk_activeValue', fmtMoneyShort(activeVal));
-    set('propk_acceptedValue', fmtMoneyShort(acceptedVal));
+    set('propk_activeValue', fmtProposalDualTotals(activeAcc));
+    set('propk_acceptedValue', fmtProposalDualTotals(acceptedAcc));
     set('propk_acceptedSub', acceptedYTD.length + ' proposal' + (acceptedYTD.length === 1 ? '' : 's'));
     set('propk_winRate', winRate.toFixed(0) + '%');
     set('propk_winRateSub', accepted12.length + ' accepted of ' + closed12.length + ' closed');
@@ -25424,13 +25566,13 @@ function renderProposalsKanban(filtered) {
 
     board.innerHTML = banner + PROPOSAL_STATUSES.map(status => {
         const list = byStatus[status] || [];
-        const total = list.reduce((s, p) => s + computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode).grandTotal, 0);
+        const totalAcc = sumProposalTotalsByCurrency(list); // 8ED — per-currency column totals
         return `<div class="kanban-column" data-status="${pEsc(status)}">
             <div class="kanban-col-header">
                 <div class="kanban-col-title"><span class="col-dot prop-status-${pEsc(status)}"></span> ${pEsc(status)}</div>
                 <div class="kanban-col-meta">
                     <span class="count-badge">${list.length}</span>
-                    <span>${list.length > 0 ? fmtMoneyShort(total) : '—'}</span>
+                    <span>${list.length > 0 ? fmtProposalDualTotals(totalAcc) : '—'}</span>
                 </div>
             </div>
             <div class="kanban-col-body">
@@ -25455,7 +25597,7 @@ function renderProposalCard(p) {
         <div class="pc-proposal-client">${pEsc(p.clientName || '(no client)')}${typeof getAttachmentCountBadgeHtml === 'function' ? getAttachmentCountBadgeHtml('proposal', p.id) : ''}</div>
         <div class="pc-proposal-subject">${pEsc(p.subject || '')}</div>
         <div class="pc-proposal-value">
-            <span class="amt">${fmtMoneyShort(totals.grandTotal)}</span>
+            <span class="amt">${fmtProposalMoneyShort(totals.grandTotal, getProposalCurrency(p))}</span>
             <span class="date">${p.validUntil ? formatDateReadable(p.validUntil) : '—'}</span>
         </div>
         ${expFlag ? `<div style="font-size:10.5px; margin-top:5px;">${expFlag}</div>` : ''}
@@ -25479,7 +25621,7 @@ function renderProposalsListView(filtered) {
             <td style="font-weight:600;">${pEsc(p.clientName || '—')}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(p.subject || '')}">${pEsc(p.subject || '')}</td>
             <td><span class="stage-badge prop-status-${pEsc(p.status)}">${pEsc(p.status)}</span>${(p.revision || 1) > 1 ? ` <span class="stage-badge" style="background:var(--accent-tint-low); color:var(--accent-cyan); font-size:10px;" title="Latest revision">Rev ${p.revision}</span>` : ''}</td>
-            <td style="text-align:right; font-weight:700;">${fmtMoneyShort(totals.grandTotal)}</td>
+            <td style="text-align:right; font-weight:700;">${fmtProposalMoneyShort(totals.grandTotal, getProposalCurrency(p))}</td>
             <td>${p.issueDate ? formatDateReadable(p.issueDate) : '—'}</td>
             <td>${p.validUntil ? formatDateReadable(p.validUntil) : '—'}</td>
             <td style="text-align:right;">
@@ -25586,6 +25728,11 @@ function openProposalForm(id) {
             const typeRadios = document.querySelectorAll('input[name="proposalType"]');
             typeRadios.forEach(r => { r.checked = (r.value === propType); });
         } catch (_) {}
+        // Phase 8ED — hydrate Currency radios. Legacy records (no field) = INR.
+        try {
+            const curVal8ed = (p.currency === 'USD') ? 'USD' : 'INR';
+            document.querySelectorAll('input[name="proposalCurrency"]').forEach(r => { r.checked = (r.value === curVal8ed); });
+        } catch (_) {}
         populateProposalServiceDropdown();
         val('proposalServiceId', p.serviceId || '');
         val('proposalServiceSAC', p.serviceSAC || '');
@@ -25603,6 +25750,7 @@ function openProposalForm(id) {
         renderProposalServiceScope();
         updateProposalServiceFeeWords();
         onProposalTypeChange();   // applies the show/hide based on type
+        if (typeof onProposalCurrencyChange === 'function') onProposalCurrencyChange(); // 8ED — symbols + live displays
         document.getElementById('proposalDeleteBtn').style.display = 'inline-flex';
     } else {
         const blank = proposalBlank();
@@ -25643,6 +25791,10 @@ function openProposalForm(id) {
             const typeRadios = document.querySelectorAll('input[name="proposalType"]');
             typeRadios.forEach(r => { r.checked = (r.value === 'subscription'); });
         } catch (_) {}
+        // Phase 8ED — reset Currency to INR on a fresh form
+        try {
+            document.querySelectorAll('input[name="proposalCurrency"]').forEach(r => { r.checked = (r.value === 'INR'); });
+        } catch (_) {}
         populateProposalServiceDropdown();
         val('proposalServiceId', '');
         val('proposalServiceSAC', '998313');
@@ -25655,6 +25807,7 @@ function openProposalForm(id) {
         renderProposalServiceScope();
         updateProposalServiceFeeWords();
         onProposalTypeChange();
+        if (typeof onProposalCurrencyChange === 'function') onProposalCurrencyChange(); // 8ED
         document.getElementById('proposalDeleteBtn').style.display = 'none';
     }
     populateProposalBillingAddressDropdown();
@@ -25877,7 +26030,7 @@ function renderProposalLineItems() {
             <td><input type="text" inputmode="decimal" class="js-money" value="${li.unitPrice}" min="0" step="0.01" onchange="onLineItemFieldChange(${idx}, 'unitPrice', this.value)"></td>
             <td><input type="number" value="${li.discountPct}" min="0" max="100" step="0.1" onchange="onLineItemFieldChange(${idx}, 'discountPct', this.value)"></td>
             <td><input type="number" value="${li.gstPct}" min="0" max="28" step="0.01" onchange="onLineItemFieldChange(${idx}, 'gstPct', this.value)"></td>
-            <td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td>
+            <td style="text-align:right; font-weight:600; font-family:monospace;">${fmtProposalMoney(net, getProposalFormCurrency())}</td>
             <td><button class="prop-line-delete-btn" onclick="removeProposalLineItem(${idx})" title="Remove line"><i class="fas fa-times"></i></button></td>
         </tr>
         <tr data-prop-li-notes-idx="${idx}" class="prop-li-notes-row"><td colspan="9" style="padding:2px 6px 10px 6px; border-top:none;">
@@ -25958,7 +26111,7 @@ function onLineItemFieldChange(idx, field, value) {
     if (row) {
         const { net } = computeLineItemSubtotal(proposalFormLineItems[idx]);
         const subtotalCell = row.children[7];
-        if (subtotalCell) subtotalCell.innerText = fmtCurrency(net);
+        if (subtotalCell) subtotalCell.innerText = fmtProposalMoney(net, getProposalFormCurrency()); // 8ED
     }
     updateProposalTotalsDisplay();
 }
@@ -25970,25 +26123,28 @@ function updateProposalTotalsDisplay() {
     const addrId = document.getElementById('proposalBillingAddressId').value;
     const gst = determineProposalGSTMode(client, addrId);
     const t = computeProposalTotals(proposalFormLineItems, gst.mode);
+    // 8ED — currency-aware formatter for every figure in this box
+    const _pcur8ed = getProposalFormCurrency();
+    const _pfmt8ed = (n) => fmtProposalMoney(n, _pcur8ed);
     let gstRows = '';
     if (gst.mode === 'intra') {
-        gstRows = `<div class="prop-totals-row"><span>CGST</span><span>${fmtCurrency(t.cgst)}</span></div>
-                   <div class="prop-totals-row"><span>SGST</span><span>${fmtCurrency(t.sgst)}</span></div>`;
+        gstRows = `<div class="prop-totals-row"><span>CGST</span><span>${_pfmt8ed(t.cgst)}</span></div>
+                   <div class="prop-totals-row"><span>SGST</span><span>${_pfmt8ed(t.sgst)}</span></div>`;
     } else {
-        gstRows = `<div class="prop-totals-row"><span>IGST</span><span>${fmtCurrency(t.igst)}</span></div>`;
+        gstRows = `<div class="prop-totals-row"><span>IGST</span><span>${_pfmt8ed(t.igst)}</span></div>`;
     }
     const gstModeLabel = gst.mode === 'intra' ? `<span class="gst-mode-indicator intra">Intra-state</span>` :
                          gst.mode === 'inter' ? `<span class="gst-mode-indicator inter">Inter-state</span>` :
                          `<span class="gst-mode-indicator inter">IGST (default)</span>`;
     box.innerHTML = `
-        <div class="prop-totals-row sub"><span>Gross</span><span>${fmtCurrency(t.grossTotal)}</span></div>
-        <div class="prop-totals-row sub"><span>Discount</span><span>− ${fmtCurrency(t.discountTotal)}</span></div>
-        <div class="prop-totals-row"><span>Subtotal (pre-GST)</span><span>${fmtCurrency(t.subtotal)}</span></div>
+        <div class="prop-totals-row sub"><span>Gross</span><span>${_pfmt8ed(t.grossTotal)}</span></div>
+        <div class="prop-totals-row sub"><span>Discount</span><span>− ${_pfmt8ed(t.discountTotal)}</span></div>
+        <div class="prop-totals-row"><span>Subtotal (pre-GST)</span><span>${_pfmt8ed(t.subtotal)}</span></div>
         <div style="padding:4px 0; font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center;">
             <span>GST Breakup</span>${gstModeLabel}
         </div>
         ${gstRows}
-        <div class="prop-totals-row grand"><span>Grand Total</span><span>${fmtCurrency(t.grandTotal)}</span></div>
+        <div class="prop-totals-row grand"><span>Grand Total</span><span>${_pfmt8ed(t.grandTotal)}</span></div>
     `;
 }
 
@@ -26615,6 +26771,7 @@ function saveProposalFromForm() {
     // Phase 8E — type + service-mode persistence. Service fields are written
     // unconditionally so toggling back-and-forth doesn't lose data.
     rec.type = proposalType;
+    rec.currency = getProposalFormCurrency(); // 8ED — 'INR' | 'USD'
     rec.serviceId          = (document.getElementById('proposalServiceId') || {}).value || '';
     rec.serviceSAC         = ((document.getElementById('proposalServiceSAC') || {}).value || '').trim();
     rec.serviceDuration    = ((document.getElementById('proposalServiceDuration') || {}).value || '').trim();
@@ -26727,7 +26884,8 @@ function syncProposalToProspect(proposal, isNewProposal) {
         // Compute proposal value (subtotal) for ACV use
         const gst = (typeof determineProposalGSTMode === 'function') ? determineProposalGSTMode(proposal.clientName, proposal.billingAddressId) : { mode: 'unknown' };
         const totals = (typeof computeProposalTotals === 'function') ? computeProposalTotals(proposal.lineItems, gst.mode) : { subtotal: 0, grandTotal: 0 };
-        const acvInr = totals.subtotal || 0;
+        const acvInr = totals.subtotal || 0; // in the proposal's own currency
+        const _propCur8ed = getProposalCurrency(proposal); // 8ED
 
         // Target stage based on proposal status — only Sent proposals advance the
         // prospect to "Proposal Sent". A Draft proposal hasn't been handed to the
@@ -26771,7 +26929,7 @@ function syncProposalToProspect(proposal, isNewProposal) {
             prospect.company = proposal.clientName;
             prospect.oppName = proposal.subject || `Proposal ${proposal.proposalNumber}`;
             prospect.acv = acvInr;
-            prospect.currency = 'INR';
+            prospect.currency = _propCur8ed; // 8ED — prospects already support USD (getProspectACVInINR)
             // Derive OEMs from line items
             const oemsFromProposal = [...new Set((proposal.lineItems || []).map(li => li.oem).filter(Boolean))];
             if (oemsFromProposal.length > 0) prospect.oems = oemsFromProposal;
@@ -26788,7 +26946,7 @@ function syncProposalToProspect(proposal, isNewProposal) {
                 type: 'proposal',
                 date: now.slice(0, 10),
                 subject: `Auto-created from proposal ${proposal.proposalNumber || ''}`,
-                body: `Subject: ${proposal.subject || ''}\nValue: ${fmtMoneyShort(acvInr)}${proposal.validUntil ? '\nValid until: ' + formatDateReadable(proposal.validUntil) : ''}`,
+                body: `Subject: ${proposal.subject || ''}\nValue: ${fmtProposalMoneyShort(acvInr, _propCur8ed)}${proposal.validUntil ? '\nValid until: ' + formatDateReadable(proposal.validUntil) : ''}`,
                 outcome: 'positive',
                 nextAction: 'Follow up',
                 nextActionDate: proposal.validUntil || '',
@@ -26820,7 +26978,7 @@ function syncProposalToProspect(proposal, isNewProposal) {
                         type: 'proposal',
                         date: now.slice(0, 10),
                         subject: `Proposal ${proposal.proposalNumber || ''} — ${proposal.status}`,
-                        body: `Subject: ${proposal.subject || ''}\nValue: ${fmtMoneyShort(acvInr)}${proposal.validUntil ? '\nValid until: ' + formatDateReadable(proposal.validUntil) : ''}`,
+                        body: `Subject: ${proposal.subject || ''}\nValue: ${fmtProposalMoneyShort(acvInr, _propCur8ed)}${proposal.validUntil ? '\nValid until: ' + formatDateReadable(proposal.validUntil) : ''}`,
                         outcome: 'positive',
                         nextAction: proposal.status === 'Sent' ? 'Follow up on proposal' : '',
                         nextActionDate: proposal.validUntil || '',
@@ -26838,9 +26996,18 @@ function syncProposalToProspect(proposal, isNewProposal) {
         }
 
         // Update ACV if proposal is larger
-        if (acvInr > 0 && (!prospect.acv || parseFloat(prospect.acv) < acvInr)) {
+        // 8ED — currency-aware: compare like-for-like only. No ACV yet → adopt
+        // the proposal's value + currency. Same currency and larger → update.
+        // Different currencies → leave untouched (no silent cross-currency
+        // comparison or conversion).
+        const _prospectCur8ed = (prospect.currency === 'USD') ? 'USD' : 'INR';
+        if (acvInr > 0 && (!prospect.acv || parseFloat(prospect.acv) <= 0)) {
             prospect.acv = acvInr;
-            prospect.currency = 'INR';
+            prospect.currency = _propCur8ed;
+            prospect.updatedAt = new Date().toISOString();
+        } else if (acvInr > 0 && _prospectCur8ed === _propCur8ed && parseFloat(prospect.acv) < acvInr) {
+            prospect.acv = acvInr;
+            prospect.currency = _propCur8ed;
             prospect.updatedAt = new Date().toISOString();
         }
 
@@ -26914,6 +27081,9 @@ function closeProposalDetail() {
 function renderProposalDetail(p) {
     const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
     const t = computeProposalTotals(p.lineItems, gst.mode);
+    // 8ED — currency-aware formatting for the whole detail page
+    const _pcur8ed = getProposalCurrency(p);
+    const _pfmt8ed = (n) => fmtProposalMoney(n, _pcur8ed);
     const validUntil = p.validUntil ? new Date(p.validUntil) : null;
     const daysUntil = validUntil ? Math.floor((validUntil - new Date()) / 86400000) : null;
 
@@ -26948,7 +27118,7 @@ function renderProposalDetail(p) {
             <span><i class="far fa-calendar-times"></i> Valid Until: <strong style="color:var(--text-main);">${p.validUntil ? formatDateReadable(p.validUntil) : '—'}</strong>
             ${(p.status === 'Sent' && daysUntil !== null) ? (daysUntil < 0 ? `<span style="color:var(--danger); margin-left:6px;">(expired ${Math.abs(daysUntil)}d ago)</span>` : daysUntil <= 7 ? `<span style="color:var(--warning); margin-left:6px;">(${daysUntil}d left)</span>` : '') : ''}
             </span>
-            <span><i class="fas fa-rupee-sign"></i> Total: <strong style="color:var(--accent-cyan);">${fmtCurrency(t.grandTotal)}</strong></span>
+            <span><i class="fas fa-${_pcur8ed === 'USD' ? 'dollar' : 'rupee'}-sign"></i> Total: <strong style="color:var(--accent-cyan);">${_pfmt8ed(t.grandTotal)}</strong>${_pcur8ed === 'USD' ? ' <span style="color:var(--text-dim); font-weight:400;">· quoted in USD, billed in INR</span>' : ''}</span>
         </div>
     `;
 
@@ -26975,9 +27145,9 @@ function renderProposalDetail(p) {
             : '<span style="color:var(--text-dim); font-style:italic;">Not linked to catalog</span>';
 
         const fee = parseFloat(p.serviceFee || 0) || 0;
-        const feeFormatted = fmtCurrency(fee);
+        const feeFormatted = _pfmt8ed(fee); // 8ED
         const feeWords = (typeof _inrInWords === 'function' && fee > 0)
-            ? `<div style="font-size:11.5px; color:var(--accent-cyan); font-style:italic; margin-top:2px;">Rupees ${pEsc(_inrInWords(fee))} Only</div>`
+            ? `<div style="font-size:11.5px; color:var(--accent-cyan); font-style:italic; margin-top:2px;">${_pcur8ed === 'USD' ? 'US Dollars ' + pEsc(_usdInWords(fee)) : 'Rupees ' + pEsc(_inrInWords(fee))} Only</div>`
             : '';
 
         const fmtDate = (iso) => {
@@ -27052,10 +27222,10 @@ function renderProposalDetail(p) {
             body.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-dim); font-style:italic;">No line items.</div>';
         } else {
             body.innerHTML = `<table class="prop-line-item-table" style="margin-top:0;">
-                <thead><tr><th>OEM</th><th>Product</th><th>HSN/SAC</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit ₹</th><th style="text-align:right;">Disc</th><th style="text-align:right;">GST%</th><th style="text-align:right;">Subtotal</th></tr></thead>
+                <thead><tr><th>OEM</th><th>Product</th><th>HSN/SAC</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit ${_pcur8ed === 'USD' ? '$' : '₹'}</th><th style="text-align:right;">Disc</th><th style="text-align:right;">GST%</th><th style="text-align:right;">Subtotal</th></tr></thead>
                 <tbody>${p.lineItems.map(li => {
                     const { net } = computeLineItemSubtotal(li);
-                    return `<tr><td>${pEsc(li.oem || '—')}</td><td>${pEsc(li.product || '—')}</td><td style="font-family:monospace; font-size:11.5px;">${pEsc(li.hsnSac || '—')}</td><td style="text-align:right;">${li.qty}</td><td style="text-align:right;">${fmtCurrency(parseFloat(li.unitPrice) || 0)}</td><td style="text-align:right;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td><td style="text-align:right;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td><td style="text-align:right; font-weight:600; font-family:monospace;">${fmtCurrency(net)}</td></tr>`;
+                    return `<tr><td>${pEsc(li.oem || '—')}</td><td>${pEsc(li.product || '—')}</td><td style="font-family:monospace; font-size:11.5px;">${pEsc(li.hsnSac || '—')}</td><td style="text-align:right;">${li.qty}</td><td style="text-align:right;">${_pfmt8ed(parseFloat(li.unitPrice) || 0)}</td><td style="text-align:right;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td><td style="text-align:right;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td><td style="text-align:right; font-weight:600; font-family:monospace;">${_pfmt8ed(net)}</td></tr>`;
                 }).join('')}</tbody>
             </table>`;
         }
@@ -27065,17 +27235,17 @@ function renderProposalDetail(p) {
     const totalsEl = document.getElementById('proposalDetailTotals');
     let gstRowsHtml = '';
     if (gst.mode === 'intra') {
-        gstRowsHtml = `<div class="prop-totals-row"><span>CGST</span><span>${fmtCurrency(t.cgst)}</span></div>
-                       <div class="prop-totals-row"><span>SGST</span><span>${fmtCurrency(t.sgst)}</span></div>`;
+        gstRowsHtml = `<div class="prop-totals-row"><span>CGST</span><span>${_pfmt8ed(t.cgst)}</span></div>
+                       <div class="prop-totals-row"><span>SGST</span><span>${_pfmt8ed(t.sgst)}</span></div>`;
     } else {
-        gstRowsHtml = `<div class="prop-totals-row"><span>IGST</span><span>${fmtCurrency(t.igst)}</span></div>`;
+        gstRowsHtml = `<div class="prop-totals-row"><span>IGST</span><span>${_pfmt8ed(t.igst)}</span></div>`;
     }
     totalsEl.innerHTML = `
-        <div class="prop-totals-row sub"><span>Gross</span><span>${fmtCurrency(t.grossTotal)}</span></div>
-        <div class="prop-totals-row sub"><span>Discount</span><span>− ${fmtCurrency(t.discountTotal)}</span></div>
-        <div class="prop-totals-row"><span>Subtotal</span><span>${fmtCurrency(t.subtotal)}</span></div>
+        <div class="prop-totals-row sub"><span>Gross</span><span>${_pfmt8ed(t.grossTotal)}</span></div>
+        <div class="prop-totals-row sub"><span>Discount</span><span>− ${_pfmt8ed(t.discountTotal)}</span></div>
+        <div class="prop-totals-row"><span>Subtotal</span><span>${_pfmt8ed(t.subtotal)}</span></div>
         ${gstRowsHtml}
-        <div class="prop-totals-row grand"><span>Grand Total</span><span>${fmtCurrency(t.grandTotal)}</span></div>
+        <div class="prop-totals-row grand"><span>Grand Total</span><span>${_pfmt8ed(t.grandTotal)}</span></div>
     `;
 
     // Meta panel
@@ -27780,9 +27950,13 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     const safe = (s) => pEsc(s || '');
 
-    const fmtInr = (typeof formatINR === 'function')
-        ? formatINR
-        : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    // 8ED — currency-aware fee formatter (USD: "$ " + Western grouping)
+    const _pdfCur = getProposalCurrency(proposal);
+    const fmtInr = (_pdfCur === 'USD')
+        ? ((n) => '$ ' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }))
+        : ((typeof formatINR === 'function')
+            ? formatINR
+            : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }));
 
     // Monochrome palette — same convention as subscription / PO letterhead builders
     const COL_HEADER   = '#2b2b2b';
@@ -27791,7 +27965,9 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
     const COL_HAIRLINE = 'var(--text-subtle)';
 
     const fee = parseFloat(proposal.serviceFee || 0) || 0;
-    const feeWords = (typeof _inrInWords === 'function') ? _inrInWords(fee) : '';
+    const feeWords = (_pdfCur === 'USD')
+        ? ((typeof _usdInWords === 'function') ? _usdInWords(fee) : '')
+        : ((typeof _inrInWords === 'function') ? _inrInWords(fee) : '');
     const feeFormatted = fmtInr(fee);
 
     const submitter = cp.signatoryName || 'Chintan Desai';
@@ -27860,7 +28036,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
 
     sectionNum++;
     const paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
-    const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
+    const feeWordsLine = feeWords ? (_pdfCur === 'USD' ? ` (US Dollars ${feeWords} Only)` : ` (${feeWords} Only)`) : '';
     const sacCode = (proposal.serviceSAC || '').trim();
     const commercialsChunkHtml = `
         <div class="page-chunk">
@@ -27870,7 +28046,7 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
                 </div>
                 <ul style="font-size:11.5px; color:${COL_BODY}; line-height:1.55; margin:0; padding-left:32px;">
                     <li style="margin-bottom:5px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
-                    <li style="margin-bottom:5px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
+                    <li style="margin-bottom:5px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>${_pdfCur === 'USD' ? `<li style="margin-bottom:5px;"><strong>Currency:</strong> All amounts are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</li>` : ''}
                     <li style="margin-bottom:5px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
                     ${validUntilStr ? `<li style="margin-bottom:5px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
                     ${sacCode ? `<li style="margin-bottom:5px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
@@ -28129,12 +28305,18 @@ function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
     const cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     const safe = (s) => pEsc(s || '');
 
-    const fmtInr = (typeof formatINR === 'function')
-        ? formatINR
-        : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    // 8ED — currency-aware fee formatter (USD: "$ " + Western grouping)
+    const _pdfCur = getProposalCurrency(proposal);
+    const fmtInr = (_pdfCur === 'USD')
+        ? ((n) => '$ ' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }))
+        : ((typeof formatINR === 'function')
+            ? formatINR
+            : (n) => '\u20B9 ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }));
 
     const fee = parseFloat(proposal.serviceFee || 0) || 0;
-    const feeWords = (typeof _inrInWords === 'function') ? _inrInWords(fee) : '';
+    const feeWords = (_pdfCur === 'USD')
+        ? ((typeof _usdInWords === 'function') ? _usdInWords(fee) : '')
+        : ((typeof _inrInWords === 'function') ? _inrInWords(fee) : '');
     const feeFormatted = fmtInr(fee);
 
     const submitter   = cp.signatoryName || 'Chintan Desai';
@@ -28197,7 +28379,7 @@ function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
     // Commercials section (always emitted)
     sectionNum++;
     const paymentTerms = (proposal.servicePaymentTerms || '').trim() || '100% advance upon acceptance';
-    const feeWordsLine = feeWords ? ` (${feeWords} Only)` : '';
+    const feeWordsLine = feeWords ? (_pdfCur === 'USD' ? ` (US Dollars ${feeWords} Only)` : ` (${feeWords} Only)`) : '';
     const sacCode = (proposal.serviceSAC || '').trim();
     const commercialsHtml = `
         <div style="margin-bottom:14px;">
@@ -28206,7 +28388,7 @@ function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
             </div>
             <ul style="font-size:12px; color:var(--text-main); line-height:1.55; margin:0; padding-left:36px;">
                 <li style="margin-bottom:6px;"><strong>Total Professional Fees:</strong> ${safe(feeFormatted)}${safe(feeWordsLine)}</li>
-                <li style="margin-bottom:6px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>
+                <li style="margin-bottom:6px;"><strong>Taxes:</strong> Applicable taxes (GST) will be charged additionally.</li>${_pdfCur === 'USD' ? `<li style="margin-bottom:6px;"><strong>Currency:</strong> All amounts are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</li>` : ''}
                 <li style="margin-bottom:6px;"><strong>Payment Terms:</strong> ${safe(paymentTerms)}</li>
                 ${validUntilStr ? `<li style="margin-bottom:6px;"><strong>Quote Validity:</strong> The validity of this quote remains effective until ${safe(validUntilStr)}.</li>` : ''}
                 ${sacCode ? `<li style="margin-bottom:6px;"><strong>SAC Code:</strong> ${safe(sacCode)}</li>` : ''}
@@ -28342,7 +28524,11 @@ function buildProposalPDFHTMLDefault(proposal) {
     }
 
     // Format helpers
-    const fmtInr = (n) => '₹' + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // 8ED — currency-aware. USD proposals: "$" + Western grouping (en-US).
+    const _pdfCur = getProposalCurrency(proposal);
+    const fmtInr = (n) => (_pdfCur === 'USD')
+        ? '$' + (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : '₹' + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const safe = (s) => pEsc(s || '');
 
     // Company address block
@@ -28486,7 +28672,8 @@ function buildProposalPDFHTMLDefault(proposal) {
             <td style="width:55%; vertical-align:top; padding-right:20px;">
                 <div style="background:var(--detail-bg); padding:10px 14px; border-radius:4px; font-size:11px; color:var(--text-dim);">
                     <div style="font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">Amount in Words</div>
-                    <div style="font-style:italic; color:var(--text-main);">${safe(numberToIndianWords(totals.grandTotal))}</div>
+                    <div style="font-style:italic; color:var(--text-main);">${safe(proposalAmountWords(totals.grandTotal, _pdfCur))}</div>
+                    ${_pdfCur === 'USD' ? `<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--text-subtle); font-size:10px; color:var(--text-dim); line-height:1.5;">All amounts in this proposal are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</div>` : ''}
                 </div>
             </td>
             <td style="width:45%; vertical-align:top;">
@@ -28575,7 +28762,11 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
         }
     }
 
-    const fmtInr = (n) => '₹' + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // 8ED — currency-aware. USD proposals: "$" + Western grouping (en-US).
+    const _pdfCur = getProposalCurrency(proposal);
+    const fmtInr = (n) => (_pdfCur === 'USD')
+        ? '$' + (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : '₹' + (parseFloat(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const safe = (s) => pEsc(s || '');
 
     // Monochrome palette
@@ -28705,7 +28896,8 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
                 <td style="width:55%; vertical-align:top; padding-right:20px;">
                     <div style="background:var(--detail-bg); padding:10px 14px; border-radius:2px; font-size:11px; color:${COL_BODY}; border-left:3px solid ${COL_ACCENT};">
                         <div style="font-size:10px; color:${COL_MUTED}; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:6px;">Amount in Words</div>
-                        <div style="font-style:italic;">${safe(numberToIndianWords(totals.grandTotal))}</div>
+                        <div style="font-style:italic;">${safe(proposalAmountWords(totals.grandTotal, _pdfCur))}</div>
+                        ${_pdfCur === 'USD' ? `<div style="margin-top:8px; padding-top:8px; border-top:1px solid ${COL_HAIRLINE}; font-size:10px; color:${COL_MUTED}; line-height:1.5;">All amounts in this proposal are in US Dollars (USD). Invoicing and payment will be in INR at the applicable exchange rate.</div>` : ''}
                     </div>
                 </td>
                 <td style="width:45%; vertical-align:top;">
@@ -28981,7 +29173,7 @@ function downloadProposalPDF(proposalId) {
 
 // Opens the Provisioning tab with fields pre-populated from an accepted proposal.
 // Called automatically when a proposal is Accepted (if user confirms).
-function convertProposalToContract(proposalId) {
+async function convertProposalToContract(proposalId) {
     const p = proposals.find(x => x.id === proposalId);
     if (!p) { alert("Proposal not found."); return; }
     if (p.status !== 'Accepted') {
@@ -28998,6 +29190,32 @@ function convertProposalToContract(proposalId) {
     // Compute total sell INR from line items (subtotal, pre-GST — contracts store pre-GST)
     const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
     const totals = computeProposalTotals(p.lineItems, gst.mode);
+
+    // Phase 8ED — USD proposals: contracts store the sell value in INR by
+    // design. Converting USD → INR at an explicit, user-confirmed rate mirrors
+    // the OEM cost side (costUSD × FX) and does not violate the ₹ rule (which
+    // prohibits the opposite direction). Pre-filled from the Live FX widget
+    // when a fetched rate exists. Cancel aborts the conversion cleanly.
+    const _propCur8ed = getProposalCurrency(p);
+    let _usdInrRate = 1;
+    if (_propCur8ed === 'USD') {
+        let _defRate = '';
+        try { if (liveFxState && liveFxState.rate > 0) _defRate = String(Math.round(liveFxState.rate * 100) / 100); } catch (_) {}
+        const _promptFn = (typeof window.__msPrompt === 'function') ? window.__msPrompt : null;
+        let _raw = null;
+        const _msg = 'This proposal is in USD. Enter the USD → INR exchange rate to set the contract sell value in ₹ (the proposal itself stays in USD):';
+        if (_promptFn) _raw = await _promptFn(_msg, _defRate);
+        else _raw = prompt(_msg, _defRate);
+        if (_raw === null || String(_raw).trim() === '') {
+            showProspectToast('<i class="fas fa-times-circle"></i> Conversion cancelled — no USD → INR rate provided.', 4500);
+            return;
+        }
+        _usdInrRate = parseFloat(String(_raw).replace(/,/g, ''));
+        if (!isFinite(_usdInrRate) || _usdInrRate <= 0) {
+            alert('Invalid exchange rate — conversion cancelled.');
+            return;
+        }
+    }
 
     // Aggregate: pick the first line item as the "primary product" for the contract
     // (contracts have a single product field — proposals can have multiple line items)
@@ -29040,7 +29258,7 @@ function convertProposalToContract(proposalId) {
             setVal('ctrServiceName', _svcName);
             // Fee = total professional fee for the engagement (the 8V maths
             // annualises it for storage on save and converts back on edit).
-            setVal('sellINR', (p.serviceFee && p.serviceFee > 0) ? p.serviceFee : totals.subtotal);
+            setVal('sellINR', Math.round((((p.serviceFee && p.serviceFee > 0) ? p.serviceFee : totals.subtotal) * _usdInrRate) * 100) / 100); // 8ED — × USD→INR rate (1 for INR proposals)
             setVal('costCurrency', 'INR');
             // Engagement dates → contract Start/End. Prefer engagementStart/End,
             // then the proposal-level Start/End, then validUntil/today. End is
@@ -29052,7 +29270,7 @@ function convertProposalToContract(proposalId) {
         setVal('product', allProducts || firstLine.product || firstLine.oem || '');
         setVal('licenses', totalLicenses);
         // Currency: contracts use INR for sell
-        setVal('sellINR', totals.subtotal);  // subtotal (pre-GST) as sell value
+        setVal('sellINR', Math.round(totals.subtotal * _usdInrRate * 100) / 100);  // subtotal (pre-GST) as sell value · 8ED: × USD→INR rate (1 for INR proposals)
         // Default cost blank — user will fill from OEM PO
         setVal('costCurrency', 'INR');
         // Dates: 8CJ — use the proposal's contract Start/End when set; otherwise fall
@@ -29093,7 +29311,7 @@ function convertProposalToContract(proposalId) {
                 const banner = document.createElement('div');
                 banner.id = 'convertedFromProposalBanner';
                 banner.style.cssText = 'background:rgba(16,185,129,0.08); border:1px solid var(--success); color:var(--success); padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:12.5px;';
-                banner.innerHTML = `<i class="fas fa-file-invoice"></i> Converting <strong>accepted ${isSvcProp ? 'service ' : ''}proposal ${pEsc(p.proposalNumber)}</strong> to a ${isSvcProp ? 'service engagement' : 'contract'}. Review pre-populated fields below${allOems.length > 1 ? ` (includes ${allOems.length} OEMs)` : ''}, ${isSvcProp ? 'confirm the fee and engagement dates' : 'adjust cost/FX details'}, and save. ${(p.commercialModel && p.commercialModel !== 'Direct') ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-handshake"></i> Routing inherited from proposal: <strong>${pEsc(p.commercialModel)}</strong>${p.sourcedViaResellerKey ? ' via <strong>' + pEsc(p.sourcedViaResellerKey) + '</strong>' : ''}. (Stored on contract; will pre-fill future invoices.)</span>` : ''}<a href="#" onclick="showTab('proposalsTab'); setTimeout(()=>openProposalDetail('${p.id}'), 200); return false;" style="color:var(--success); text-decoration:underline; margin-left:6px;">← back to proposal</a>`;
+                banner.innerHTML = `<i class="fas fa-file-invoice"></i> Converting <strong>accepted ${isSvcProp ? 'service ' : ''}proposal ${pEsc(p.proposalNumber)}</strong> to a ${isSvcProp ? 'service engagement' : 'contract'}. Review pre-populated fields below${allOems.length > 1 ? ` (includes ${allOems.length} OEMs)` : ''}, ${isSvcProp ? 'confirm the fee and engagement dates' : 'adjust cost/FX details'}, and save. ${_propCur8ed === 'USD' ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-coins"></i> USD proposal converted at <strong>₹${_usdInrRate}</strong> per USD — review the pre-filled ₹ sell value.</span>` : ''}${(p.commercialModel && p.commercialModel !== 'Direct') ? `<br><span style="font-size:11.5px; opacity:0.9;"><i class="fas fa-handshake"></i> Routing inherited from proposal: <strong>${pEsc(p.commercialModel)}</strong>${p.sourcedViaResellerKey ? ' via <strong>' + pEsc(p.sourcedViaResellerKey) + '</strong>' : ''}. (Stored on contract; will pre-fill future invoices.)</span>` : ''}<a href="#" onclick="showTab('proposalsTab'); setTimeout(()=>openProposalDetail('${p.id}'), 200); return false;" style="color:var(--success); text-decoration:underline; margin-left:6px;">← back to proposal</a>`;
                 provHeader.insertAdjacentElement('afterend', banner);
             }
         }
