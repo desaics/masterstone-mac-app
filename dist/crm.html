@@ -6352,6 +6352,199 @@ window.__msRenderMissingLocalFiles = function () {
         + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
 };
 
+// ============ Phase 8EG — Central "Missing OneDrive Links" manager ============
+// The inverse of the Missing-Local-Files sweeper: every contract-level document
+// that has an identifying number (invoice/PO/quote) but an EMPTY OneDrive link
+// field. You paste the shareable link from one place; it writes to the same
+// field the CA Export reads, so the invoice number hyperlinks on the next
+// export. Standalone proposals and standalone POs are intentionally excluded
+// (their externalLink is opt-in for externally-originated files; every internal
+// proposal would otherwise flood this list).
+
+window.__msMissingOneDriveLinks = [];
+
+function _collectMissingOneDriveLinks() {
+    var list = [];
+    var hasRef = function (ref) { return !!(ref && String(ref).trim()); };
+    var noLink = function (link) { return !(link && String(link).trim()); };
+
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        contracts.forEach(function (c, cIdx) {
+            if (!c) return;
+            var client = c.client || '(unnamed)';
+            var product = c.product || '';
+            var ctxBase = client + (product ? ' \u00b7 ' + product : '');
+
+            if (hasRef(c.internalPO) && noLink(c.internalPOLink)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'internalPOLink',
+                    client: client, docType: 'Internal PO', context: product, ref: c.internalPO || '', label: ctxBase + ' \u00b7 Internal PO' });
+            }
+            if (hasRef(c.oemQuote) && noLink(c.oemQuoteLink)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'oemQuoteLink',
+                    client: client, docType: 'OEM Quote', context: product, ref: c.oemQuote || '', label: ctxBase + ' \u00b7 OEM Quote' });
+            }
+            if (Array.isArray(c.clientPOs) && c.clientPOs.length > 0) {
+                c.clientPOs.forEach(function (po, poIdx) {
+                    if (po && hasRef(po.poNo) && noLink(po.poLink)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOs[].poLink', arrIdx: poIdx,
+                            client: client, docType: 'Client PO', context: product, ref: po.poNo || '', label: ctxBase + ' \u00b7 Client PO ' + (po.poNo || '#' + (poIdx + 1)) });
+                    }
+                });
+            } else if (hasRef(c.clientPO) && noLink(c.clientPOLink)) {
+                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOLink',
+                    client: client, docType: 'Client PO', context: product, ref: c.clientPO || '', label: ctxBase + ' \u00b7 Client PO' });
+            }
+            if (Array.isArray(c.billingYears)) {
+                c.billingYears.forEach(function (by, yIdx) {
+                    if (!by) return;
+                    var fy = by.fy || ('Year ' + (yIdx + 1));
+                    var pfx = (product ? product + ' \u00b7 ' : '') + fy;
+                    if (Array.isArray(by.arInvoices) && by.arInvoices.length > 0) {
+                        by.arInvoices.forEach(function (inv, arIdx) {
+                            if (inv && hasRef(inv.invNo) && noLink(inv.link)) {
+                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].arInvoices[].link', cycleIdx: yIdx, arrIdx: arIdx,
+                                    client: client, docType: 'Client Invoice', context: pfx, ref: inv.invNo || '', label: ctxBase + ' \u00b7 ' + fy + ' \u00b7 Client Inv ' + (inv.invNo || '#' + (arIdx + 1)) });
+                            }
+                        });
+                    } else if (hasRef(by.clientInvoiceNo) && noLink(by.clientInvoiceLink)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].clientInvoiceLink', cycleIdx: yIdx,
+                            client: client, docType: 'Client Invoice', context: pfx, ref: by.clientInvoiceNo || '', label: ctxBase + ' \u00b7 ' + fy + ' \u00b7 Client Inv' });
+                    }
+                    if (Array.isArray(by.apInvoices) && by.apInvoices.length > 0) {
+                        by.apInvoices.forEach(function (inv, apIdx) {
+                            if (inv && hasRef(inv.invNo) && noLink(inv.link)) {
+                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].apInvoices[].link', cycleIdx: yIdx, arrIdx: apIdx,
+                                    client: client, docType: 'OEM Invoice', context: pfx, ref: inv.invNo || '', label: ctxBase + ' \u00b7 ' + fy + ' \u00b7 OEM Inv ' + (inv.invNo || '#' + (apIdx + 1)) });
+                            }
+                        });
+                    } else if (hasRef(by.oemInvoiceNo) && noLink(by.oemInvoiceLink)) {
+                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].oemInvoiceLink', cycleIdx: yIdx,
+                            client: client, docType: 'OEM Invoice', context: pfx, ref: by.oemInvoiceNo || '', label: ctxBase + ' \u00b7 ' + fy + ' \u00b7 OEM Inv' });
+                    }
+                });
+            }
+        });
+    }
+    return list;
+}
+
+// Write a pasted OneDrive link back to the correct record + persist. Mirrors
+// _writeLocalPathBack's field map, but sets the *Link field instead of *LocalPath.
+function _writeOneDriveLinkBack(f, newLink) {
+    if (f.entityType === 'contract') {
+        var c = (typeof contracts !== 'undefined') ? contracts[f.entityIdx] : null;
+        if (!c) throw new Error('Contract not found at index ' + f.entityIdx);
+        switch (f.fieldDescriptor) {
+            case 'internalPOLink': c.internalPOLink = newLink; break;
+            case 'oemQuoteLink':   c.oemQuoteLink = newLink; break;
+            case 'clientPOLink':   c.clientPOLink = newLink; break;
+            case 'clientPOs[].poLink':
+                if (c.clientPOs && c.clientPOs[f.arrIdx]) c.clientPOs[f.arrIdx].poLink = newLink; break;
+            case 'billingYears[].clientInvoiceLink':
+                if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].clientInvoiceLink = newLink; break;
+            case 'billingYears[].oemInvoiceLink':
+                if (c.billingYears && c.billingYears[f.cycleIdx]) c.billingYears[f.cycleIdx].oemInvoiceLink = newLink; break;
+            case 'billingYears[].arInvoices[].link':
+                if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].arInvoices && c.billingYears[f.cycleIdx].arInvoices[f.arrIdx])
+                    c.billingYears[f.cycleIdx].arInvoices[f.arrIdx].link = newLink; break;
+            case 'billingYears[].apInvoices[].link':
+                if (c.billingYears && c.billingYears[f.cycleIdx] && c.billingYears[f.cycleIdx].apInvoices && c.billingYears[f.cycleIdx].apInvoices[f.arrIdx])
+                    c.billingYears[f.cycleIdx].apInvoices[f.arrIdx].link = newLink; break;
+            default: throw new Error('Unknown contract fieldDescriptor: ' + f.fieldDescriptor);
+        }
+        if (typeof persistData === 'function') persistData();
+    } else {
+        throw new Error('Unknown entityType: ' + f.entityType);
+    }
+}
+
+// Save one row's pasted link.
+window.__msSetMissingOneDriveLink = function (idx) {
+    var f = (window.__msMissingOneDriveLinks || [])[idx];
+    if (!f) return;
+    var input = document.getElementById('msMissingLinkInput_' + idx);
+    var url = input ? String(input.value || '').trim() : '';
+    if (!url) { showActionToast('Paste a link into that row first.', 'error'); return; }
+    try {
+        _writeOneDriveLinkBack(f, url);
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> OneDrive link saved for <strong>' + pEsc(f.docType + (f.ref ? ' ' + f.ref : '')) + '</strong>.', 4500);
+        window.__msRenderMissingOneDriveLinks();
+        if (typeof renderContracts === 'function') { try { renderContracts(); } catch (e) {} }
+    } catch (e) {
+        showActionToast('Could not save link: ' + e, 'error');
+    }
+};
+
+// Save every row that has something pasted, in one pass. Snapshot the inputs
+// against the current render's indices BEFORE writing, then re-render once.
+window.__msSaveAllMissingOneDriveLinks = function () {
+    var arr = window.__msMissingOneDriveLinks || [];
+    var toSave = [];
+    arr.forEach(function (f, idx) {
+        var input = document.getElementById('msMissingLinkInput_' + idx);
+        var url = input ? String(input.value || '').trim() : '';
+        if (url) toSave.push({ f: f, url: url });
+    });
+    if (!toSave.length) { showActionToast('No links pasted yet.', 'error'); return; }
+    var saved = 0, errors = 0;
+    toSave.forEach(function (item) {
+        try { _writeOneDriveLinkBack(item.f, item.url); saved++; }
+        catch (e) { errors++; }
+    });
+    if (typeof showProspectToast === 'function') {
+        showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Saved <strong>' + saved + '</strong> OneDrive link' + (saved === 1 ? '' : 's') + (errors ? ' \u00b7 <strong>' + errors + '</strong> failed' : '') + '.', 5000);
+    }
+    window.__msRenderMissingOneDriveLinks();
+    if (typeof renderContracts === 'function') { try { renderContracts(); } catch (e) {} }
+};
+
+window.__msRenderMissingOneDriveLinks = function () {
+    var host = document.getElementById('missingOneDriveLinksBody');
+    if (!host) return;
+    var raw = _collectMissingOneDriveLinks();
+    window.__msMissingOneDriveLinks = raw;
+    if (!raw.length) {
+        host.innerHTML = '<div style="padding:22px; text-align:center; color:var(--text-dim); font-size:13px;"><i class="fas fa-check-circle" style="color:var(--success); font-size:22px; display:block; margin-bottom:8px;"></i>Every document with a reference number already has a OneDrive link.</div>';
+        return;
+    }
+    var rows = raw.map(function (f, i) { return { f: f, i: i }; });
+    rows.sort(function (a, b) {
+        var ca = (a.f.client || '').toLowerCase(), cb = (b.f.client || '').toLowerCase();
+        if (ca !== cb) return ca < cb ? -1 : 1;
+        return (a.f.docType || '').localeCompare(b.f.docType || '');
+    });
+    var clients = {};
+    raw.forEach(function (f) { clients[f.client || ''] = true; });
+    var nClients = Object.keys(clients).length;
+
+    var trs = rows.map(function (x) {
+        var f = x.f, idx = x.i;
+        var refHtml = f.ref ? '<span style="font-family:monospace; font-size:11.5px;">' + pEsc(f.ref) + '</span>' : '<span style="color:var(--text-dim); font-style:italic; font-size:11px;">(no ref)</span>';
+        return '<tr style="border-bottom:1px solid var(--glass-border);">'
+            + '<td style="padding:8px 10px; font-size:12px; white-space:nowrap;">' + pEsc(f.client || '\u2014') + '</td>'
+            + '<td style="padding:8px 10px;"><span class="stage-badge" style="font-size:10px; background:var(--accent-tint-low); color:var(--accent-cyan);">' + pEsc(f.docType) + '</span></td>'
+            + '<td style="padding:8px 10px;">' + refHtml + '</td>'
+            + '<td style="padding:8px 10px; font-size:11px; color:var(--text-dim);">' + pEsc(f.context || '') + '</td>'
+            + '<td style="padding:8px 10px;"><input type="text" id="msMissingLinkInput_' + idx + '" placeholder="Paste OneDrive / SharePoint link\u2026" style="width:100%; min-width:220px; padding:6px 9px; border:1px solid var(--glass-border); border-radius:5px; background:var(--input-bg); color:var(--text-main); font-size:11.5px;" onkeydown="if(event.key===\'Enter\'){window.__msSetMissingOneDriveLink(' + idx + ');}"></td>'
+            + '<td style="padding:8px 10px; text-align:right; white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="window.__msSetMissingOneDriveLink(' + idx + ')" title="Save this link to the record"><i class="fas fa-save" style="color:var(--accent-cyan);"></i> Save</button></td>'
+            + '</tr>';
+    }).join('');
+
+    host.innerHTML = '<div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">'
+        + '<div style="font-size:12px;"><strong style="color:var(--warning);">' + raw.length + '</strong> document' + (raw.length === 1 ? '' : 's') + ' across <strong>' + nClients + '</strong> client' + (nClients === 1 ? '' : 's') + ' have a reference number but no OneDrive link.</div>'
+        + '<button class="btn btn-primary btn-sm" onclick="window.__msSaveAllMissingOneDriveLinks()" title="Save every link pasted below in one go"><i class="fas fa-save"></i> Save all pasted</button>'
+        + '</div>'
+        + '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">'
+        + '<thead><tr style="border-bottom:2px solid var(--glass-border); text-align:left;">'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Client</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Document</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Reference</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Detail</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">OneDrive / SharePoint link</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim); text-align:right;">Action</th>'
+        + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+};
+
     // Run the scan. Async because each path check is a Tauri invoke round-trip.
     window.__msRunBrokenLinkScan = async function () {
         var t = getTauri();
@@ -11120,6 +11313,7 @@ window.__msRenderMissingLocalFiles = function () {
   <div class="arap-subtab-strip" style="display:flex; gap:6px; border-bottom:1px solid var(--glass-border); margin-bottom:24px; padding-bottom:0;">
     <div id="docExpSubtabRemitBtn" class="arap-subtab active" onclick="showDocExportSubtab('remit')"><i class="fas fa-money-check-dollar" style="color:var(--accent-cyan);"></i> Remittance Bundle</div>
     <div id="docExpSubtabClientBtn" class="arap-subtab" onclick="showDocExportSubtab('client')"><i class="fas fa-user-tag" style="color:var(--purple);"></i> Client Document Pack</div>
+    <div id="docExpSubtabLinksBtn" class="arap-subtab" onclick="showDocExportSubtab('links')"><i class="fas fa-link" style="color:var(--accent-cyan);"></i> Missing Links</div>
   </div>
 
   <!-- ===== Mode A: Remittance Bundle (per contract/deal) ===== -->
@@ -11196,6 +11390,19 @@ window.__msRenderMissingLocalFiles = function () {
     </div>
     <div id="docExpClientPreview"></div>
   </div>
+
+  <!-- ===== Missing Links (8EG): paste OneDrive links for docs that have a number but no link ===== -->
+  <div id="docExpLinksSection" style="display:none;">
+    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--accent-cyan);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-link" style="color:var(--accent-cyan);"></i> Missing OneDrive Links <span style="font-size:12px; font-weight:400; color:var(--text-dim);">\u00b7 all clients</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingOneDriveLinks()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has an invoice / PO / quote number but no OneDrive link yet. Paste the shareable link into a row and click <strong>Save</strong> \u2014 or paste several and click <strong>Save all pasted</strong>. It writes straight to that record, so the CA Export will hyperlink the invoice number the next time you generate it.</div>
+      <div id="missingOneDriveLinksBody"></div>
+    </div>
+  </div>
+
 </div>
 <!-- ===================== /Phase 8BV — Document Export ===================== -->
 
@@ -47907,8 +48114,15 @@ function showDocExportSubtab(which) {
     if (clientS) clientS.style.display = (which === 'client') ? '' : 'none';
     if (remitB) remitB.classList.toggle('active', which === 'remit');
     if (clientB) clientB.classList.toggle('active', which === 'client');
+    var linksS = document.getElementById('docExpLinksSection');
+    var linksB = document.getElementById('docExpSubtabLinksBtn');
+    if (linksS) linksS.style.display = (which === 'links') ? '' : 'none';
+    if (linksB) linksB.classList.toggle('active', which === 'links');
     if (which === 'client' && typeof window.__msRenderMissingLocalFiles === 'function') {
         try { window.__msRenderMissingLocalFiles(); } catch (e) {}
+    }
+    if (which === 'links' && typeof window.__msRenderMissingOneDriveLinks === 'function') {
+        try { window.__msRenderMissingOneDriveLinks(); } catch (e) {}
     }
 }
 
