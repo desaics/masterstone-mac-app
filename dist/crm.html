@@ -6514,6 +6514,70 @@ window.__msSaveAllMissingOneDriveLinks = function () {
     if (typeof renderContracts === 'function') { try { renderContracts(); } catch (e) {} }
 };
 
+// ============ Phase 8EI — invoices with incomplete contract linkage ==========
+// The AMNS case that started this: an invoice saved without a linked contract
+// exported with no hyperlink AND with BUSINESS HEAD wrong. Rather than teach
+// the export to paper over it (which would have hidden the second symptom),
+// catch it at source — warned about on save, and listed standing here.
+// Statuses below are the ones that ought to reach the CA Sales sheet.
+var _msUnlinkedInvoiceStatuses = ['Issued', 'Partially Paid', 'Paid', 'Credit Note Issued'];
+
+function _msInvoiceNeedsLinkage(status) {
+    return _msUnlinkedInvoiceStatuses.indexOf(String(status || '')) !== -1;
+}
+
+function _msInvoiceLinkageGaps(contractIdx, cycleIdx) {
+    var gaps = [];
+    if (String(contractIdx === undefined || contractIdx === null ? '' : contractIdx).trim() === '') gaps.push('Linked Contract');
+    if (String(cycleIdx === undefined || cycleIdx === null ? '' : cycleIdx).trim() === '') gaps.push('Billing Cycle');
+    return gaps;
+}
+
+function _collectUnlinkedInvoices() {
+    var out = [];
+    if (typeof invoices === 'undefined' || !Array.isArray(invoices)) return out;
+    invoices.forEach(function (inv) {
+        if (!inv || !_msInvoiceNeedsLinkage(inv.status)) return;
+        var gaps = _msInvoiceLinkageGaps(inv.linkedContractIdx, inv.linkedCycleYearIdx);
+        if (gaps.length) out.push({ inv: inv, gaps: gaps });
+    });
+    return out;
+}
+
+window.__msRenderUnlinkedInvoices = function () {
+    var host = document.getElementById('unlinkedInvoicesBody');
+    if (!host) return;
+    var list = _collectUnlinkedInvoices();
+    if (!list.length) {
+        host.innerHTML = '<div style="padding:18px; text-align:center; color:var(--text-dim); font-size:12.5px;">'
+            + '<i class="fas fa-check-circle" style="color:var(--success); font-size:20px; display:block; margin-bottom:6px;"></i>'
+            + 'Every issued invoice is linked to a contract and a billing cycle.</div>';
+        return;
+    }
+    var trs = list.map(function (x) {
+        var inv = x.inv;
+        return '<tr style="border-bottom:1px solid var(--glass-border);">'
+            + '<td style="padding:8px 10px; font-family:monospace; font-size:11.5px; white-space:nowrap;">' + pEsc(inv.invoiceNumber || '(no number)') + '</td>'
+            + '<td style="padding:8px 10px; font-size:12px;">' + pEsc(inv.clientName || '\u2014') + '</td>'
+            + '<td style="padding:8px 10px; font-size:11.5px; white-space:nowrap;">' + (inv.invoiceDate && typeof formatDateReadable === 'function' ? formatDateReadable(inv.invoiceDate) : pEsc(inv.invoiceDate || '\u2014')) + '</td>'
+            + '<td style="padding:8px 10px;"><span class="stage-badge" style="font-size:10px;">' + pEsc(inv.status || '') + '</span></td>'
+            + '<td style="padding:8px 10px; font-size:11.5px; color:var(--warning);">' + pEsc(x.gaps.join(' + ')) + '</td>'
+            + '<td style="padding:8px 10px; text-align:right; white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="openInvoiceForm(\'' + inv.id + '\')" title="Open this invoice and set its linkage"><i class="fas fa-pen" style="color:var(--accent-cyan);"></i> Fix</button></td>'
+            + '</tr>';
+    }).join('');
+    host.innerHTML = '<div style="font-size:12px; margin-bottom:12px;"><strong style="color:var(--warning);">' + list.length + '</strong> invoice'
+        + (list.length === 1 ? '' : 's') + ' will export without a OneDrive hyperlink, and with BUSINESS HEAD as "SERVICE", until the linkage is set.</div>'
+        + '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">'
+        + '<thead><tr style="border-bottom:2px solid var(--glass-border); text-align:left;">'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Invoice</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Client</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Date</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Status</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Missing</th>'
+        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim); text-align:right;">Action</th>'
+        + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+};
+
 window.__msRenderMissingOneDriveLinks = function () {
     var host = document.getElementById('missingOneDriveLinksBody');
     if (!host) return;
@@ -11416,6 +11480,18 @@ window.__msRenderMissingOneDriveLinks = function () {
       </div>
       <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has an invoice / PO / quote number but no OneDrive link yet. Paste the shareable link into a row and click <strong>Save</strong> \u2014 or paste several and click <strong>Save all pasted</strong>. It writes straight to that record, so the CA Export will hyperlink the invoice number the next time you generate it.</div>
       <div id="missingOneDriveLinksBody"></div>
+    </div>
+
+    <!-- Phase 8EI — invoices whose contract/cycle linkage is incomplete. These
+         export with no hyperlink and the wrong BUSINESS HEAD, so they belong
+         next to the missing-link list rather than being discovered in Excel. -->
+    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--warning);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-unlink" style="color:var(--warning);"></i> Invoices Not Linked to a Contract <span style="font-size:12px; font-weight:400; color:var(--text-dim);">\u00b7 affects CA Export</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderUnlinkedInvoices()" title="Re-scan"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">The CA Export reads an invoice's OneDrive link from its contract's billing cycle, and takes BUSINESS HEAD from the contract. An issued invoice missing either one exports with a bare invoice number and BUSINESS HEAD as \u201cSERVICE\u201d. Click <strong>Fix</strong> to open the invoice and set its Linked Contract and Billing Cycle.</div>
+      <div id="unlinkedInvoicesBody"></div>
     </div>
   </div>
 
@@ -33689,6 +33765,27 @@ function saveInvoiceFromForm() {
     const subject = document.getElementById('invSubject').value.trim();
     if (!clientName) { alert("Please select a client."); return; }
     if (!subject) { alert("Subject is required."); return; }
+
+    // Phase 8EI — linkage guard. An invoice that reaches the CA Export needs a
+    // contract AND a billing cycle: the export reads its OneDrive link from the
+    // contract's cycle, and derives BUSINESS HEAD from the contract. With either
+    // missing the row still appears, but with no hyperlink and BUSINESS HEAD
+    // falling back to "SERVICE" — silently wrong in two columns. Drafts and
+    // cancelled invoices are exempt; the warning never blocks a save.
+    try {
+        const _st8ei = (document.getElementById('invStatus') || {}).value || '';
+        if (_msInvoiceNeedsLinkage(_st8ei)) {
+            const _c8ei = (document.getElementById('invLinkedContractIdx') || {}).value || '';
+            const _y8ei = (document.getElementById('invLinkedCycleYearIdx') || {}).value || '';
+            const _missing8ei = _msInvoiceLinkageGaps(_c8ei, _y8ei);
+            if (_missing8ei.length) {
+                if (!confirm('This invoice has no ' + _missing8ei.join(' and ') + '.\n\n'
+                    + 'In the CA Export that means no OneDrive hyperlink on the invoice number, '
+                    + 'and BUSINESS HEAD falling back to "SERVICE".\n\nSave anyway?')) return;
+            }
+        }
+    } catch (_) {}
+
     if (invFormLineItems.length === 0) {
         if (!confirm("No line items — invoice will have zero total. Save anyway?")) return;
     }
@@ -44545,11 +44642,27 @@ function _caExportFindArLink(inv) {
     if (isNaN(cIdx) || isNaN(yIdx)) return out;
     const c = contracts[cIdx];
     if (!c || !Array.isArray(c.billingYears) || !c.billingYears[yIdx]) return out;
-    const arr = c.billingYears[yIdx].arInvoices || [];
+    const y = c.billingYears[yIdx];
+    const arr = y.arInvoices || [];
     const match = arr.find(x => x && x.invNo && String(x.invNo).trim() === String(inv.invoiceNumber).trim());
     if (match) {
         out.link = match.link || '';
         out.localPath = match.localPath || '';
+    }
+    // Phase 8EI — legacy-shape fallback. Cycles created before the multi-invoice
+    // AR list store the client invoice on y.clientInvoiceNo / y.clientInvoiceLink
+    // (+ y.clientInvoiceLocalPath). Everywhere else in the app reads those
+    // fields; this resolver did not, so a link pasted there — including via the
+    // 8EG Missing Links panel, which writes to whichever shape a cycle uses —
+    // never reached the Sales sheet. The exact invoice-number match is the
+    // safety rail: without it we could attach one cycle's document to another
+    // invoice's row.
+    if (!out.link && !out.localPath) {
+        const legacyNo = String(y.clientInvoiceNo || '').trim();
+        if (legacyNo && legacyNo === String(inv.invoiceNumber).trim()) {
+            out.link = y.clientInvoiceLink || '';
+            out.localPath = y.clientInvoiceLocalPath || '';
+        }
     }
     return out;
 }
@@ -48391,6 +48504,7 @@ function showDocExportSubtab(which) {
     }
     if (which === 'links' && typeof window.__msRenderMissingOneDriveLinks === 'function') {
         try { window.__msRenderMissingOneDriveLinks(); } catch (e) {}
+        try { if (typeof window.__msRenderUnlinkedInvoices === 'function') window.__msRenderUnlinkedInvoices(); } catch (e) {}
     }
 }
 
