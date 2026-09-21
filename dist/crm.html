@@ -11291,13 +11291,29 @@ window.__msRenderMissingOneDriveLinks = function () {
         </div>
       </div>
 
+      <!-- Phase 8EK — formatting toolbar for BOTH editor modes. Word-style
+           templates format in place (WYSIWYG); markup templates get the same
+           [b]/[red]… tags as Terms and line-item notes. mousedown is cancelled
+           so clicking a button never steals the editor's selection. -->
+      <div class="terms-toolbar" id="tplFmtToolbar" style="border-bottom:1px solid var(--glass-border); border-radius:6px; margin-bottom:8px;">
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('b')" title="Bold"><i class="fas fa-bold"></i> Bold</button>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('i')" title="Italic"><i class="fas fa-italic"></i> Italic</button>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('u')" title="Underline"><i class="fas fa-underline"></i> Underline</button>
+        <span style="width:1px; height:18px; background:var(--glass-border); margin:0 4px;"></span>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('red')" title="Red text"><i class="fas fa-font" style="color:#b91c1c;"></i> Red</button>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('blue')" title="Blue text"><i class="fas fa-font" style="color:#1d4ed8;"></i> Blue</button>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('green')" title="Green text"><i class="fas fa-font" style="color:#15803d;"></i> Green</button>
+        <span style="width:1px; height:18px; background:var(--glass-border); margin:0 4px;"></span>
+        <button type="button" class="terms-toolbar-btn" onmousedown="event.preventDefault()" onclick="__msTplFmt('clear')" title="Remove formatting from the selection — back to plain black"><i class="fas fa-eraser"></i> Clear</button>
+      </div>
+
       <div id="tplMarkupWrap" style="margin-bottom:6px;">
         <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Document Body</label>
         <textarea id="tplBody" spellcheck="true" placeholder="Type the document text here. Use {{Field Name}} for parts that change, e.g.:&#10;&#10;Date: {{Date}}&#10;&#10;To,&#10;{{Addressee}}&#10;&#10;**Subject line in bold**&#10;&#10;We hereby authorize…" style="width:100%; min-height:340px; padding:12px 14px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main); font-size:13px; line-height:1.55; font-family:'SF Mono', Menlo, Consolas, monospace; resize:vertical;" oninput="tplRefreshDetectedFields()"></textarea>
       </div>
       <div id="tplHtmlWrap" style="display:none; margin-bottom:6px;">
         <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Document Body <span style="opacity:0.6;">(imported from Word — click into the page to edit text directly; keep the {{Field}} markers, they become the fill-in boxes)</span></label>
-        <div id="tplBodyHtml" contenteditable="true" spellcheck="true" oninput="tplRefreshDetectedFields()" style="min-height:340px; max-height:60vh; overflow:auto; padding:14px 18px; border:1px solid var(--glass-border); border-radius:6px; background:#ffffff; color:#1a1a1a; font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6;"></div>
+        <div id="tplBodyHtml" contenteditable="true" spellcheck="true" oninput="tplRefreshDetectedFields()" onpaste="__msTplPaste(event)" style="min-height:340px; max-height:60vh; overflow:auto; padding:14px 18px; border:1px solid var(--glass-border); border-radius:6px; background:#ffffff; color:#1a1a1a; font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; font-size:13px; line-height:1.6;"></div>
       </div>
 
       <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; margin-top:10px;">
@@ -11314,12 +11330,15 @@ window.__msRenderMissingOneDriveLinks = function () {
             • <code>{{Field Name}}</code> = a blank you fill in each time<br>
             • <code>{{signature}}</code> = your digital signature/stamp here<br>
             • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)<br>
+            • Select text, then use the toolbar above for bold, italic, underline or colour<br>
             • <code>{{space}}</code> = a blank line of vertical space (stack for more)
           </div>
           <div id="tplTipsHtml" style="display:none; font-size:12px; color:var(--text-dim); line-height:1.7;">
             • Keep the <code>{{Field Name}}</code> markers — each one becomes a fill-in box<br>
             • Blanks (<code>___</code>), <code>[Field]</code> and <code>&lt;Field&gt;</code> were already converted when the Word file was imported<br>
             • Click into the page to edit text directly — Word formatting (bold, lists, tables) is preserved<br>
+            • Select text, then use the toolbar above for bold, italic, underline or colour — it shows as you type<br>
+            • Checkboxes: tick one here to make it the default; on the Fill screen, tick it in the preview to set it for that document<br>
             • <code>{{signature}}</code> = your digital signature/stamp here<br>
             • <code>{{blank signature}}</code> = empty space to sign by hand (no image/stamp)<br>
             • <code>{{space}}</code> = a blank line of vertical space (stack for more)
@@ -11393,7 +11412,7 @@ window.__msRenderMissingOneDriveLinks = function () {
           <div style="font-size:11px; color:var(--text-dim);"><i class="fas fa-circle-info"></i> Letterhead &amp; print arrive in the next update</div>
         </div>
         <div style="background:#e9eaec; border:1px solid var(--glass-border); border-radius:6px; padding:24px; max-height:70vh; overflow:auto;">
-          <div id="tplPreviewPage" style="background:#ffffff; color:#1a1a1a; width:100%; max-width:720px; margin:0 auto; padding:48px 56px; box-shadow:0 2px 14px rgba(0,0,0,0.18); font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:14px; line-height:1.6; min-height:400px;"></div>
+          <div id="tplPreviewPage" onchange="__msOnPreviewCheckbox(event)" style="background:#ffffff; color:#1a1a1a; width:100%; max-width:720px; margin:0 auto; padding:48px 56px; box-shadow:0 2px 14px rgba(0,0,0,0.18); font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:14px; line-height:1.6; min-height:400px;"></div>
         </div>
       </div>
     </div>
@@ -48669,6 +48688,8 @@ function __msInlineFmt(text) {
     var esc = __msEscHtml(text);
     // **bold** — non-greedy, no nesting
     esc = esc.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+    // Phase 8EK — [b] [i] [u] [red] [blue] [green], applied to escaped text.
+    esc = __msApplyFmtTags(esc);
     return esc;
 }
 // Substitute {{Field}} markers with values. In previewMode, empty values render
@@ -48847,12 +48868,107 @@ function __msConvertFillSpots(html) {
     return parts.join('');
 }
 
+// =============================================================================
+// Phase 8EK — document-body hygiene, checkbox state, and inline format tags.
+// =============================================================================
+
+// Strip pasted APPEARANCE from document HTML. Copying a {{marker}} out of the
+// editor's "Formatting tips" panel carried that panel's background (#f4f3ef)
+// and the code font (Menlo) into the template; an empty {{space}} inside that
+// styling printed as a small grey square, and filled fields printed monospace.
+// Removes: script/style/meta-type junk, code/kbd/samp/tt wrappers (text kept),
+// inline background*, inline font-family, <font face>. Deliberately KEEPS
+// colour, font-weight, font-style and text-decoration — the formatting toolbar
+// uses exactly those. Used at render, on paste and on save.
+function __msSanitizeDocHtml(html) {
+    var src = String(html || '');
+    if (!src) return src;
+    try {
+        // Clipboard HTML arrives as a whole document; keep only the fragment.
+        var fm = src.match(/<!--StartFragment-->([\s\S]*?)<!--EndFragment-->/i);
+        if (fm) src = fm[1];
+        var doc = new DOMParser().parseFromString('<div id="__mss">' + src + '</div>', 'text/html');
+        var root = doc.getElementById('__mss');
+        if (!root) return String(html || '');
+        var junk = root.querySelectorAll('script, style, meta, link, title, xml, object, embed, iframe');
+        for (var j = junk.length - 1; j >= 0; j--) junk[j].parentNode.removeChild(junk[j]);
+        var codes = root.querySelectorAll('code, kbd, samp, tt');
+        for (var c = codes.length - 1; c >= 0; c--) {
+            var el = codes[c], parent = el.parentNode;
+            while (el.firstChild) parent.insertBefore(el.firstChild, el);
+            parent.removeChild(el);
+        }
+        var styled = root.querySelectorAll('[style]');
+        for (var s = 0; s < styled.length; s++) {
+            var st = styled[s].style;
+            st.removeProperty('background');
+            st.removeProperty('background-color');
+            st.removeProperty('background-image');
+            st.removeProperty('font-family');
+            if (!(styled[s].getAttribute('style') || '').trim()) styled[s].removeAttribute('style');
+        }
+        var faces = root.querySelectorAll('font[face]');
+        for (var f = 0; f < faces.length; f++) faces[f].removeAttribute('face');
+        return root.innerHTML;
+    } catch (e) {
+        return String(html || '');
+    }
+}
+
+// Checkboxes in a document body, numbered in document order (data-mscb="N").
+// State precedence: this document's value (fieldValues __cbN, set by clicking
+// the checkbox in the Fill preview) > the template's own tick (the `checked`
+// attribute, set in the template editor). `disabled` is dropped so the preview
+// is clickable and ticks print crisp rather than greyed.
+function __msApplyDocCheckboxes(html, values) {
+    var n = 0;
+    return String(html || '').replace(/<input\b[^>]*>/gi, function (tag) {
+        if (!/\btype\s*=\s*["']?checkbox\b/i.test(tag)) return tag;
+        var idx = n++;
+        var key = '__cb' + idx;
+        var hasVal = !!(values && Object.prototype.hasOwnProperty.call(values, key));
+        var tplDefault = /\schecked\b/i.test(tag);
+        var on = hasVal ? (values[key] === '1' || values[key] === true || values[key] === 'true') : tplDefault;
+        var t2 = tag
+            .replace(/\s+checked(\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/gi, '')
+            .replace(/\s+disabled(\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/gi, '')
+            .replace(/\s+data-mscb\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+        return t2.replace(/\s*\/?>$/, function (end) {
+            return ' data-mscb="' + idx + '"' + (on ? ' checked' : '') + (end.indexOf('/') !== -1 ? ' />' : '>');
+        });
+    });
+}
+
+// [b] [i] [u] [red] [blue] [green] → HTML, for ALREADY-ESCAPED text (the
+// markup renderer escapes first). Same vocabulary and colours as Terms and
+// line-item notes; kept separate from __msRichTermsHtml, which escapes itself.
+function __msApplyFmtTags(s) {
+    var rules = [
+        [/\[b\]([\s\S]*?)\[\/b\]/g, '<strong>$1</strong>'],
+        [/\[i\]([\s\S]*?)\[\/i\]/g, '<em>$1</em>'],
+        [/\[u\]([\s\S]*?)\[\/u\]/g, '<span style="text-decoration:underline;">$1</span>'],
+        [/\[red\]([\s\S]*?)\[\/red\]/g, '<span style="color:#b91c1c;">$1</span>'],
+        [/\[blue\]([\s\S]*?)\[\/blue\]/g, '<span style="color:#1d4ed8;">$1</span>'],
+        [/\[green\]([\s\S]*?)\[\/green\]/g, '<span style="color:#15803d;">$1</span>']
+    ];
+    for (var pass = 0; pass < 6; pass++) {
+        var prev = s;
+        for (var i = 0; i < rules.length; i++) s = s.replace(rules[i][0], rules[i][1]);
+        if (s === prev) break;
+    }
+    return s;
+}
+
 // {{Field}} substitution inside an HTML body. Values are keyed by
 // field-name.toLowerCase() (same convention as __msSubstitute) and are
 // HTML-escaped with newlines → <br>. {{signature}} / {{blank signature}} are
 // left in place for the renderers below; {{space}} → a small inline gap;
 // empty fields show the yellow chip in preview mode only, blank in output.
 function __msHtmlSubstitute(html, values, previewMode) {
+    // Phase 8EK — clean pasted appearance, then apply checkbox state, BEFORE
+    // field substitution, so user-typed values are never touched by either.
+    // Both the live preview and the print paginator come through here.
+    html = __msApplyDocCheckboxes(__msSanitizeDocHtml(html), values);
     return String(html || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, function (whole, raw) {
         var name = raw.trim();
         var key = name.toLowerCase();
@@ -49113,6 +49229,83 @@ function __msBuildFillForm(t) {
         '</div>';
     }).join('');
 }
+// ===== Phase 8EK — editor formatting toolbar ================================
+// One toolbar, both modes. Word-style (html) templates format in place via
+// execCommand — true WYSIWYG, stored as inline colour/weight/style/decoration,
+// which the sanitizer never strips. Markup templates get the tag vocabulary.
+// Buttons cancel mousedown so clicking never steals the editor's selection.
+function __msTplFmt(kind) {
+    if (__msEditorFormat === 'html') {
+        var el = document.getElementById('tplBodyHtml');
+        if (!el) return;
+        el.focus();
+        try { document.execCommand('styleWithCSS', false, true); } catch (_) {}
+        var cmd = {
+            b: ['bold'], i: ['italic'], u: ['underline'],
+            red: ['foreColor', '#b91c1c'], blue: ['foreColor', '#1d4ed8'], green: ['foreColor', '#15803d'],
+            clear: ['removeFormat']
+        }[kind];
+        if (!cmd) return;
+        try { document.execCommand(cmd[0], false, cmd.length > 1 ? cmd[1] : null); } catch (_) {}
+    } else {
+        var ta = document.getElementById('tplBody');
+        if (!ta) return;
+        if (kind === 'clear') termsClearInlineFormat(ta);
+        else __msTplWrapLines(ta, '[' + kind + ']', '[/' + kind + ']');
+    }
+    if (typeof tplRefreshDetectedFields === 'function') tplRefreshDetectedFields();
+}
+
+// Markup templates render line by line, so a tag pair must not cross a line
+// break: wrap each non-empty line of the selection separately, keeping a
+// leading "- " bullet marker outside the tag so bullets still parse.
+function __msTplWrapLines(ta, open, close) {
+    var s = ta.selectionStart || 0, e = ta.selectionEnd || 0, v = ta.value;
+    if (s === e) { termsWrapSelection(ta, open, close); return; }
+    var wrapped = v.slice(s, e).split('\n').map(function (line) {
+        if (!line.trim()) return line;
+        var lead = line.match(/^\s*/)[0];
+        var trail = line.match(/\s*$/)[0];
+        var core = line.slice(lead.length, line.length - trail.length);
+        var bullet = '';
+        var bm = core.match(/^-\s+/);
+        if (bm) { bullet = bm[0]; core = core.slice(bullet.length); }
+        if (!core) return line;
+        return lead + bullet + open + core + close + trail;
+    }).join('\n');
+    ta.value = v.slice(0, s) + wrapped + v.slice(e);
+    ta.focus();
+    ta.selectionStart = s;
+    ta.selectionEnd = s + wrapped.length;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Paste into the Word-style editor: insert the clipboard HTML cleaned of
+// pasted appearance (this is where the grey-box styling used to get in).
+// Plain-text pastes carry no styling and are left to the browser.
+function __msTplPaste(e) {
+    try {
+        var cd = e && (e.clipboardData || window.clipboardData);
+        if (!cd) return;
+        var raw = cd.getData('text/html');
+        if (!raw) return;
+        e.preventDefault();
+        document.execCommand('insertHTML', false, __msSanitizeDocHtml(raw));
+        if (typeof tplRefreshDetectedFields === 'function') tplRefreshDetectedFields();
+    } catch (_) {}
+}
+
+// Fill screen: a checkbox ticked in the preview is recorded for THIS document
+// (fieldValues __cbN), so it is saved with the generated doc and printed.
+function __msOnPreviewCheckbox(e) {
+    var t = e && e.target;
+    if (!t || t.tagName !== 'INPUT' || String(t.type || '').toLowerCase() !== 'checkbox') return;
+    var n = t.getAttribute('data-mscb');
+    if (n === null || n === '') return;
+    __msFillValues['__cb' + n] = t.checked ? '1' : '0';
+    __msUpdateFillPreview();
+}
+
 function __msOnFillInput(el) {
     var key = el.getAttribute('data-key');
     if (key == null) return;
@@ -49555,7 +49748,18 @@ function saveTemplateFromEditor() {
     var category = (catEl ? catEl.value : '').trim();
     var __htmlEl = document.getElementById('tplBodyHtml');
     var __isHtml = (__msEditorFormat === 'html');
-    var body = __isHtml ? (__htmlEl ? __htmlEl.innerHTML : '') : (bodyEl ? bodyEl.value : '');
+    // Phase 8EK — (1) ticking a checkbox only flips its live .checked
+    // property, which innerHTML does not serialize; mirror it into the
+    // attribute first or the tick is silently lost. (2) Store the body clean
+    // of pasted appearance so the editor shows what will print.
+    if (__isHtml && __htmlEl) {
+        var __cbs = __htmlEl.querySelectorAll('input[type="checkbox"]');
+        for (var __ci = 0; __ci < __cbs.length; __ci++) {
+            if (__cbs[__ci].checked) __cbs[__ci].setAttribute('checked', '');
+            else __cbs[__ci].removeAttribute('checked');
+        }
+    }
+    var body = __isHtml ? (__htmlEl ? __msSanitizeDocHtml(__htmlEl.innerHTML) : '') : (bodyEl ? bodyEl.value : '');
     if (!name) { __msToast('Please enter a template name', 'error'); if (nameEl) nameEl.focus(); return; }
     var __bodyText = __isHtml ? body.replace(/<[^>]*>/g, ' ').trim() : body.trim();
     if (!__bodyText) { __msToast('Please enter the document body', 'error'); if (__isHtml) { if (__htmlEl) __htmlEl.focus(); } else if (bodyEl) bodyEl.focus(); return; }
