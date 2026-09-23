@@ -3423,6 +3423,33 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 }
 .proposal-kpi-sub { font-size: 10.5px; color: var(--text-subtle); margin-top: 5px; line-height: 1.4; }
 
+/* Phase 8EL — Incl/Excl GST switch on the Consultant Payments money cards.
+   Sized to sit under the figure without competing with it. */
+.con-gst-toggle {
+    display: inline-flex;
+    margin-top: 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: 5px;
+    overflow: hidden;
+}
+.con-gst-btn {
+    background: transparent;
+    border: none;
+    padding: 2px 8px;
+    font-size: 9.5px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.con-gst-btn + .con-gst-btn { border-left: 1px solid var(--glass-border); }
+.con-gst-btn:hover { background: var(--hover-bg); color: var(--text-main); }
+.con-gst-btn.active { background: var(--accent-tint-low); color: var(--accent-cyan); }
+.con-kpi-basis { font-weight: 500; letter-spacing: 0.4px; opacity: 0.75; text-transform: none; }
+
 /* Status badge colors */
 .prop-status-Draft     { background: rgba(148,163,184,0.1); color: var(--text-dim); border-color: rgba(148,163,184,0.2); }
 .prop-status-Sent      { background: var(--accent-tint-low); color: var(--accent-cyan); border-color: var(--accent-tint-strong); }
@@ -11593,19 +11620,31 @@ window.__msRenderMissingOneDriveLinks = function () {
     <!-- KPI strip (mirrors proposal-kpi-grid pattern from Invoices/Proposals) -->
     <div class="proposal-kpi-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:24px;">
       <div class="proposal-kpi-card">
-        <div class="proposal-kpi-lbl"><i class="fas fa-clock"></i> Pending Total</div>
+        <div class="proposal-kpi-lbl"><i class="fas fa-clock"></i> Pending Total <span class="con-kpi-basis" id="con_pendingBasis"></span></div>
         <div class="proposal-kpi-val" id="con_pendingTotal" style="color:var(--warning);">₹0</div>
         <div class="proposal-kpi-sub" id="con_pendingCount">0 payments</div>
+        <div class="con-gst-toggle">
+          <button type="button" class="con-gst-btn" data-basis="incl" onclick="__msSetConGstBasis('incl')" title="Show the GST-inclusive amount actually paid out">Incl GST</button>
+          <button type="button" class="con-gst-btn" data-basis="excl" onclick="__msSetConGstBasis('excl')" title="Show the pre-GST amount (the consultant fee itself)">Excl GST</button>
+        </div>
       </div>
       <div class="proposal-kpi-card">
-        <div class="proposal-kpi-lbl"><i class="fas fa-check-circle"></i> Paid (MTD)</div>
+        <div class="proposal-kpi-lbl"><i class="fas fa-check-circle"></i> Paid (MTD) <span class="con-kpi-basis" id="con_paidMtdBasis"></span></div>
         <div class="proposal-kpi-val" id="con_paidMtd" style="color:var(--success);">₹0</div>
         <div class="proposal-kpi-sub" id="con_paidMtdCount">0 payments</div>
+        <div class="con-gst-toggle">
+          <button type="button" class="con-gst-btn" data-basis="incl" onclick="__msSetConGstBasis('incl')" title="Show the GST-inclusive amount actually paid out">Incl GST</button>
+          <button type="button" class="con-gst-btn" data-basis="excl" onclick="__msSetConGstBasis('excl')" title="Show the pre-GST amount (the consultant fee itself)">Excl GST</button>
+        </div>
       </div>
       <div class="proposal-kpi-card">
-        <div class="proposal-kpi-lbl"><i class="fas fa-calendar-check"></i> Paid (YTD)</div>
+        <div class="proposal-kpi-lbl"><i class="fas fa-calendar-check"></i> Paid (YTD) <span class="con-kpi-basis" id="con_paidYtdBasis"></span></div>
         <div class="proposal-kpi-val" id="con_paidYtd" style="color:var(--accent-cyan);">₹0</div>
         <div class="proposal-kpi-sub" id="con_paidYtdCount">0 payments</div>
+        <div class="con-gst-toggle">
+          <button type="button" class="con-gst-btn" data-basis="incl" onclick="__msSetConGstBasis('incl')" title="Show the GST-inclusive amount actually paid out">Incl GST</button>
+          <button type="button" class="con-gst-btn" data-basis="excl" onclick="__msSetConGstBasis('excl')" title="Show the pre-GST amount (the consultant fee itself)">Excl GST</button>
+        </div>
       </div>
       <div class="proposal-kpi-card">
         <div class="proposal-kpi-lbl"><i class="fas fa-users"></i> Active Consultants</div>
@@ -43345,6 +43384,48 @@ function getCurrentFYRange() {
 }
 
 // ----- KPI computation -----
+// ===== Phase 8EL — GST basis for the Consultant Payments money cards ========
+// 'incl' (default, and what these cards always showed) = the GST-inclusive
+// amount actually paid out. 'excl' = the stored pre-GST subtotal, i.e. the
+// consultant's fee. Consultant payments carry no TDS or other deduction —
+// total is exactly subtotal + GST — so nothing is inferred by subtraction.
+// One shared state across all three cards: flipping any switch flips them all,
+// so MTD can never be read against a YTD figure on a different basis.
+var CON_GST_BASIS_KEY = 'ms_con_gst_basis_v1';
+var __msConGstBasis = null;   // lazily loaded from localStorage
+
+function __msGetConGstBasis() {
+    if (__msConGstBasis === null) {
+        var saved = '';
+        try { saved = localStorage.getItem(CON_GST_BASIS_KEY) || ''; } catch (e) { saved = ''; }
+        __msConGstBasis = (saved === 'excl') ? 'excl' : 'incl';
+    }
+    return __msConGstBasis;
+}
+
+function __msSetConGstBasis(basis) {
+    __msConGstBasis = (basis === 'excl') ? 'excl' : 'incl';
+    try { localStorage.setItem(CON_GST_BASIS_KEY, __msConGstBasis); } catch (e) {}
+    if (typeof recomputeConsultantKPIs === 'function') recomputeConsultantKPIs();
+}
+
+// Reflect the current basis on every switch and card label. Called from
+// recomputeConsultantKPIs, so every path that renders the register syncs.
+function __msSyncConGstUi() {
+    var basis = __msGetConGstBasis();
+    var btns = document.querySelectorAll('.con-gst-btn');
+    for (var i = 0; i < btns.length; i++) {
+        var on = (btns[i].getAttribute('data-basis') === basis);
+        if (on) btns[i].classList.add('active'); else btns[i].classList.remove('active');
+    }
+    var label = (basis === 'excl') ? '\u00b7 excl. GST' : '\u00b7 incl. GST';
+    var ids = ['con_pendingBasis', 'con_paidMtdBasis', 'con_paidYtdBasis'];
+    for (var j = 0; j < ids.length; j++) {
+        var el = document.getElementById(ids[j]);
+        if (el) el.textContent = label;
+    }
+}
+
 function recomputeConsultantKPIs(filteredPayments) {
     // KPIs are global across ALL payments, not the filtered set (matches the
     // Invoices KPI behaviour: the strip shows totals, the table below shows the
@@ -43359,7 +43440,10 @@ function recomputeConsultantKPIs(filteredPayments) {
     const fy = getCurrentFYRange();
 
     consultantPayments.forEach(p => {
-        const t = parseFloat(p.totalAmount) || 0;
+        // 8EL — 'excl' reads the stored subtotal; 'incl' the GST-inclusive total.
+        const t = (__msGetConGstBasis() === 'excl')
+            ? (parseFloat(p.subtotal) || 0)
+            : (parseFloat(p.totalAmount) || 0);
         if (p.status === 'Pending') {
             pendingTot += t; pendingCnt++;
         } else if (p.status === 'Paid' && p.paidDate) {
@@ -43380,6 +43464,7 @@ function recomputeConsultantKPIs(filteredPayments) {
     setT('con_paidYtd', fmt(paidYtdTot));
     setT('con_paidYtdCount', `${paidYtdCnt} payment${paidYtdCnt === 1 ? '' : 's'}`);
     setT('con_activeCount', String(activeCount));
+    __msSyncConGstUi();
 }
 
 // ----- Filter dropdown population -----
