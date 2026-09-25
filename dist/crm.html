@@ -4956,14 +4956,24 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         'ms_pipeline_view_v1': true,
         'ms_proposals_view_v1': true,
         'ms_schema_meta_v1': true,
-        'ms_migration_4A_state_v1': true,
-        // Phase 8BK — Documents (Templates) module. Routed through the generic
-        // storage_save_setting command (key + value), so it persists to SQLite
-        // and round-trips on boot via storage_load_all with no lib.rs change.
-        'ms_templates_v1': true,
-        // Phase 8BT — Generated Documents (filled template instances assigned to
-        // a client or "Other"). Same settings-routed pattern; no lib.rs change.
-        'ms_generated_docs_v1': true
+        'ms_migration_4A_state_v1': true
+        // Phase 8EM — ms_templates_v1 and ms_generated_docs_v1 used to be listed
+        // here. storage_save_setting (lib.rs) accepts ONLY the seven keys above
+        // and rejected these with "Unknown setting key" on every save — the red
+        // "Save failed" indicator — while storage_load_all never returned them.
+        // They never reached the database. They now travel via APP_MIRROR_KEYS.
+    };
+
+    // Phase 8EM — business-data stores persisted through save_app_setting /
+    // get_app_settings. Those commands accept ANY key prefixed ms_app__ and
+    // write the same app_settings table as everything else, so these stores
+    // are now inside every database backup — with no lib.rs change.
+    // ms_oem_metadata_v1 (per-OEM state code / GSTIN / PAN / address) was
+    // never sent anywhere before this phase.
+    var APP_MIRROR_KEYS = {
+        'ms_templates_v1':      'ms_app__templates_v1',
+        'ms_generated_docs_v1': 'ms_app__generated_docs_v1',
+        'ms_oem_metadata_v1':   'ms_app__oem_metadata_v1'
     };
 
     // ------------------------------------------------------------------------
@@ -4975,6 +4985,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // ------------------------------------------------------------------------
     var pendingByBucket  = {};   // bucket → most recent value (last-write-wins per bucket)
     var pendingSettings  = {};   // setting key → most recent value
+    var pendingMirror    = {};   // 8EM — mirrored store → most recent value (HELD until reconciled)
+    var mirrorVerifiedThisSession = {}; // 8EM — store → true once reconciled against the DB this session
     var debounceTimers   = {};   // bucket → timeout id
     var inflightCount    = 0;    // number of active Rust writes
     var lastErrorByBucket = {};  // bucket → last error string (cleared on success)
@@ -4994,7 +5006,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     function refreshIndicator() {
         var hasErrors = Object.keys(lastErrorByBucket).length > 0;
         var anyPending = Object.keys(pendingByBucket).length > 0
-                      || Object.keys(pendingSettings).length > 0;
+                      || Object.keys(pendingSettings).length > 0
+                      || Object.keys(pendingMirror).length > 0;
         if (hasErrors) {
             var firstErrKey = Object.keys(lastErrorByBucket)[0];
             setIndicator('error', 'Save failed',
@@ -5011,6 +5024,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         if (inflightCount > 0) return;
         if (Object.keys(pendingByBucket).length > 0) return;
         if (Object.keys(pendingSettings).length > 0) return;
+        if (Object.keys(pendingMirror).length > 0) return;
         setIndicator('saved', 'Saved ✓', 'All changes saved to local database');
         if (savedTimeout) clearTimeout(savedTimeout);
         savedTimeout = setTimeout(function () { refreshIndicator(); }, 1800);
@@ -5101,11 +5115,226 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Phase 8EM — mirrored stores: write path, merge, startup reconciliation.
+    // ------------------------------------------------------------------------
+    var MIRROR_VERIFIED_KEY = '__ms_mirror_verified_v1';   // __ms_ keys never reach SQLite
+    var MIRROR_RETRY_DELAYS = [2000, 5000, 15000];
+
+    function mirrorLog(level, msg, data) {
+        try {
+            if (window.__diag && typeof window.__diag.log === 'function') window.__diag.log(level, msg, data || {});
+        } catch (e) { /* never let diag failures break the app */ }
+    }
+
+    // Which stores have EVER been reconciled on this machine. Kept in
+    // localStorage, so if the store is wiped the flag goes with it and the
+    // next launch correctly treats it as a restore.
+    function readMirrorVerified() {
+        try {
+            var o = JSON.parse(window.localStorage.getItem(MIRROR_VERIFIED_KEY) || '{}');
+            return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+        } catch (e) { return {}; }
+    }
+    function markMirrorVerified(lsKey) {
+        var o = readMirrorVerified();
+        o[lsKey] = '1';
+        try { realSet.call(window.localStorage, MIRROR_VERIFIED_KEY, JSON.stringify(o)); } catch (e) {}
+    }
+
+    function mirrorEmpty(v) { return v === undefined || v === null || v === ''; }
+    function mirrorTs(v) {
+        if (typeof v === 'number') return v;
+        var t = Date.parse(v);
+        return isNaN(t) ? 0 : t;
+    }
+
+    // Union of two copies of a store. Used ONLY the first time a machine
+    // reconciles a store and both sides hold different data (e.g. a fresh Mac
+    // whose first check failed while something was created locally). Nothing
+    // is ever dropped: arrays merge by id (newer updatedAt wins, ties keep the
+    // local copy); objects merge by key (local wins). Unparseable side loses.
+    function mergeMirrorValues(lsVal, dbVal) {
+        var a, b;
+        try { a = JSON.parse(lsVal); } catch (e) { return dbVal; }
+        try { b = JSON.parse(dbVal); } catch (e) { return lsVal; }
+        if (Array.isArray(a) && Array.isArray(b)) {
+            var out = a.slice(), byId = {}, seen = {};
+            out.forEach(function (r, i) {
+                if (r && r.id !== undefined) byId[r.id] = i;
+                else seen[JSON.stringify(r)] = true;
+            });
+            b.forEach(function (r) {
+                if (!r || r.id === undefined) {
+                    var sig = JSON.stringify(r);
+                    if (!seen[sig]) { seen[sig] = true; out.push(r); }
+                    return;
+                }
+                if (!(r.id in byId)) { byId[r.id] = out.length; out.push(r); return; }
+                var cur = out[byId[r.id]];
+                if (mirrorTs(r.updatedAt) > mirrorTs(cur && cur.updatedAt)) out[byId[r.id]] = r;
+            });
+            return JSON.stringify(out);
+        }
+        if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+            var o = {};
+            Object.keys(b).forEach(function (k) { o[k] = b[k]; });
+            Object.keys(a).forEach(function (k) { o[k] = a[k]; });
+            return JSON.stringify(o);
+        }
+        return lsVal;
+    }
+
+    async function flushAppMirror(lsKey) {
+        if (!(lsKey in pendingMirror)) return;
+        // HELD until this store has been compared against the database this
+        // session — otherwise a write on a fresh Mac could overwrite the
+        // database copy before it was ever restored.
+        if (!mirrorVerifiedThisSession[lsKey]) return;
+        var value = pendingMirror[lsKey];
+        delete pendingMirror[lsKey];
+        var appKey = APP_MIRROR_KEYS[lsKey];
+        var errKey = 'mirror:' + lsKey;
+        var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!tauri || !tauri.invoke) {
+            lastErrorByBucket[errKey] = 'Tauri runtime unavailable';
+            mirrorLog('CRITICAL', 'flushAppMirror: Tauri runtime unavailable', { key: lsKey });
+            refreshIndicator();
+            return;
+        }
+        mirrorLog('INFO', 'flushAppMirror invoking save_app_setting', {
+            key: lsKey, appKey: appKey, payloadLength: value ? value.length : -1
+        });
+        inflightCount++;
+        refreshIndicator();
+        try {
+            var result = await tauri.invoke('save_app_setting', { key: appKey, value: value });
+            if (result && result.ok) {
+                delete lastErrorByBucket[errKey];
+                mirrorLog('INFO', 'flushAppMirror success', { key: lsKey });
+            } else {
+                lastErrorByBucket[errKey] = (result && result.error) || 'Unknown error';
+                mirrorLog('CRITICAL', 'flushAppMirror: Rust returned not-ok', { key: lsKey, result: result });
+            }
+        } catch (e) {
+            lastErrorByBucket[errKey] = String(e);
+            mirrorLog('CRITICAL', 'flushAppMirror: invoke threw', { key: lsKey, error: String(e) });
+        } finally {
+            inflightCount--;
+            refreshIndicator();
+            flashSaved();
+        }
+    }
+
+    function scheduleMirrorRetry(attempt, why) {
+        var willRetry = attempt < MIRROR_RETRY_DELAYS.length;
+        mirrorLog(willRetry ? 'INFO' : 'CRITICAL', 'App-mirror reconcile ' + (willRetry ? 'will retry' : 'gave up for this session'), {
+            attempt: attempt, reason: why
+        });
+        // A single transient miss at launch shouldn't flash red; surface it
+        // once the first retry has also failed.
+        if (attempt >= 1) {
+            Object.keys(APP_MIRROR_KEYS).forEach(function (k) {
+                if (!mirrorVerifiedThisSession[k]) {
+                    lastErrorByBucket['mirror:' + k] = 'Could not check the database copy (' + why + '). '
+                        + 'Changes are kept in the app' + (willRetry ? ' and will be retried.' : '; restart the app to retry.');
+                }
+            });
+            refreshIndicator();
+        }
+        if (willRetry) setTimeout(function () { reconcileAppMirrors(attempt + 1); }, MIRROR_RETRY_DELAYS[attempt]);
+    }
+
+    async function reconcileAppMirrors(attempt) {
+        attempt = attempt || 0;
+        var tauri = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+        if (!tauri || !tauri.invoke) return scheduleMirrorRetry(attempt, 'Tauri runtime unavailable');
+        var settings;
+        try { settings = await tauri.invoke('get_app_settings'); }
+        catch (e) { return scheduleMirrorRetry(attempt, String(e)); }
+        if (!settings || !settings.ok || !settings.settings) {
+            return scheduleMirrorRetry(attempt, (settings && settings.error) || 'get_app_settings returned no data');
+        }
+        var db = settings.settings;
+        var everVerified = readMirrorVerified();
+        var changedLocal = [], failures = [];
+        var keys = Object.keys(APP_MIRROR_KEYS);
+        for (var i = 0; i < keys.length; i++) {
+            var lsKey = keys[i], appKey = APP_MIRROR_KEYS[lsKey];
+            if (mirrorVerifiedThisSession[lsKey]) continue;       // done on an earlier attempt
+            try {
+                var ls = window.localStorage.getItem(lsKey);
+                var dv = db[appKey];
+                var finalVal = null, action, writeDb = false, writeLs = false;
+                if (mirrorEmpty(ls) && mirrorEmpty(dv))  { action = 'nothing-to-do'; }
+                else if (mirrorEmpty(ls))                { action = 'restored-from-database'; finalVal = dv; writeLs = true; }
+                else if (mirrorEmpty(dv))                { action = 'backfilled-database';    finalVal = ls; writeDb = true; }
+                else if (ls === dv)                      { action = 'in-sync'; }
+                else if (everVerified[lsKey] === '1')    { action = 'refreshed-database';     finalVal = ls; writeDb = true; }
+                else {
+                    action = 'merged';
+                    finalVal = mergeMirrorValues(ls, dv);
+                    writeDb = (finalVal !== dv);
+                    writeLs = (finalVal !== ls);
+                }
+                if (writeDb) {
+                    var r = await tauri.invoke('save_app_setting', { key: appKey, value: finalVal });
+                    if (!r || !r.ok) throw new Error((r && r.error) || 'save_app_setting failed');
+                }
+                if (writeLs) {
+                    // realSet: bypass the interceptor — this value came from (or
+                    // was just written to) the database.
+                    realSet.call(window.localStorage, lsKey, finalVal);
+                    // A restored templates store has held templates before, so
+                    // the four samples must not be re-seeded over it.
+                    if (lsKey === 'ms_templates_v1') {
+                        try { realSet.call(window.localStorage, 'ms_templates_seeded_v1', '1'); } catch (e) {}
+                    }
+                    changedLocal.push(lsKey);
+                }
+                markMirrorVerified(lsKey);
+                mirrorVerifiedThisSession[lsKey] = true;
+                delete lastErrorByBucket['mirror:' + lsKey];
+                mirrorLog('INFO', 'App-mirror reconcile: ' + action, {
+                    key: lsKey, localLength: ls ? ls.length : 0, databaseLength: dv ? dv.length : 0
+                });
+            } catch (e) {
+                failures.push(lsKey);
+                mirrorLog('CRITICAL', 'App-mirror reconcile failed for ' + lsKey, { error: String(e && e.message ? e.message : e) });
+            }
+        }
+        if (changedLocal.length && typeof window.__msAfterAppMirrorRestore === 'function') {
+            try { window.__msAfterAppMirrorRestore(changedLocal); } catch (e) {}
+        }
+        // Release held writes for stores now reconciled. Send the CURRENT local
+        // copy: it already includes any restore/merge written above, plus any
+        // edit made while the check was in flight.
+        keys.forEach(function (k) {
+            if (mirrorVerifiedThisSession[k] && (k in pendingMirror)) {
+                pendingMirror[k] = window.localStorage.getItem(k);
+                flushAppMirror(k);
+            }
+        });
+        if (failures.length) scheduleMirrorRetry(attempt, 'could not update: ' + failures.join(', '));
+        refreshIndicator();
+    }
+
+    // Default templates must not be seeded until the database copy of the
+    // templates store has been checked (see __msMaybeSeedTemplates).
+    window.__msAppMirrorSeedAllowed = function () { return !!mirrorVerifiedThisSession['ms_templates_v1']; };
+
     function scheduleWrite(key, value) {
         if (BUCKET_COMMANDS[key]) {
             pendingByBucket[key] = value;
             if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
             debounceTimers[key] = setTimeout(function () { flushBucket(key); }, DEBOUNCE_MS);
+            refreshIndicator();
+            return true;
+        }
+        if (APP_MIRROR_KEYS[key]) {
+            pendingMirror[key] = value;
+            if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
+            debounceTimers[key] = setTimeout(function () { flushAppMirror(key); }, DEBOUNCE_MS);
             refreshIndicator();
             return true;
         }
@@ -5184,6 +5413,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     //
     // The CRM's other buckets are small (kilobytes) and still use the
     // localStorage interceptor route — that path is unchanged.
+    // Phase 8EM — compare the mirrored stores against the database now.
+    // The interceptor above is installed, so writes made from here on are
+    // routed (and held) correctly.
+    reconcileAppMirrors(0);
+
     window.__msScheduleBucketWriteDirect = function (key, value) {
         try {
             return scheduleWrite(key, value);
@@ -5210,6 +5444,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     window.addEventListener('beforeunload', function () {
         Object.keys(pendingByBucket).forEach(function (b) { flushBucket(b); });
         Object.keys(pendingSettings).forEach(function (k) { flushSetting(k); });
+        Object.keys(pendingMirror).forEach(function (k) { flushAppMirror(k); });   // 8EM — held writes stay held
         try {
             var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
             if (t && t.invoke) { t.invoke('generate_snapshot', { force: false }); }
@@ -47435,6 +47670,19 @@ function __msPersistGenDocs() {
     try { localStorage.setItem(MS_GENDOCS_KEY, JSON.stringify(__msGenDocs || [])); }
     catch (e) { console.warn('gendocs persist:', e); }
 }
+
+// Phase 8EM — called by the Mac-app sync module after it restored or merged a
+// mirrored store into localStorage, so the in-memory copies re-read it.
+// Templates and generated docs are lazy caches (null = re-read on next use);
+// OEM details are loaded eagerly at boot, so they are re-initialised.
+window.__msAfterAppMirrorRestore = function (keys) {
+    keys = Array.isArray(keys) ? keys : [];
+    if (keys.indexOf('ms_templates_v1') !== -1)      { try { __msTemplates = null; } catch (e) {} }
+    if (keys.indexOf('ms_generated_docs_v1') !== -1) { try { __msGenDocs = null; } catch (e) {} }
+    if (keys.indexOf('ms_oem_metadata_v1') !== -1 && typeof initOemMetadata === 'function') {
+        try { initOemMetadata(); } catch (e) {}
+    }
+};
 function __msGenDocId() {
     return 'gdoc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
@@ -49930,6 +50178,11 @@ function renderTemplateLibrary() {
 // store that has never held templates. A sentinel flag prevents re-seeding
 // after the user deletes them all (so deletions stick).
 function __msMaybeSeedTemplates() {
+    // Phase 8EM — on a fresh Mac the store is empty until the database copy is
+    // restored. Seeding first would put four samples in local storage that the
+    // reconciliation could then mistake for real data. Not seeding now is
+    // harmless: this runs every time Documents opens.
+    if (typeof window.__msAppMirrorSeedAllowed === 'function' && !window.__msAppMirrorSeedAllowed()) return;
     var list = __msLoadTemplates();
     var seeded = false;
     try { seeded = localStorage.getItem('ms_templates_seeded_v1') === '1'; } catch (e) {}
