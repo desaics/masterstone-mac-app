@@ -8490,6 +8490,17 @@ window.__msRenderMissingOneDriveLinks = function () {
                 </div>
                 <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
             </div>
+            <div>
+                <label>Banking Signature Image (optional)</label>
+                <div class="cp-signature-preview" id="cp_bankSignaturePreview">
+                    <span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">No banking signature uploaded</span>
+                </div>
+                <div class="cp-file-input-row">
+                    <input type="file" id="cp_bankSignatureFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleBankSignatureUpload(this)">
+                    <button class="btn btn-ghost btn-sm" onclick="cpClearBankSignature()" id="cp_clearBankSignatureBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
+                </div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Your specimen signature as registered with the bank. Choose it per document in proposals, POs, invoices and Documents.</div>
+            </div>
         </div>
 
         <!-- Letterhead (Phase 2 T3.1) -->
@@ -10507,9 +10518,10 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div class="prospect-form-grid-2" style="margin-top:14px;">
       <div>
         <label>Signature Display</label>
-        <select id="proposalShowSignature">
-          <option value="true">Show on PDF (default)</option>
-          <option value="false">Hide on PDF</option>
+        <select id="proposalShowSignature" onchange="__msSigChoiceHint(this)">
+          <option value="true">Authorised signature (default)</option>
+          <option value="banking">Banking signature</option>
+          <option value="false">No signature</option>
         </select>
       </div>
       <div></div>
@@ -10943,9 +10955,10 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div class="prospect-form-grid-2" style="margin-top:14px;">
       <div>
         <label>Signature Display</label>
-        <select id="poShowSignature">
-          <option value="true">Show on PDF (default)</option>
-          <option value="false">Hide on PDF</option>
+        <select id="poShowSignature" onchange="__msSigChoiceHint(this)">
+          <option value="true">Authorised signature (default)</option>
+          <option value="banking">Banking signature</option>
+          <option value="false">No signature</option>
         </select>
       </div>
       <div></div>
@@ -11658,6 +11671,14 @@ window.__msRenderMissingOneDriveLinks = function () {
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:6px; cursor:pointer;">
             <input type="checkbox" id="tplIncludeSignature" checked onchange="__msUpdateFillPreview()"> Include signature
           </label>
+          <!-- Phase 8EN — which signature; remembered on the template (8EB pattern) -->
+          <div style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin:-2px 0 8px 24px;">
+            <span style="color:var(--text-dim);">Which:</span>
+            <select id="tplSignatureChoice" onchange="__msOnSignatureChoiceChange()" style="padding:3px 6px; font-size:12px;" title="Remembered for this template — its next document opens the same way">
+              <option value="authorised">Authorised signature</option>
+              <option value="banking">Banking signature</option>
+            </select>
+          </div>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
             <input type="checkbox" id="tplIncludeStamp" checked onchange="__msUpdateFillPreview()"> Include stamp
           </label>
@@ -12509,9 +12530,10 @@ window.__msRenderMissingOneDriveLinks = function () {
       </div>
       <div>
         <label>Signature Display</label>
-        <select id="invShowSignature">
-          <option value="true">Show on PDF (default)</option>
-          <option value="false">Hide on PDF</option>
+        <select id="invShowSignature" onchange="__msSigChoiceHint(this)">
+          <option value="true">Authorised signature (default)</option>
+          <option value="banking">Banking signature</option>
+          <option value="false">No signature</option>
         </select>
       </div>
     </div>
@@ -14439,7 +14461,7 @@ function initCompanyProfile() {
         addressLine1: '', addressLine2: '', city: '', state: '', pincode: '', country: 'India',
         phone: '', email: '', website: '',
         bankName: '', bankBranch: '', bankAccountNumber: '', bankIFSC: '', bankAccountHolder: '',
-        signatoryName: '', signatoryDesignation: '', signatureImageDataUrl: '', stampImageDataUrl: '',
+        signatoryName: '', signatoryDesignation: '', signatureImageDataUrl: '', stampImageDataUrl: '', bankSignatureImageDataUrl: '', // 8EN
         proposalPrefix: 'MS-PROP-', proposalNextNumber: 1001,
         poPrefix: 'MS-PO-', poNextNumber: 1001,
         invoicePrefix: 'MS-INV-', invoiceNextNumber: 1001,
@@ -14994,6 +15016,54 @@ function composeEmailOpenMail() {
         return;
     }
     _invReminderMailFallback(mailto);
+}
+
+// ===== Phase 8EN — which signature a document carries ======================
+// A record's choice lives in two fields: signatureShown (existing, false =
+// no signature) and signatureChoice ('authorised' | 'banking', new). Records
+// saved before 8EN have no signatureChoice and mean "authorised", so they
+// print exactly as before.
+
+// The image a document prints. Banking chosen but not uploaded returns '' so
+// every PDF falls back to its own blank signing line — never silently to the
+// authorised signature: a bank checks against its specimen on file.
+function __msSigUrl(cp, rec) {
+    cp = cp || {};
+    if (rec && rec.signatureChoice === 'banking') return cp.bankSignatureImageDataUrl || '';
+    return cp.signatureImageDataUrl || '';
+}
+
+// Record -> the three-way select ('true' authorised · 'banking' · 'false' none).
+// 'true' keeps its old meaning, so every older reader of the value still works.
+function __msSigSelectValue(rec) {
+    if (!rec || rec.signatureShown === false) return 'false';
+    return (rec.signatureChoice === 'banking') ? 'banking' : 'true';
+}
+
+// Select -> record. (The pre-8EN save compared the value to 'true', which
+// would have HIDDEN the signature for 'banking' — replaced at every save.)
+function __msApplySigSelect(rec, v) {
+    rec.signatureShown = (v !== 'false');
+    rec.signatureChoice = (v === 'banking') ? 'banking' : 'authorised';
+}
+
+// Inline warning under a signature select when Banking is chosen but no
+// banking signature has been uploaded yet.
+function __msSigChoiceHint(sel) {
+    if (!sel || !sel.parentNode) return;
+    var hint = sel.parentNode.querySelector('.ms-sig-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'ms-sig-hint';
+        hint.style.cssText = 'font-size:11px; color:var(--warning); margin-top:4px; line-height:1.4;';
+        sel.parentNode.appendChild(hint);
+    }
+    var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
+    var msg = (sel.value === 'banking' && !cp.bankSignatureImageDataUrl)
+        ? 'No banking signature uploaded yet \u2014 the PDF will show a blank signing line. Add one in System Controls \u2192 Branding.'
+        : '';
+    hint.textContent = msg;
+    hint.style.display = msg ? '' : 'none';
 }
 
 function saveCompanyProfile() {
@@ -17717,6 +17787,7 @@ function cpLoadForm() {
     cpRenderLogoPreview();
     cpRenderSignaturePreview();
     cpRenderStampPreview();
+    cpRenderBankSignaturePreview(); // 8EN
     cpRenderLetterheadPreview();
     cpRenderStatusBanner();
     cpIsDirty = false;
@@ -18008,6 +18079,50 @@ function cpRenderStampPreview() {
         if (clearBtn) clearBtn.style.display = 'inline-flex';
     } else {
         preview.innerHTML = '<span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">No stamp uploaded</span>';
+        if (clearBtn) clearBtn.style.display = 'none';
+    }
+}
+
+// Phase 8EN — Banking signature (the specimen registered with the bank).
+// Stored on companyProfile.bankSignatureImageDataUrl. Like the stamp it stays
+// inline in the profile JSON (the backend only externalises logo, letterhead
+// and authorised signature) and round-trips through the profile's raw_data.
+function cpHandleBankSignatureUpload(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (file.size > 150 * 1024) {
+        alert("Banking signature file is too large (" + Math.round(file.size / 1024) + " KB). Please use an image under 150 KB.");
+        input.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        companyProfile.bankSignatureImageDataUrl = e.target.result;
+        cpRenderBankSignaturePreview();
+        cpMarkDirty();
+    };
+    reader.onerror = () => { alert("Unable to read banking signature file."); };
+    reader.readAsDataURL(file);
+}
+
+function cpClearBankSignature() {
+    if (!confirm("Remove the banking signature image?")) return;
+    companyProfile.bankSignatureImageDataUrl = '';
+    const fileEl = document.getElementById('cp_bankSignatureFile');
+    if (fileEl) fileEl.value = '';
+    cpRenderBankSignaturePreview();
+    cpMarkDirty();
+}
+
+function cpRenderBankSignaturePreview() {
+    const preview = document.getElementById('cp_bankSignaturePreview');
+    const clearBtn = document.getElementById('cp_clearBankSignatureBtn');
+    if (!preview) return;
+    if (companyProfile.bankSignatureImageDataUrl) {
+        preview.innerHTML = `<img src="${companyProfile.bankSignatureImageDataUrl}" alt="Banking signature">`;
+        if (clearBtn) clearBtn.style.display = 'inline-flex';
+    } else {
+        preview.innerHTML = '<span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">No banking signature uploaded</span>';
         if (clearBtn) clearBtn.style.display = 'none';
     }
 }
@@ -26363,7 +26478,7 @@ function openProposalForm(id) {
         val('proposalStatus', p.status);
         val('proposalTerms', p.terms);
         val('proposalNotes', p.notes);
-        val('proposalShowSignature', p.signatureShown === false ? 'false' : 'true');
+        val('proposalShowSignature', __msSigSelectValue(p)); __msSigChoiceHint(document.getElementById('proposalShowSignature')); // 8EN
         // Phase 8O — hydrate PDF Display toggles. Default false on legacy
         // proposals that pre-date this field (matches PO 8K behaviour).
         try {
@@ -26434,7 +26549,7 @@ function openProposalForm(id) {
         val('proposalStatus', 'Draft');
         val('proposalTerms', (companyProfile && companyProfile.defaultProposalTerms) || '');
         val('proposalNotes', '');
-        val('proposalShowSignature', 'true');
+        val('proposalShowSignature', 'true'); __msSigChoiceHint(document.getElementById('proposalShowSignature')); // 8EN
         // Phase 8O — PDF Display toggles default OFF on new proposal.
         try {
             var _pdEl = document.getElementById('proposalShowDiscountOnPdf');
@@ -27551,7 +27666,7 @@ function saveProposalFromForm() {
     rec.status = document.getElementById('proposalStatus').value;
     rec.terms = document.getElementById('proposalTerms').value;
     rec.notes = document.getElementById('proposalNotes').value;
-    rec.signatureShown = document.getElementById('proposalShowSignature').value === 'true';
+    __msApplySigSelect(rec, document.getElementById('proposalShowSignature').value); // 8EN — shown + which
     // Phase 8O — PDF Display toggles (mirror of PO 8K). Both default false
     // when unchecked. The Default + Letterhead PDF builders gate the
     // Discount/GST line-item columns AND the GST breakdown rows on these.
@@ -28856,8 +28971,8 @@ function buildServiceProposalPDFHTMLWithLetterhead(proposal) {
             </div>
         </div>`;
 
-    const signatureHtml = (proposal.signatureShown === false) ? '' : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:55px; max-width:170px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (proposal.signatureShown === false) ? '' : (__msSigUrl(cp, proposal)
+        ? `<img src="${__msSigUrl(cp, proposal)}" alt="Signature" style="max-height:55px; max-width:170px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:55px; border-bottom:1px solid ${COL_BODY}; width:170px; margin-bottom:4px;"></div>`);
 
     // Phase 8S — JS-based pagination with per-page letterhead.
@@ -29203,8 +29318,8 @@ function buildServiceProposalPDFHTMLNoLetterhead(proposal) {
         : `<div style="font-size:24px; font-weight:700; color:var(--accent-blue);">${safe(cp.tradingName || cp.legalName || 'Your Company')}</div>`;
 
     // Signature block (respect proposal.signatureShown like the subscription builder)
-    const signatureHtml = (proposal.signatureShown === false) ? '' : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (proposal.signatureShown === false) ? '' : (__msSigUrl(cp, proposal)
+        ? `<img src="${__msSigUrl(cp, proposal)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Company address block (used in header right column)
@@ -29346,8 +29461,8 @@ function buildProposalPDFHTMLDefault(proposal) {
         : `<div style="font-size:24px; font-weight:700; color:var(--accent-blue);">${safe(cp.tradingName || cp.legalName || 'Your Company')}</div>`;
 
     // Signature block
-    const signatureHtml = (proposal.signatureShown === false) ? "" : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (proposal.signatureShown === false) ? "" : (__msSigUrl(cp, proposal)
+        ? `<img src="${__msSigUrl(cp, proposal)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Phase 8O — PDF Display toggles. Both default false (clean PDF) — same
@@ -29665,8 +29780,8 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
     const _liColspan = 5 + (_showDisc ? 1 : 0) + (_showGst ? 1 : 0) + (_isMultiYear ? 1 : 0); // 8EE
 
     // Signature
-    const signatureHtml = (proposal.signatureShown === false) ? "" : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (proposal.signatureShown === false) ? "" : (__msSigUrl(cp, proposal)
+        ? `<img src="${__msSigUrl(cp, proposal)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Page dimensions: A4 portrait at 96 DPI → 794 × 1123 px (used as visual CSS size).
@@ -30649,7 +30764,7 @@ function openPOForm(id) {
         val('poDeliveryTerms', po.deliveryTerms);
         val('poTerms', po.terms);
         val('poNotes', po.notes);
-        val('poShowSignature', po.signatureShown === false ? 'false' : 'true');
+        val('poShowSignature', __msSigSelectValue(po)); __msSigChoiceHint(document.getElementById('poShowSignature')); // 8EN
         // Phase 8G — bank-on-PDF toggle
         const __bankChk = document.getElementById('poShowOemBankOnPdf');
         if (__bankChk) __bankChk.checked = !!po.showOemBankOnPdf;
@@ -30699,7 +30814,7 @@ function openPOForm(id) {
         val('poDeliveryTerms', '');
         val('poTerms', (companyProfile && companyProfile.defaultPOTerms) || '');
         val('poNotes', '');
-        val('poShowSignature', 'true');
+        val('poShowSignature', 'true'); __msSigChoiceHint(document.getElementById('poShowSignature')); // 8EN
         // Phase 8G — bank-on-PDF toggle defaults off for new POs
         const __bankChkNew = document.getElementById('poShowOemBankOnPdf');
         if (__bankChkNew) __bankChkNew.checked = false;
@@ -31191,7 +31306,7 @@ function savePOFromForm() {
     rec.deliveryTerms = document.getElementById('poDeliveryTerms').value;
     rec.terms = document.getElementById('poTerms').value;
     rec.notes = document.getElementById('poNotes').value;
-    rec.signatureShown = document.getElementById('poShowSignature').value === 'true';
+    __msApplySigSelect(rec, document.getElementById('poShowSignature').value); // 8EN — shown + which
     // Phase 8G — bank-on-PDF toggle (per-PO)
     rec.showOemBankOnPdf = !!(document.getElementById('poShowOemBankOnPdf') || {}).checked;
     // Phase 8K — PDF display toggles + Instructions to Vendor
@@ -31870,8 +31985,8 @@ function buildPOPDFHTMLDefault(po) {
         ? `<img src="${cp.logoDataUrl}" alt="Logo" style="max-height:70px; max-width:200px; object-fit:contain;">`
         : `<div style="font-size:24px; font-weight:700; color:var(--accent-blue);">${safe(cp.tradingName || cp.legalName || 'Your Company')}</div>`;
 
-    const signatureHtml = (po.signatureShown === false) ? "" : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (po.signatureShown === false) ? "" : (__msSigUrl(cp, po)
+        ? `<img src="${__msSigUrl(cp, po)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Phase 8K — display-toggle flags read once and reused below.
@@ -32134,8 +32249,8 @@ function buildPOPDFHTMLWithLetterhead(po) {
         }
     }
 
-    const signatureHtml = (po.signatureShown === false) ? "" : (cp.signatureImageDataUrl
-        ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+    const signatureHtml = (po.signatureShown === false) ? "" : (__msSigUrl(cp, po)
+        ? `<img src="${__msSigUrl(cp, po)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
         : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Bug fix #34 — pdf-content is fixed at A4 (794×1123) with overflow:hidden, plus
@@ -33334,7 +33449,7 @@ function openInvoiceForm(id) {
         val('invStatus', inv.status);
         val('invPaymentTerms', inv.paymentTerms);
         val('invShowBankDetails', inv.bankDetailsShown ? 'true' : 'false');
-        val('invShowSignature', inv.signatureShown === false ? 'false' : 'true');
+        val('invShowSignature', __msSigSelectValue(inv)); __msSigChoiceHint(document.getElementById('invShowSignature')); // 8EN
         // Bug fix #21 — Item 1: load Rate / Discount % column checkbox states.
         // Existing invoices without these fields default to unchecked (hidden).
         const _cbInvRate = document.getElementById('invShowRate');
@@ -33401,7 +33516,7 @@ function openInvoiceForm(id) {
         val('invStatus', 'Draft');
         val('invPaymentTerms', blank.paymentTerms);
         val('invShowBankDetails', 'true');
-        val('invShowSignature', 'true');
+        val('invShowSignature', 'true'); __msSigChoiceHint(document.getElementById('invShowSignature')); // 8EN
         // Bug fix #21 — Item 1: new invoices default to UNCHECKED for both Rate and Discount % columns.
         const _cbInvRateNew = document.getElementById('invShowRate');
         if (_cbInvRateNew) _cbInvRateNew.checked = false;
@@ -34202,7 +34317,7 @@ function saveInvoiceFromForm() {
     if (rec.status === 'Paid' && !rec.paidAt) rec.paidAt = now;
     rec.paymentTerms = document.getElementById('invPaymentTerms').value;
     rec.bankDetailsShown = document.getElementById('invShowBankDetails').value === 'true';
-    rec.signatureShown   = document.getElementById('invShowSignature').value === 'true';
+    __msApplySigSelect(rec, document.getElementById('invShowSignature').value); // 8EN — shown + which
     // Bug fix #21 — Item 1: persist Rate / Discount % column visibility.
     const _cbInvRateSave = document.getElementById('invShowRate');
     rec.showRateOnPdf = _cbInvRateSave ? !!_cbInvRateSave.checked : false;
@@ -35080,8 +35195,8 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
     // sign in the space. Previously this returned "" and the section collapsed.
     const signatureHtml = (inv.signatureShown === false)
         ? `<div style="height:60px; width:180px; margin-bottom:4px;" aria-hidden="true"></div>`
-        : (cp.signatureImageDataUrl
-            ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+        : (__msSigUrl(cp, inv)
+            ? `<img src="${__msSigUrl(cp, inv)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
             : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Bug fix #21 — Item 1: per-invoice Rate / Discount % column visibility.
@@ -35373,8 +35488,8 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
     // so the user can paste a different digital signature, or print and physically sign.
     const signatureHtml = (inv.signatureShown === false)
         ? `<div style="height:60px; width:180px; margin-bottom:4px;" aria-hidden="true"></div>`
-        : (cp.signatureImageDataUrl
-            ? `<img src="${cp.signatureImageDataUrl}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
+        : (__msSigUrl(cp, inv)
+            ? `<img src="${__msSigUrl(cp, inv)}" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; margin-bottom:4px;">`
             : `<div style="height:60px; border-bottom:1px solid var(--text-main); width:180px; margin-bottom:4px;"></div>`);
 
     // Bug fix #21 — Item 1: per-invoice Rate / Discount % column visibility (letterhead variant).
@@ -47928,6 +48043,11 @@ function __msApplyGenDocRecordToFill(d, t) {
     if (sigEl) sigEl.checked = (d.includeSignature !== false);
     var stampEl = document.getElementById('tplIncludeStamp');
     if (stampEl) stampEl.checked = (d.includeStamp !== false);
+    // 8EN — the document's own choice. Documents saved before 8EN recorded none
+    // and printed the authorised signature, so they keep it rather than picking
+    // up a template default set later.
+    __msFillValues.__sigChoice = (__msFillValues.__sigChoice === 'banking') ? 'banking' : 'authorised';
+    var __scEl = document.getElementById('tplSignatureChoice'); if (__scEl) __scEl.value = __msFillValues.__sigChoice;
     // Track assignment. A client removed from the Client Master since the
     // draft was made falls back to "Other" carrying the old name in the note.
     var chk = document.getElementById('tplTrackDoc');
@@ -49122,15 +49242,29 @@ function __msBlankSignatureBlockHtml(previewMode) {
     '</div>';
 }
 
-function __msSignatureBlockHtml(includeSig, includeStamp) {
+function __msSignatureBlockHtml(includeSig, includeStamp, sigChoice) {
     var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
-    var hasSig = includeSig && !!cp.signatureImageDataUrl;
+    // Phase 8EN — which signature. 'banking' -> the banking signature;
+    // anything else (incl. documents saved before 8EN) -> the authorised one,
+    // producing exactly the output it always did.
+    var sigUrl = (sigChoice === 'banking') ? (cp.bankSignatureImageDataUrl || '') : (cp.signatureImageDataUrl || '');
+    var hasSig = includeSig && !!sigUrl;
+    // Banking chosen but not uploaded: a visible blank signing space above the
+    // signatory line — never the authorised signature in its place.
+    var bankMissing = includeSig && sigChoice === 'banking' && !sigUrl;
     var hasStamp = includeStamp && !!cp.stampImageDataUrl;
-    if (!hasSig && !hasStamp) return '';
+    if (!hasSig && !hasStamp && !bankMissing) return '';
     var sigCol = '';
     if (hasSig) {
         sigCol =
-            '<img src="' + cp.signatureImageDataUrl + '" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; display:block; margin-bottom:4px;">' +
+            '<img src="' + sigUrl + '" alt="Signature" style="max-height:60px; max-width:180px; object-fit:contain; display:block; margin-bottom:4px;">' +
+            '<div style="border-top:1px solid #1a1a1a; width:180px; padding-top:3px; font-size:12px; color:#1a1a1a;">' +
+                (cp.signatoryName ? __msEscHtml(cp.signatoryName) : '') +
+                (cp.signatoryDesignation ? '<div style="font-size:11px; color:#555;">' + __msEscHtml(cp.signatoryDesignation) + '</div>' : '') +
+            '</div>';
+    } else if (bankMissing) {
+        sigCol =
+            '<div style="height:60px; width:180px; margin-bottom:4px;"></div>' +
             '<div style="border-top:1px solid #1a1a1a; width:180px; padding-top:3px; font-size:12px; color:#1a1a1a;">' +
                 (cp.signatoryName ? __msEscHtml(cp.signatoryName) : '') +
                 (cp.signatoryDesignation ? '<div style="font-size:11px; color:#555;">' + __msEscHtml(cp.signatoryDesignation) + '</div>' : '') +
@@ -49344,7 +49478,7 @@ function __msRenderHtmlFullDoc(html, values, previewMode, includeSig, includeSta
         var bp = body.split(blankRe);
         out = bp[0] + __msBlankSignatureBlockHtml(previewMode) + bp.slice(1).join('');
     } else {
-        var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+        var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp, values && values.__sigChoice);
         if (markerRe.test(body)) {
             var p = body.split(markerRe);
             out = p[0] + sigBlock + p.slice(1).join('');
@@ -49368,7 +49502,7 @@ function __msRenderHtmlChunks(html, values, includeSig, includeStamp) {
         chunks.push(__msBlankSignatureBlockHtml(false));
         return chunks.concat(__msHtmlToChunks(bp.slice(1).join('')));
     }
-    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp, values && values.__sigChoice);
     if (markerRe.test(body)) {
         var p = body.split(markerRe);
         var out = __msHtmlToChunks(p[0]);
@@ -49462,7 +49596,7 @@ function __msRenderFullDoc(body, values, previewMode, includeSig, includeStamp) 
         var bAfter = __msRenderDocHtml(bparts.slice(1).join(''), values, previewMode);
         return bBefore + __msBlankSignatureBlockHtml(previewMode) + bAfter;
     }
-    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp, values && values.__sigChoice);
     var markerRe = /\{\{\s*signature\s*\}\}/i;
     if (markerRe.test(bodyStr)) {
         var parts = bodyStr.split(markerRe);
@@ -49486,7 +49620,7 @@ function __msRenderFullDocChunks(body, values, includeSig, includeStamp) {
         chunks = chunks.concat(__msRenderDocBlocks(bparts.slice(1).join(''), values, false));
         return chunks;
     }
-    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp);
+    var sigBlock = __msSignatureBlockHtml(includeSig, includeStamp, values && values.__sigChoice);
     var markerRe = /\{\{\s*signature\s*\}\}/i;
     if (markerRe.test(bodyStr)) {
         var parts = bodyStr.split(markerRe);
@@ -49523,6 +49657,10 @@ function openTemplateFill(id) {
     var __xn = document.getElementById('tplExtraName'); if (__xn) __xn.value = '';
     var __xh = document.getElementById('tplSaveNameHint'); if (__xh) __xh.textContent = '';
     var __ch = document.getElementById('tplIncludeCompanyHeader'); if (__ch) __ch.checked = !!t.includeCompanyHeader; // 8EB
+    // 8EN — a fresh document starts with the signature this template last used.
+    var __scv = (t.signatureChoice === 'banking') ? 'banking' : 'authorised';
+    var __sc = document.getElementById('tplSignatureChoice'); if (__sc) __sc.value = __scv;
+    __msFillValues.__sigChoice = __scv;
     __msBuildFillForm(t);
     if (typeof __msPopulateTrackClientDropdown === 'function') __msPopulateTrackClientDropdown();
     if (typeof __msResetTrackControls === 'function') __msResetTrackControls();
@@ -49707,7 +49845,13 @@ function __msUpdateSigStampHint() {
     var sigEl = document.getElementById('tplIncludeSignature');
     var stampEl = document.getElementById('tplIncludeStamp');
     var msgs = [];
-    if (sigEl && sigEl.checked && !cp.signatureImageDataUrl) msgs.push('No signature image uploaded — add one in System Controls.');
+    // 8EN — warn for whichever signature this document will carry.
+    var __scHint = document.getElementById('tplSignatureChoice');
+    var __wantBank = !!(__scHint && __scHint.value === 'banking');
+    if (sigEl && sigEl.checked) {
+        if (__wantBank && !cp.bankSignatureImageDataUrl) msgs.push('No banking signature uploaded \u2014 the document will show a blank signing space. Add one in System Controls \u2192 Branding.');
+        else if (!__wantBank && !cp.signatureImageDataUrl) msgs.push('No signature image uploaded — add one in System Controls.');
+    }
     if (stampEl && stampEl.checked && !cp.stampImageDataUrl) msgs.push('No stamp image uploaded — add one in System Controls.');
     // 8EB — warn when company details are requested but the profile is empty.
     var chEl = document.getElementById('tplIncludeCompanyHeader');
@@ -49720,6 +49864,20 @@ function __msUpdateSigStampHint() {
 
 // 8EB — the company-details choice is remembered on the template itself, so
 // each template keeps its own setting (salary slip: tick once, done forever).
+// Phase 8EN — the Fill screen's signature choice. Applies to this document
+// (stored in its values, so it's saved and reprinted with it) and, exactly
+// like 8EB's company-details setting, is remembered on the template so its
+// next document opens the same way.
+function __msOnSignatureChoiceChange() {
+    var sc = document.getElementById('tplSignatureChoice');
+    var v = (sc && sc.value === 'banking') ? 'banking' : 'authorised';
+    __msFillValues.__sigChoice = v;
+    var list = __msLoadTemplates();
+    var t = list.find(function (x) { return x.id === __msFillTemplateId; });
+    if (t && t.signatureChoice !== v) { t.signatureChoice = v; t.updatedAt = Date.now(); __msPersistTemplates(); }
+    __msUpdateFillPreview();
+}
+
 function __msOnCompanyHeaderToggle() {
     var cb = document.getElementById('tplIncludeCompanyHeader');
     var list = __msLoadTemplates();
