@@ -4878,6 +4878,87 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
 (function macAppShim() {
     if (window.localStorage.getItem('__ms_mac_app_mode__') !== '1') return;
 
+    // ------------------------------------------------------------------------
+    // Phase 8EO — log to the Diag panel even before it exists. This module runs
+    // in script block 3; window.__diag is created in script block 4, tens of
+    // thousands of lines later. Until then entries are queued here and the
+    // Diag module replays them (tagged with their original time) on load.
+    // ------------------------------------------------------------------------
+    window.__msEarlyDiag = function (level, msg, data) {
+        try {
+            if (window.__diag && typeof window.__diag.log === 'function') { window.__diag.log(level, msg, data || {}); return; }
+            var d = new Date();
+            var at = d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+            (window.__diagEarly = window.__diagEarly || []).push([level, msg, data || {}, at]);
+        } catch (e) { /* never let diag failures break the app */ }
+    };
+
+    // ------------------------------------------------------------------------
+    // Phase 8EO — startup storage check. Runs before anything else reads data.
+    //
+    // Browser storage is small. index.html copies each dataset from the
+    // database into it at every launch; when one doesn't fit, it's skipped and
+    // recorded in __ms_boot_skipped_buckets__ — and the OLD copy stays in place.
+    // Before 8EO nothing read that record, so the app silently showed stale
+    // data, and saving it would overwrite the database's correct copy.
+    // ------------------------------------------------------------------------
+    var staleBuckets = {};        // datasets loaded stale this launch -> DB writes paused
+    var __msRebooting = false;    // true while re-running the launch
+    (function bootStorageCheck() {
+        try {
+            // 0. If the previous pass re-ran this launch, report it here — its
+            //    own log entries were lost with the page it replaced.
+            try {
+                var info = JSON.parse(window.localStorage.getItem('__ms_quota_reboot_info') || 'null');
+                if (info) {
+                    window.localStorage.removeItem('__ms_quota_reboot_info');
+                    if (info.at && (Date.now() - info.at) < 120000) {
+                        window.__msEarlyDiag('INFO', 'Launch was re-run to load fresh data after freeing app storage', info);
+                    }
+                }
+            } catch (e) {}
+            // 1. Free the stale attachments warm-cache. In the Mac app,
+            //    attachments save straight to the database (8AW) and load from it
+            //    ~0.75 s after launch; this copy is never updated and only wastes
+            //    space (it was 1.38 MB holding 3 of 41 records).
+            var freed = 0;
+            var stale = window.localStorage.getItem('ms_attachments_v1');
+            if (stale !== null) {
+                freed = stale.length;
+                window.localStorage.removeItem('ms_attachments_v1');
+                window.__msEarlyDiag('INFO', 'Freed stale attachments copy from app storage (attachments load from the database)', { chars: freed });
+            }
+            // 2. Did the launch have to skip any dataset for lack of space?
+            //    Only trust a record written by THIS launch.
+            var rec = null;
+            try { rec = JSON.parse(window.localStorage.getItem('__ms_boot_skipped_buckets__') || 'null'); } catch (e) { rec = null; }
+            var fresh = !!(rec && rec.at && (Date.now() - Date.parse(rec.at)) < 120000);
+            var skipped = (fresh && Array.isArray(rec.byQuota))
+                ? rec.byQuota.map(function (x) { return x && x.key; }).filter(Boolean) : [];
+            if (!skipped.length) return;
+            // 3. Space freed and no retry in the last minute -> run the launch
+            //    again once, so index.html copies every dataset fresh.
+            var last = parseInt(window.localStorage.getItem('__ms_quota_reboot_at') || '0', 10) || 0;
+            if (freed > 0 && (Date.now() - last) > 60000) {
+                window.localStorage.setItem('__ms_quota_reboot_at', String(Date.now()));
+                window.localStorage.setItem('__ms_quota_reboot_info', JSON.stringify({ at: Date.now(), freedChars: freed, reloaded: skipped }));
+                window.__msEarlyDiag('CRITICAL', 'Launch could not load the latest ' + skipped.join(', ')
+                    + ' (app storage full). Space freed — re-running the launch once to load it fresh from the database.',
+                    { skipped: skipped, freedChars: freed });
+                __msRebooting = true;
+                window.location.replace('index.html');
+                return;
+            }
+            // 4. Can't recover this launch: never let a stale copy overwrite the
+            //    database. Saving these datasets is paused for this session.
+            skipped.forEach(function (k) { staleBuckets[k] = true; });
+            window.__msEarlyDiag('CRITICAL', 'Stale local copy in use for ' + skipped.join(', ')
+                + ' — saving it to the database is PAUSED this session to protect the database copy.', { skipped: skipped });
+        } catch (e) {
+            window.__msEarlyDiag('CRITICAL', 'Startup storage check failed', { error: String(e && e.message ? e.message : e) });
+        }
+    })();
+
     // tauri-runtime — applied immediately, never removed. Used by the WebKit
     // layout-fix CSS (Bug fix #44). Persists across banner-state changes.
     if (document.body) document.body.classList.add('tauri-runtime');
@@ -5122,9 +5203,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     var MIRROR_RETRY_DELAYS = [2000, 5000, 15000];
 
     function mirrorLog(level, msg, data) {
-        try {
-            if (window.__diag && typeof window.__diag.log === 'function') window.__diag.log(level, msg, data || {});
-        } catch (e) { /* never let diag failures break the app */ }
+        // 8EO — via the early queue: the startup check usually finishes before
+        // the Diag panel exists, and these entries used to be dropped.
+        window.__msEarlyDiag(level, msg, data || {});
     }
 
     // Which stores have EVER been reconciled on this machine. Kept in
@@ -5324,6 +5405,15 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     window.__msAppMirrorSeedAllowed = function () { return !!mirrorVerifiedThisSession['ms_templates_v1']; };
 
     function scheduleWrite(key, value) {
+        // 8EO — this dataset was loaded stale at launch (app storage full).
+        // Sending it would overwrite the database's newer copy: hold it back.
+        if (staleBuckets[key]) {
+            lastErrorByBucket['stale:' + key] = 'Not saved to the database: the latest copy could not be loaded at launch '
+                + '(app storage full), so saving is paused this session to protect the database copy.';
+            window.__msEarlyDiag('CRITICAL', 'Write paused for stale dataset', { key: key });
+            refreshIndicator();
+            return true;
+        }
         if (BUCKET_COMMANDS[key]) {
             pendingByBucket[key] = value;
             if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
@@ -5380,14 +5470,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             lsError = e;
             // Log the failure for visibility but don't propagate.
             try {
-                if (window.__diag && typeof window.__diag.log === 'function') {
-                    window.__diag.log('CRITICAL', 'localStorage.setItem threw — continuing to SQLite write', {
-                        key: typeof key === 'string' ? key : String(key),
-                        errorName: e && e.name,
-                        errorMessage: e && e.message ? String(e.message) : String(e),
-                        valueLength: typeof value === 'string' ? value.length : 0
-                    });
-                }
+                window.__msEarlyDiag('CRITICAL', 'localStorage.setItem threw — continuing to SQLite write', {
+                    key: typeof key === 'string' ? key : String(key),
+                    errorName: e && e.name,
+                    errorMessage: e && e.message ? String(e.message) : String(e),
+                    valueLength: typeof value === 'string' ? value.length : 0
+                });
             } catch (logErr) { /* never let diag failures break the app */ }
         }
         // Internal flags (start with __ms_) never touch SQLite.
@@ -5416,7 +5504,25 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // Phase 8EM — compare the mirrored stores against the database now.
     // The interceptor above is installed, so writes made from here on are
     // routed (and held) correctly.
-    reconcileAppMirrors(0);
+    // 8EO — datasets paused by the startup storage check: say so plainly.
+    (function reportStaleBuckets() {
+        var keys = Object.keys(staleBuckets);
+        if (!keys.length) return;
+        var labels = keys.map(function (k) { return (BUCKET_COMMANDS[k] && BUCKET_COMMANDS[k].label) || k; });
+        keys.forEach(function (k) {
+            lastErrorByBucket['stale:' + k] = 'Stale local copy — saving paused this session to protect the database copy.';
+        });
+        setTimeout(refreshIndicator, 2500);   // the indicator is built on DOMContentLoaded
+        setTimeout(function () {
+            try {
+                alert('Masterstone CRM could not load the latest ' + labels.join(', ') + ' from the database, because the '
+                    + "app's local storage is full.\n\nTo protect your data, changes to it will NOT be saved this session. "
+                    + 'Please send Claude the Diag log (Show banner \u2192 \ud83d\udc1e Diag).');
+            } catch (e) {}
+        }, 3000);
+    })();
+
+    if (!__msRebooting) reconcileAppMirrors(0);
 
     window.__msScheduleBucketWriteDirect = function (key, value) {
         try {
@@ -5796,6 +5902,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             }
         } catch (e) {
             console.error('[ms] attachment loader error:', e);
+            window.__msEarlyDiag('CRITICAL', 'Company profile image re-injection failed', { error: String(e && e.message ? e.message : e) });
         }
     })();
 
@@ -14340,7 +14447,12 @@ function getDataSnapshotCounts() {
         invoices: count('ms_invoices_v1'),
         clients: count('ms_client_master_v1'),
         oems: count('ms_oem_master_v1'),
-        attachments: count('ms_attachments_v1'),
+        // 8EO — from the live list (loaded from the database), not the stale
+        // browser copy, which showed 3 when the real figure was 34.
+        attachments: (function () {
+            try { if (typeof attachments === 'object' && attachments) return Object.keys(attachments).length; } catch (e) {}
+            return count('ms_attachments_v1');
+        })(),
         consultants: count('ms_consultants_v1'),
         consultantPayments: count('ms_consultant_payments_v1')
     };
@@ -42938,6 +43050,19 @@ window.__diag = (function() {
         dump: dump,
         installSticky: installSticky
     };
+})();
+
+// Phase 8EO — replay entries logged before this panel existed (the Mac-app
+// sync module starts work in an earlier script block), in order, tagged with
+// the time they actually happened.
+(function replayEarlyDiag() {
+    try {
+        var early = window.__diagEarly || [];
+        window.__diagEarly = null;
+        early.forEach(function (e) {
+            window.__diag.log(e[0], e[1] + '  [at ' + e[3] + ', before the Diag panel loaded]', e[2]);
+        });
+    } catch (e) {}
 })();
 
 // Convenience global aliases so existing code can call diag() without prefix
