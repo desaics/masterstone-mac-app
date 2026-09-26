@@ -3432,7 +3432,7 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     border-radius: 5px;
     overflow: hidden;
 }
-.con-gst-btn {
+.con-gst-btn, .inv-gst-btn {
     background: transparent;
     border: none;
     padding: 2px 8px;
@@ -3445,9 +3445,9 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
     cursor: pointer;
     transition: background 0.12s ease, color 0.12s ease;
 }
-.con-gst-btn + .con-gst-btn { border-left: 1px solid var(--glass-border); }
-.con-gst-btn:hover { background: var(--hover-bg); color: var(--text-main); }
-.con-gst-btn.active { background: var(--accent-tint-low); color: var(--accent-cyan); }
+.con-gst-btn + .con-gst-btn, .inv-gst-btn + .inv-gst-btn { border-left: 1px solid var(--glass-border); }
+.con-gst-btn:hover, .inv-gst-btn:hover { background: var(--hover-bg); color: var(--text-main); }
+.con-gst-btn.active, .inv-gst-btn.active { background: var(--accent-tint-low); color: var(--accent-cyan); }
 .con-kpi-basis { font-weight: 500; letter-spacing: 0.4px; opacity: 0.75; text-transform: none; }
 
 /* Status badge colors */
@@ -11140,24 +11140,40 @@ window.__msRenderMissingOneDriveLinks = function () {
       <!-- KPIs -->
       <div class="proposal-kpi-grid" style="grid-template-columns: repeat(5, 1fr); margin-top:14px;">
         <div class="proposal-kpi-card">
-          <div class="proposal-kpi-lbl"><i class="fas fa-rupee-sign"></i> Outstanding</div>
+          <div class="proposal-kpi-lbl"><i class="fas fa-rupee-sign"></i> Outstanding <span class="con-kpi-basis" id="invk_outstandingBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_outstanding" style="color:var(--warning);">₹0</div>
           <div class="proposal-kpi-sub" id="invk_outstandingSub">0 invoices</div>
+          <div class="con-gst-toggle">
+            <button type="button" class="inv-gst-btn" data-basis="incl" onclick="__msSetInvGstBasis('incl')" title="Amounts including GST, as invoiced">Incl GST</button>
+            <button type="button" class="inv-gst-btn" data-basis="excl" onclick="__msSetInvGstBasis('excl')" title="Pre-GST (taxable value); part-paid invoices split pro rata">Excl GST</button>
+          </div>
         </div>
         <div class="proposal-kpi-card">
-          <div class="proposal-kpi-lbl"><i class="fas fa-exclamation-circle"></i> Overdue</div>
+          <div class="proposal-kpi-lbl"><i class="fas fa-exclamation-circle"></i> Overdue <span class="con-kpi-basis" id="invk_overdueBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_overdue" style="color:var(--danger);">₹0</div>
           <div class="proposal-kpi-sub" id="invk_overdueSub">0 invoices</div>
+          <div class="con-gst-toggle">
+            <button type="button" class="inv-gst-btn" data-basis="incl" onclick="__msSetInvGstBasis('incl')" title="Amounts including GST, as invoiced">Incl GST</button>
+            <button type="button" class="inv-gst-btn" data-basis="excl" onclick="__msSetInvGstBasis('excl')" title="Pre-GST (taxable value); part-paid invoices split pro rata">Excl GST</button>
+          </div>
         </div>
         <div class="proposal-kpi-card">
-          <div class="proposal-kpi-lbl"><i class="fas fa-check-circle"></i> Paid (MTD)</div>
+          <div class="proposal-kpi-lbl"><i class="fas fa-check-circle"></i> Paid (MTD) <span class="con-kpi-basis" id="invk_paidMTDBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_paidMTD" style="color:var(--success);">₹0</div>
           <div class="proposal-kpi-sub">This month</div>
+          <div class="con-gst-toggle">
+            <button type="button" class="inv-gst-btn" data-basis="incl" onclick="__msSetInvGstBasis('incl')" title="Amounts including GST, as invoiced">Incl GST</button>
+            <button type="button" class="inv-gst-btn" data-basis="excl" onclick="__msSetInvGstBasis('excl')" title="Pre-GST (taxable value); part-paid invoices split pro rata">Excl GST</button>
+          </div>
         </div>
         <div class="proposal-kpi-card">
-          <div class="proposal-kpi-lbl"><i class="fas fa-paper-plane"></i> Issued (YTD)</div>
+          <div class="proposal-kpi-lbl"><i class="fas fa-paper-plane"></i> Issued (YTD) <span class="con-kpi-basis" id="invk_issuedYTDBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_issuedYTD">₹0</div>
           <div class="proposal-kpi-sub" id="invk_issuedYTDSub">0 invoices</div>
+          <div class="con-gst-toggle">
+            <button type="button" class="inv-gst-btn" data-basis="incl" onclick="__msSetInvGstBasis('incl')" title="Amounts including GST, as invoiced">Incl GST</button>
+            <button type="button" class="inv-gst-btn" data-basis="excl" onclick="__msSetInvGstBasis('excl')" title="Pre-GST (taxable value); part-paid invoices split pro rata">Excl GST</button>
+          </div>
         </div>
         <div class="proposal-kpi-card">
           <div class="proposal-kpi-lbl"><i class="fas fa-clock"></i> Avg Days to Pay</div>
@@ -33251,15 +33267,76 @@ function getFilteredInvoices() {
     });
 }
 
+// ===== Phase 8EP — GST basis for the Invoices money cards ====================
+// 'incl' (default, what these cards always showed) = amounts including GST.
+// 'excl' = pre-GST taxable value. Payments carry no GST or TDS split, so for a
+// part-paid invoice every rupee received is split in that invoice's own
+// subtotal : grandTotal proportion. A wholly unpaid invoice therefore counts
+// EXACTLY its stored subtotal; a paid (or overpaid) one counts nothing
+// outstanding. Shared by all four money cards; separate from the Consultant
+// cards (8EL) — each screen remembers its own choice.
+var INV_GST_BASIS_KEY = 'ms_inv_gst_basis_v1';
+var __msInvGstBasis = null;   // lazily loaded from localStorage
+
+function __msGetInvGstBasis() {
+    if (__msInvGstBasis === null) {
+        var saved = '';
+        try { saved = localStorage.getItem(INV_GST_BASIS_KEY) || ''; } catch (e) { saved = ''; }
+        __msInvGstBasis = (saved === 'excl') ? 'excl' : 'incl';
+    }
+    return __msInvGstBasis;
+}
+
+function __msSetInvGstBasis(basis) {
+    __msInvGstBasis = (basis === 'excl') ? 'excl' : 'incl';
+    try { localStorage.setItem(INV_GST_BASIS_KEY, __msInvGstBasis); } catch (e) {}
+    if (typeof renderInvoicesKPIs === 'function') renderInvoicesKPIs();
+}
+
+function __msSyncInvGstUi() {
+    var basis = __msGetInvGstBasis();
+    var btns = document.querySelectorAll('.inv-gst-btn');
+    for (var i = 0; i < btns.length; i++) {
+        if (btns[i].getAttribute('data-basis') === basis) btns[i].classList.add('active');
+        else btns[i].classList.remove('active');
+    }
+    var label = (basis === 'excl') ? '\u00b7 excl. GST' : '\u00b7 incl. GST';
+    ['invk_outstandingBasis', 'invk_overdueBasis', 'invk_paidMTDBasis', 'invk_issuedYTDBasis'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = label;
+    });
+}
+
+// Pre-GST share of any amount received against this invoice.
+function __msInvExclRatio(inv) {
+    var g = parseFloat(inv && inv.grandTotal) || 0;
+    var s = parseFloat(inv && inv.subtotal);
+    if (!(g > 0) || !isFinite(s)) return 1;
+    return Math.min(1, Math.max(0, s / g));
+}
+
+// Outstanding excluding GST = stored subtotal less the pre-GST share of what's
+// been paid. Unpaid -> exactly the subtotal; paid / overpaid -> 0.
+function __msInvOutstandingExcl(inv) {
+    var s = parseFloat(inv && inv.subtotal);
+    if (!isFinite(s)) return parseFloat(inv && inv.amountOutstanding) || 0;   // every saved invoice has subtotal
+    var g = parseFloat(inv && inv.grandTotal) || 0;
+    if (!(g > 0)) return 0;
+    var paid = parseFloat(inv && inv.amountPaid) || 0;
+    if (paid <= 0) return s;
+    return Math.max(0, s - paid * s / g);
+}
+
 function renderInvoicesKPIs() {
     // Only consider non-cancelled, non-credit-note
     const live = invoices.filter(i => i.status !== 'Cancelled' && i.status !== 'Credit Note Issued');
 
+    const __excl = (__msGetInvGstBasis() === 'excl');   // 8EP
     const outstanding = live.filter(isInvoiceOutstanding);
-    const outstandingAmt = outstanding.reduce((s, i) => s + (i.amountOutstanding || 0), 0);
+    const outstandingAmt = outstanding.reduce((s, i) => s + (__excl ? __msInvOutstandingExcl(i) : (i.amountOutstanding || 0)), 0);
 
     const overdue = live.filter(isInvoiceOverdue);
-    const overdueAmt = overdue.reduce((s, i) => s + (i.amountOutstanding || 0), 0);
+    const overdueAmt = overdue.reduce((s, i) => s + (__excl ? __msInvOutstandingExcl(i) : (i.amountOutstanding || 0)), 0);
 
     // Paid MTD — sum payments booked this calendar month
     const now = new Date();
@@ -33268,17 +33345,22 @@ function renderInvoicesKPIs() {
     live.forEach(i => (i.payments || []).forEach(p => {
         if (!p.date) return;
         const d = new Date(p.date);
-        if (d >= monthStart) paidMTD += (parseFloat(p.amount) || 0);
+        if (d >= monthStart) paidMTD += (parseFloat(p.amount) || 0) * (__excl ? __msInvExclRatio(i) : 1);   // 8EP — pro rata
     }));
 
-    // Issued YTD (calendar year)
-    const ytdStart = new Date(now.getFullYear(), 0, 1);
+    // Issued YTD — Indian financial year, 1 April to 31 March (8EP). Was the
+    // calendar year, which reset on 1 January in the middle of the FY; now
+    // matches the Consultant cards.
+    const __fy = getCurrentFYRange();
+    const ytdStart = __fy.start;
     const issuedYTD = live.filter(i => {
         if (!i.issuedAt && !i.invoiceDate) return false;
         const d = new Date(i.issuedAt || i.invoiceDate);
-        return !isNaN(d.getTime()) && d >= ytdStart && i.status !== 'Draft';
+        return !isNaN(d.getTime()) && d >= ytdStart && d <= __fy.end && i.status !== 'Draft';
     });
-    const issuedYTDAmt = issuedYTD.reduce((s, i) => s + (i.grandTotal || 0), 0);
+    const issuedYTDAmt = issuedYTD.reduce((s, i) => s + (__excl ? (parseFloat(i.subtotal) || 0) : (i.grandTotal || 0)), 0);
+    const __fyY = __fy.start.getFullYear();
+    const __fyLabel = 'FY ' + String(__fyY).slice(2) + '-' + String(__fyY + 1).slice(2);
 
     // Avg Days to Pay — weighted by amount
     const paidInvoices = live.filter(i => i.status === 'Paid' && i.invoiceDate && i.paidAt);
@@ -33299,8 +33381,9 @@ function renderInvoicesKPIs() {
     set('invk_overdueSub', `${overdue.length} invoice${overdue.length === 1 ? '' : 's'}`);
     set('invk_paidMTD', fmtMoneyShort(paidMTD));
     set('invk_issuedYTD', fmtMoneyShort(issuedYTDAmt));
-    set('invk_issuedYTDSub', `${issuedYTD.length} invoice${issuedYTD.length === 1 ? '' : 's'}`);
+    set('invk_issuedYTDSub', `${issuedYTD.length} invoice${issuedYTD.length === 1 ? '' : 's'} \u00b7 ${__fyLabel}`);
     set('invk_avgDays', avgDays !== null ? `${avgDays}d` : '—');
+    __msSyncInvGstUi();   // 8EP
 }
 
 function renderInvoicesKanban(filtered) {
