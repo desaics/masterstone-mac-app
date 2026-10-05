@@ -24576,14 +24576,356 @@ function showProspectToast(htmlMessage, duration) {
     t.id = 'prospectToastEl';
     t.className = 'prospect-toast';
     t.innerHTML = htmlMessage;
+    t.__msCreatedAt = Date.now();   // 8ER — lets download links tell this pop-up from an older one
     document.body.appendChild(t);
     // Force reflow before adding .show class so transition plays
     void t.offsetWidth;
     t.classList.add('show');
     const totalMs = duration || 3200;
-    setTimeout(() => { t.classList.remove('show'); }, totalMs);
-    setTimeout(() => { if (t && t.parentNode) t.parentNode.removeChild(t); }, totalMs + 400);
+    // 8ER — timers kept on the element so download links can keep it up longer.
+    t.__msHideTimer = setTimeout(() => { t.classList.remove('show'); }, totalMs);
+    t.__msRemoveTimer = setTimeout(() => { if (t && t.parentNode) t.parentNode.removeChild(t); }, totalMs + 400);
 }
+
+/* ======================================================================
+   8ER — Download links: "Show in Downloads" + "Open" on every download
+   ----------------------------------------------------------------------
+   Every download in the app (Excel exports, zips, JSON/CSV backups,
+   attachments, e-invoice JSON) is started by clicking a temporary
+   <a download> link. The Mac app's web view then saves the file in
+   ~/Downloads under the suggested name, or as "name (1).ext",
+   "name (2).ext" ... when that name is taken (base = text before the
+   FIRST dot, first free number: the web view's own rule).
+
+   This module:
+     1. catches those clicks (HTMLAnchorElement.prototype.click);
+     2. works out, BEFORE starting the download, where the file will land
+        (check_file_exists, same rule as the web view), then starts it;
+     3. adds "Show in Downloads" (Finder with the file highlighted when the
+        opener plugin allows it, otherwise the folder) and "Open" (default
+        app, via open_local_file) to the download's own pop-up, or to a new
+        pop-up when the download shows none, and keeps it up for 15 s
+        (longer while the mouse is over it);
+     4. fills any status line that asked for links (__msDlLinksInto).
+   Callers often revoke their blob: URL straight after clicking, so the
+   module keeps its own reference to each Blob (URL.createObjectURL is
+   wrapped) and starts the real download from a fresh URL of its own.
+   Mac app only (window.__TAURI__ present at click time); in the browser
+   shell downloads behave exactly as before.
+   ====================================================================== */
+const MS_DL_PREDICT_TIMEOUT_MS = 2500;
+const MS_DL_TOAST_MS = 15000;
+const MS_DL_BTN = 'background:none; border:none; padding:0; margin:0; font:inherit; color:var(--accent-cyan); cursor:pointer; text-decoration:underline;';
+window.__msDl = { seq: 0, recs: {}, slots: [], dir: null, dirPromise: null };
+
+function __msDlTauri() {
+    return (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') ? window.__TAURI__.core : null;
+}
+
+async function __msDlExists(path) {
+    const t = __msDlTauri();
+    if (!t || !path) return false;
+    try {
+        const r = await t.invoke('check_file_exists', { path: path });
+        return !!(r && r.ok && r.exists);
+    } catch (e) { return false; }
+}
+
+// The Downloads folder: Tauri's own path lookup first; if the app is not
+// allowed to use it, derive it from the OneDrive folder the app already
+// knows (home = the part before "/Library/" or "/OneDrive").
+function __msDlDownloadsDir() {
+    const st = window.__msDl;
+    if (st.dir) return Promise.resolve(st.dir);
+    if (st.dirPromise) return st.dirPromise;
+    st.dirPromise = (async function () {
+        const T = window.__TAURI__ || {};
+        try {
+            if (T.path && typeof T.path.downloadDir === 'function') {
+                const d = await T.path.downloadDir();
+                if (d) return String(d).replace(/\/+$/, '');
+            }
+        } catch (e) {
+            try { diag('INFO', 'Downloads folder: path lookup not available, using the OneDrive route', { error: String((e && e.message) || e) }); } catch (ie) {}
+        }
+        try {
+            const r = await __msDlTauri().invoke('get_snapshot_status');
+            const sd = String((r && r.snapshot_dir) || '');
+            let home = '';
+            if (sd.indexOf('/Library/') > 0) home = sd.slice(0, sd.indexOf('/Library/'));
+            else if (sd.indexOf('/OneDrive') > 0) home = sd.slice(0, sd.indexOf('/OneDrive'));
+            if (home && await __msDlExists(home + '/Downloads')) return home + '/Downloads';
+        } catch (e) {}
+        return null;
+    })().then(function (d) {
+        st.dirPromise = null;
+        if (d) st.dir = d;
+        else { try { diag('INFO', 'Downloads folder could not be located: download links are not shown'); } catch (e) {} }
+        return d;
+    });
+    return st.dirPromise;
+}
+
+// Where the web view will save `name` (rule above). null = folder unknown.
+async function __msDlPredict(name) {
+    const dir = await __msDlDownloadsDir();
+    if (!dir) return null;
+    if (!(await __msDlExists(dir + '/' + name))) return { dir: dir, name: name, path: dir + '/' + name, renamed: false };
+    const dot = name.indexOf('.');
+    const base = dot >= 0 ? name.slice(0, dot) : name;
+    const ext = dot >= 0 ? name.slice(dot) : '';
+    for (let n = 1; n <= 200; n++) {
+        const nm = base + ' (' + n + ')' + ext;
+        if (!(await __msDlExists(dir + '/' + nm))) return { dir: dir, name: nm, path: dir + '/' + nm, renamed: true };
+    }
+    return { dir: dir, name: name, path: null, renamed: false };
+}
+
+function __msDlLinksHtml(rec, withName) {
+    const label = rec.renamed ? 'Saved as <strong>' + pEsc(rec.name) + '</strong> · '
+        : (withName ? '<strong>' + pEsc(rec.name) + '</strong> · ' : '');
+    return '<div class="ms-dl-links" data-dl="' + rec.id + '" data-named="' + (label ? '1' : '0') + '" style="margin-top:6px; font-size:12px;">' + label
+        + '<button type="button" style="' + MS_DL_BTN + '" onclick="window.__msDlShow(\'' + rec.id + '\')"><i class="fas fa-folder-open"></i>Show in Downloads</button>'
+        + ' <span style="color:var(--text-dim);">·</span> '
+        + '<button type="button" style="' + MS_DL_BTN + '" onclick="window.__msDlOpen(\'' + rec.id + '\')"><i class="fas fa-external-link-alt"></i>Open</button>'
+        + '</div>';
+}
+
+function __msDlLinksInline(rec) {
+    return '<span class="ms-dl-links" data-dl="' + rec.id + '" style="white-space:nowrap;">'
+        + (rec.renamed ? ' Saved as <strong>' + pEsc(rec.name) + '</strong>.' : '')
+        + ' <button type="button" style="' + MS_DL_BTN + '" onclick="window.__msDlShow(\'' + rec.id + '\')"><i class="fas fa-folder-open"></i> Show in Downloads</button>'
+        + ' <span style="color:var(--text-dim);">·</span> '
+        + '<button type="button" style="' + MS_DL_BTN + '" onclick="window.__msDlOpen(\'' + rec.id + '\')"><i class="fas fa-external-link-alt"></i> Open</button>'
+        + '</span>';
+}
+
+// Keep a pop-up up for `ms` (and while the mouse is over it).
+function __msDlHold(t, ms) {
+    if (!t) return;
+    const hide = function () {
+        t.classList.remove('show');
+        t.__msRemoveTimer = setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 400);
+    };
+    const arm = function (d) {
+        clearTimeout(t.__msHideTimer);
+        clearTimeout(t.__msRemoveTimer);
+        t.__msHideTimer = setTimeout(hide, d);
+    };
+    arm(ms);
+    if (!t.__msDlHover) {
+        t.__msDlHover = true;
+        t.addEventListener('mouseenter', function () { clearTimeout(t.__msHideTimer); clearTimeout(t.__msRemoveTimer); t.classList.add('show'); });
+        t.addEventListener('mouseleave', function () { arm(4000); });
+    }
+}
+
+function __msDlAttachToToast(rec) {
+    const tryAttach = function () {
+        const t = document.getElementById('prospectToastEl');
+        if (!t || !t.classList.contains('show')) return false;
+        if ((t.__msCreatedAt || 0) < rec.requestedAt - 250) return false;      // an older, unrelated pop-up
+        if (!t.querySelector('[data-dl="' + rec.id + '"]')) {
+            // A second file in the same pop-up: make every row name its file.
+            const before = t.querySelectorAll('.ms-dl-links');
+            before.forEach(function (row) {
+                if (row.getAttribute('data-named') === '1') return;
+                const r0 = window.__msDl.recs[row.getAttribute('data-dl')];
+                if (!r0) return;
+                row.insertAdjacentHTML('afterbegin', '<strong>' + pEsc(r0.name) + '</strong> · ');
+                row.setAttribute('data-named', '1');
+            });
+            const mentions = (t.textContent || '').indexOf(rec.suggested) >= 0;
+            t.insertAdjacentHTML('beforeend', __msDlLinksHtml(rec, before.length > 0 || !mentions));
+        }
+        __msDlHold(t, MS_DL_TOAST_MS);
+        return true;
+    };
+    if (tryAttach()) return;
+    // The download's own pop-up can appear a moment later; if none does, show one.
+    setTimeout(function () {
+        if (tryAttach()) return;
+        if (typeof showProspectToast !== 'function') return;
+        showProspectToast('<i class="fas fa-download"></i> Downloaded <strong>' + pEsc(rec.suggested) + '</strong>'
+            + __msDlLinksHtml(rec, false), MS_DL_TOAST_MS);
+        __msDlHold(document.getElementById('prospectToastEl'), MS_DL_TOAST_MS);
+    }, 700);
+}
+
+// Ask for links in a status line once `suggestedName` has been saved (used
+// by the CA Export screen, so the links outlast the pop-up).
+window.__msDlLinksInto = function (el, suggestedName, waitMs) {
+    try {
+        if (typeof el === 'string') el = document.getElementById(el);
+        if (!el || !suggestedName) return;
+        window.__msDl.slots.push({ el: el, name: suggestedName, until: Date.now() + (waitMs || 15000) });
+    } catch (e) {}
+};
+
+function __msDlFillSlots(rec) {
+    const now = Date.now();
+    window.__msDl.slots = window.__msDl.slots.filter(function (s) {
+        if (s.until < now) return false;
+        if (s.name !== rec.suggested) return true;
+        try { s.el.insertAdjacentHTML('beforeend', __msDlLinksInline(rec)); } catch (e) {}
+        return false;
+    });
+}
+
+function __msDlRegister(suggested, pred, requestedAt) {
+    const st = window.__msDl;
+    const dir = (pred && pred.dir) || st.dir || null;
+    const known = !!(pred && pred.path);
+    const rec = { id: 'dl' + (++st.seq), suggested: suggested, name: known ? pred.name : suggested,
+                  path: known ? pred.path : null, dir: dir, renamed: known && !!pred.renamed,
+                  requestedAt: requestedAt, savedAt: Date.now() };
+    st.recs[rec.id] = rec;
+    const ids = Object.keys(st.recs);
+    if (ids.length > 30) delete st.recs[ids[0]];
+    try { diag('INFO', 'Download saved to Downloads', { name: suggested, savedAs: known ? rec.name : '(not known)', renamed: rec.renamed }); } catch (e) {}
+    if (!dir) return rec;
+    __msDlFillSlots(rec);
+    __msDlAttachToToast(rec);
+    return rec;
+}
+
+function __msDlNote(text, isErr) {
+    try {
+        if (isErr) diag('WARN', 'Download link: ' + text);
+        if (typeof showProspectToast === 'function') {
+            showProspectToast('<i class="fas ' + (isErr ? 'fa-exclamation-triangle" style="color:var(--danger);' : 'fa-info-circle" style="color:var(--accent-cyan);')
+                + '"></i> ' + pEsc(text), 6000);
+        }
+    } catch (e) {}
+}
+
+// "Show in Downloads": Finder with the file highlighted when possible,
+// otherwise the Downloads folder.
+window.__msDlShow = async function (id) {
+    const rec = window.__msDl.recs[id];
+    const t = __msDlTauri();
+    if (!rec || !t || !rec.dir) return;
+    try {
+        const found = !!rec.path && await __msDlExists(rec.path);
+        if (found) {
+            const op = window.__TAURI__ && window.__TAURI__.opener;
+            if (op && typeof op.revealItemInDir === 'function') {
+                try {
+                    await op.revealItemInDir(rec.path);
+                    diag('INFO', 'Download link: shown in Finder with the file highlighted', { name: rec.name });
+                    return;
+                } catch (e) {
+                    diag('INFO', 'Download link: highlighting not available, opening the Downloads folder instead', { error: String((e && e.message) || e) });
+                }
+            }
+        }
+        const r = await t.invoke('open_local_file', { path: rec.dir });
+        if (!r || !r.ok) { __msDlNote('Could not open your Downloads folder: ' + ((r && r.error) || 'unknown error'), true); return; }
+        diag('INFO', 'Download link: Downloads folder opened', { name: rec.name, fileFound: found });
+        if (!found) __msDlNote(rec.path ? ('Could not find ' + rec.name + ' in Downloads (moved or renamed?). Showing the folder.')
+                                        : ('Showing your Downloads folder. Look for ' + rec.suggested + '.'), false);
+    } catch (e) {
+        __msDlNote('Could not open your Downloads folder: ' + String((e && e.message) || e), true);
+    }
+};
+
+// "Open": the file in its usual app (Excel for .xlsx, etc.).
+window.__msDlOpen = async function (id) {
+    const rec = window.__msDl.recs[id];
+    const t = __msDlTauri();
+    if (!rec || !t || !rec.dir) return;
+    try {
+        if (rec.path && await __msDlExists(rec.path)) {
+            const r = await t.invoke('open_local_file', { path: rec.path });
+            if (r && r.ok) { diag('INFO', 'Download link: file opened', { name: rec.name }); return; }
+            __msDlNote('Could not open ' + rec.name + ': ' + ((r && r.error) || 'unknown error'), true);
+            return;
+        }
+        const r2 = await t.invoke('open_local_file', { path: rec.dir });
+        diag('INFO', 'Download link: file not found, Downloads folder opened instead', { name: rec.name, folderOpened: !!(r2 && r2.ok) });
+        __msDlNote(rec.path ? ('Could not find ' + rec.name + ' in Downloads (moved or renamed?). Showing the folder instead.')
+                            : ('Could not tell which copy is the new one. Showing your Downloads folder; look for ' + rec.suggested + '.'), false);
+    } catch (e) {
+        __msDlNote('Could not open ' + rec.name + ': ' + String((e && e.message) || e), true);
+    }
+};
+
+(function installDownloadLinks() {
+    if (window.__msDlInstalled) return;
+    window.__msDlInstalled = true;
+    const blobs = new Map();
+    const origCreate = (typeof URL !== 'undefined' && URL.createObjectURL) ? URL.createObjectURL.bind(URL) : null;
+    const origRevoke = (typeof URL !== 'undefined' && URL.revokeObjectURL) ? URL.revokeObjectURL.bind(URL) : null;
+    if (origCreate) {
+        URL.createObjectURL = function (obj) {
+            const u = origCreate(obj);
+            try {
+                if (typeof Blob !== 'undefined' && obj instanceof Blob) {
+                    blobs.set(u, obj);
+                    if (blobs.size > 50) blobs.delete(blobs.keys().next().value);
+                }
+            } catch (e) {}
+            return u;
+        };
+    }
+    if (origRevoke) {
+        URL.revokeObjectURL = function (u) {
+            try { blobs.delete(u); } catch (e) {}
+            return origRevoke(u);
+        };
+    }
+    const origClick = HTMLAnchorElement.prototype.click;
+
+    function start(name, href, blob) {
+        const requestedAt = Date.now();
+        let started = false;
+        const go = function (pred) {
+            if (started) return;
+            started = true;
+            let url = href, own = false;
+            try { if (blob && origCreate) { url = origCreate(blob); own = true; } } catch (e) {}
+            const a = document.createElement('a');
+            a.setAttribute('href', url);
+            a.setAttribute('download', name);
+            a.style.display = 'none';
+            a.__msDlPass = true;
+            (document.body || document.documentElement).appendChild(a);
+            try { origClick.call(a); }
+            finally {
+                setTimeout(function () {
+                    try { a.remove(); } catch (e) {}
+                    if (own && origRevoke) { try { origRevoke(url); } catch (e) {} }
+                }, 60000);
+            }
+            __msDlRegister(name, pred, requestedAt);
+        };
+        const timer = setTimeout(function () {
+            try { diag('WARN', 'Download links: the saved name took too long to work out; download started anyway', { name: name }); } catch (e) {}
+            go(null);
+        }, MS_DL_PREDICT_TIMEOUT_MS);
+        __msDlPredict(name).then(function (p) { clearTimeout(timer); go(p); }, function () { clearTimeout(timer); go(null); });
+    }
+
+    HTMLAnchorElement.prototype.click = function () {
+        try {
+            if (!this.__msDlPass && __msDlTauri()) {
+                const name = this.getAttribute('download');
+                const href = this.getAttribute('href') || '';
+                const isBlob = /^blob:/i.test(href);
+                if (name && (isBlob || /^data:/i.test(href))) {
+                    const blob = isBlob ? blobs.get(href) : null;
+                    if (!isBlob || blob) {
+                        start(name, href, blob);
+                        return;     // the real click follows in a moment, once the saved name is known
+                    }
+                }
+            }
+        } catch (e) {
+            try { diag('WARN', 'Download links: could not prepare this download; saving it the usual way', { error: String((e && e.message) || e) }); } catch (ie) {}
+        }
+        return origClick.apply(this, arguments);
+    };
+})();
 
 function initProspects() {
     try {
@@ -37685,6 +38027,19 @@ function __msAttSettle(state, source) {
     });
 }
 
+// 8ER — show these messages in the app's own pop-up. In the Mac app the
+// browser's alert() is replaced by the dialog plugin and may not appear.
+function __msAttNotify(msg, isError) {
+    try {
+        if (typeof showProspectToast === 'function') {
+            showProspectToast('<i class="fas ' + (isError ? 'fa-exclamation-triangle" style="color:var(--danger);' : 'fa-hourglass-half" style="color:var(--warning);') + '"></i> '
+                + pEsc(String(msg)).replace(/\n/g, '<br>'), isError ? 20000 : 8000);
+            return;
+        }
+    } catch (e) {}
+    try { alert(msg); } catch (e) {}
+}
+
 // A load attempt failed: retry (after 2 s, then 5 s). After the last attempt,
 // hold adding/removing files for the session and say so, once.
 function __msAttRetryOrFail(reason) {
@@ -37705,11 +38060,9 @@ function __msAttRetryOrFail(reason) {
     __msAttSettle('failed', null);
     try { if (window.__diag) window.__diag.log('CRITICAL', 'Attached files could not be loaded from the database: adding or removing files is paused for this session to protect them', { attempts: s.attempts, error: s.lastError }); } catch (e) {}
     setTimeout(function () {
-        try {
-            alert('Masterstone CRM could not load your attached files (signed PDFs and other uploads) from the database.\n\n'
-                + 'To protect them, adding or removing files is paused for this session. Nothing has been changed.\n\n'
-                + 'Please quit and reopen the app. If this keeps happening, send Claude the Diag log (Show banner → 🐞 Diag).');
-        } catch (e) {}
+        __msAttNotify('Masterstone CRM could not load your attached files (signed PDFs and other uploads) from the database.\n\n'
+            + 'To protect them, adding or removing files is paused for this session. Nothing has been changed.\n\n'
+            + 'Please quit and reopen the app. If this keeps happening, send Claude the Diag log (Show banner → 🐞 Diag).', true);
     }, 0);
 }
 
@@ -37730,7 +38083,7 @@ function __msAttachmentsWritable(action) {
     } else {
         msg = 'Your attached files are still loading from the database (this takes a few seconds after the app opens).\n\nPlease try again in a few seconds.';
     }
-    try { alert(msg); } catch (e) {}
+    __msAttNotify(msg, s.state === 'failed' || stuck);
     return false;
 }
 
@@ -46276,6 +46629,8 @@ async function generateCaExport() {
         XLSX.writeFile(wb, fname);
 
         setStatus(`Generated. Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows.`, false);
+        // 8ER — "Show in Downloads" / "Open" next to this line once the file is saved.
+        if (typeof window.__msDlLinksInto === 'function') window.__msDlLinksInto(statusEl, fname);
         // 8BD.1 — clear download confirmation via the standard toast (the inline
         // status span is easy to miss). Names the file so the user knows what
         // to look for in their Downloads folder.
@@ -46488,6 +46843,8 @@ function generateCaExportInvoices() {
     try {
         __deReadLocalsThenZip(g, { perContract: false, header: header, zipName: zipName });
         setStatus('Done — check your downloads.', 'var(--success)');
+        // 8ER — links on this line once the zip is saved (building it can take a while).
+        if (typeof window.__msDlLinksInto === 'function') window.__msDlLinksInto(statusEl, zipName, 180000);
     } catch (e) {
         console.error('CA invoice zip failed:', e);
         setStatus('Could not build the zip.', 'var(--danger)');
