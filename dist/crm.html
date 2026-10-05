@@ -20261,9 +20261,11 @@ function renderBackupSnapshot() {
     const counts = getDataSnapshotCounts();
     const totalItems = Object.values(counts).reduce((a, b) => a + b, 0);
     let attachmentSize = 0;
+    let attachmentsInFile = false;   // 8EQ — does this JSON backup carry the files?
     try {
         const raw = localStorage.getItem('ms_attachments_v1');
         if (raw) attachmentSize = Math.round(raw.length / 1024);
+        attachmentsInFile = (raw !== null);
     } catch (_) {}
 
     snapEl.innerHTML = `
@@ -20276,10 +20278,10 @@ function renderBackupSnapshot() {
             <div><strong style="color:var(--text-main);">${counts.invoices}</strong> invoices</div>
             <div><strong style="color:var(--text-main);">${counts.clients}</strong> clients</div>
             <div><strong style="color:var(--text-main);">${counts.oems}</strong> OEMs</div>
-            <div><strong style="color:var(--text-main);">${counts.attachments}</strong> entities with attachments${attachmentSize ? ` (~${attachmentSize} KB)` : ''}</div>
+            <div><strong style="color:var(--text-main);">${counts.attachments}</strong> entities with attachments${attachmentsInFile ? (attachmentSize ? ` (~${attachmentSize} KB)` : '') : ` <span style="color:var(--warning);">(files not included)</span>`}</div>
         </div>
         <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--glass-border); font-size:10.5px; color:var(--text-subtle);">
-            Plus: Company Profile, terms templates library, OEM metadata, per-client custom terms, view preferences, and schema version stamp.
+            Plus: Company Profile, terms templates library, OEM metadata, per-client custom terms, view preferences, and schema version stamp.${attachmentsInFile ? '' : `<div style="margin-top:6px; color:var(--warning);"><i class="fas fa-info-circle"></i> Attached files (signed PDFs and other uploads) are not in this JSON backup. They are kept in the app's database, which the app's Auto-backup copies every day.</div>`}
         </div>
     `;
 
@@ -20328,6 +20330,11 @@ async function exportBackup() {
         if (raw !== null) envelope._storageKeys[key] = raw;
     });
 
+    // 8EQ — attached files live in the app's database (since 8AW), not in
+    // browser storage, so this file normally does not carry them. Record it so
+    // the summary below and a later restore can say so plainly.
+    envelope._attachmentsIncluded = (envelope._storageKeys['ms_attachments_v1'] !== undefined);
+
     // Update schema meta with last-backup timestamp
     try {
         const meta = getSchemaMeta() || {};
@@ -20340,7 +20347,7 @@ async function exportBackup() {
     const dataStr = JSON.stringify(envelope, null, 2);
     const sizeKB = Math.round(dataStr.length / 1024);
     const counts = envelope._recordCounts;
-    const summary = `${counts.contracts} contracts · ${counts.prospects} prospects · ${counts.proposals} proposals · ${counts.purchaseOrders} POs · ${counts.invoices} invoices · ${counts.clients} clients · ${counts.attachments} attachments · ${sizeKB} KB`;
+    const summary = `${counts.contracts} contracts · ${counts.prospects} prospects · ${counts.proposals} proposals · ${counts.purchaseOrders} POs · ${counts.invoices} invoices · ${counts.clients} clients · ${envelope._attachmentsIncluded ? (counts.attachments + ' attachments') : 'attached files not included (kept in the app database)'} · ${sizeKB} KB`;
 
     const blob = new Blob([dataStr], {type: 'application/json'});
     const a = document.createElement('a');
@@ -23912,9 +23919,16 @@ function importBackup() {
             // Format 2 (new, comprehensive): envelope with _format + _storageKeys
             if (parsed && typeof parsed === 'object' && parsed._format === 'masterstone-crm-backup-v2' && parsed._storageKeys) {
                 const counts = parsed._recordCounts || {};
-                const summary = `${counts.contracts || 0} contracts, ${counts.prospects || 0} prospects, ${counts.proposals || 0} proposals, ${counts.purchaseOrders || 0} POs, ${counts.invoices || 0} invoices, ${counts.clients || 0} clients, ${counts.attachments || 0} attachments`;
+                // 8EQ — say plainly whether this file carries attached files, and
+                // what restoring it does to the attached files you have now.
+                const bkHasFiles = parsed._storageKeys['ms_attachments_v1'] !== undefined;
+                const inApp = !!(window.__TAURI__ && window.__TAURI__.core);
+                const summary = `${counts.contracts || 0} contracts, ${counts.prospects || 0} prospects, ${counts.proposals || 0} proposals, ${counts.purchaseOrders || 0} POs, ${counts.invoices || 0} invoices, ${counts.clients || 0} clients, ${bkHasFiles ? ((counts.attachments || 0) + ' attachments') : 'no attached files'}`;
+                const filesNote = bkHasFiles
+                    ? '\n\nATTACHED FILES: this backup also holds attached files. Restoring will REPLACE all your current attached files with the ones in this file; any added since it was made will be lost.'
+                    : (inApp ? '\n\nATTACHED FILES: not in this backup file. Your current attached files (signed PDFs and other uploads) are left as they are.' : '');
                 const exportedAt = parsed._exportedAt ? new Date(parsed._exportedAt).toLocaleString() : 'unknown';
-                if (!confirm(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`)) {
+                if (!confirm(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}${filesNote}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`)) {
                     showStatus('status-restore', 'Restore cancelled.');
                     return;
                 }
@@ -34886,6 +34900,10 @@ function triggerSignedPdfUpload(invId) {
     const inv = invoices.find(x => x.id === invId);
     if (!inv) { diag('ERROR', 'triggerSignedPdfUpload: invoice not found', { invId: invId }); return; }
 
+    // 8EQ — until the attached files have loaded, every signed PDF looks
+    // missing, and the orphan check below would unlink this invoice's PDF.
+    if (!__msAttachmentsWritable('signed-PDF upload')) return;
+
     // 8AJ — Resilience: an invoice can hold a stale signedPdfAttachmentId
     // pointing at an attachment that no longer exists in the attachments map
     // (this is exactly the scenario the boot scan flags as orphan). If we let
@@ -37619,6 +37637,103 @@ const ATT_HARD_GLOBAL_BYTES = 250 * 1024 * 1024;       // 250 MB global hard blo
 // attachments = { "prospect_abc123": [ { id, filename, mimeType, sizeBytes, dataUrl, uploadedAt, description } ], ... }
 let attachments = {};
 
+// ---------------------------------------------------------------------------
+// 8EQ — Attachments load state.
+// The in-memory `attachments` map is complete only once the database copy has
+// arrived (Pass 2, __refreshAttachmentsFromSQLite). Until then it is empty —
+// and the database replaces its WHOLE attachments table with whatever a save
+// sends (storage_save_attachments deletes every row, then inserts the payload).
+// So nothing may add, remove or re-link files, and the boot integrity scan must
+// not compare against the map, until the state is 'ready'.
+//   loading -> ready   database copy loaded (browser shell: localStorage is the
+//                      store, so Pass 1 already was the full load)
+//   loading -> failed  every attempt failed; adding/removing files stays held
+//                      for the session so nothing can be overwritten
+// Found 5 Oct 2026: a slow launch (3.3 s to load) made the boot scan report all
+// 12 signed PDFs missing and offer a clean-up that would have unlinked them.
+// ---------------------------------------------------------------------------
+const ATT_LOAD_RETRY_DELAYS_MS = [2000, 5000];   // 3 attempts in all
+const ATT_LOAD_WATCHDOG_MS = 60000;
+window.__msAttLoad = { state: 'loading', attempts: 0, startedAt: Date.now(), settledAt: null, source: null, lastError: null, waiters: [] };
+
+function __msAttachmentsLoaded() {
+    return !!(window.__msAttLoad && window.__msAttLoad.state === 'ready');
+}
+
+// Run fn(state) once loading has settled ('ready' or 'failed'); at once if it has.
+window.__msWhenAttachmentsLoaded = function (fn) {
+    const s = window.__msAttLoad;
+    if (!s || s.state !== 'loading') {
+        setTimeout(function () { try { fn(s ? s.state : 'ready'); } catch (e) {} }, 0);
+        return;
+    }
+    s.waiters.push(fn);
+};
+
+function __msAttSettle(state, source) {
+    const s = window.__msAttLoad;
+    if (!s) return;
+    s.state = state;
+    s.settledAt = Date.now();
+    s.source = source || null;
+    s.waiters.splice(0).forEach(function (fn) {
+        setTimeout(function () {
+            try { fn(state); } catch (e) {
+                try { if (window.__diag) window.__diag.log('ERROR', 'Attachments-loaded callback threw', { error: String(e && e.message) }); } catch (ie) {}
+            }
+        }, 0);
+    });
+}
+
+// A load attempt failed: retry (after 2 s, then 5 s). After the last attempt,
+// hold adding/removing files for the session and say so, once.
+function __msAttRetryOrFail(reason) {
+    const s = window.__msAttLoad;
+    if (!s) return;
+    s.lastError = reason ? String(reason) : 'unknown error';
+    if (s.state !== 'loading') {
+        // A later re-check failed: the copy already loaded stays in use.
+        try { if (window.__diag) window.__diag.log('WARN', 'Attached files: re-check from the database failed (copy already loaded is kept)', { state: s.state, error: s.lastError }); } catch (e) {}
+        return;
+    }
+    if (s.attempts <= ATT_LOAD_RETRY_DELAYS_MS.length) {
+        const delay = ATT_LOAD_RETRY_DELAYS_MS[s.attempts - 1];
+        try { if (window.__diag) window.__diag.log('WARN', 'Attached files: database load attempt failed, retrying', { attempt: s.attempts, retryInMs: delay, error: s.lastError }); } catch (e) {}
+        setTimeout(function () { __refreshAttachmentsFromSQLite(); }, delay);
+        return;
+    }
+    __msAttSettle('failed', null);
+    try { if (window.__diag) window.__diag.log('CRITICAL', 'Attached files could not be loaded from the database: adding or removing files is paused for this session to protect them', { attempts: s.attempts, error: s.lastError }); } catch (e) {}
+    setTimeout(function () {
+        try {
+            alert('Masterstone CRM could not load your attached files (signed PDFs and other uploads) from the database.\n\n'
+                + 'To protect them, adding or removing files is paused for this session. Nothing has been changed.\n\n'
+                + 'Please quit and reopen the app. If this keeps happening, send Claude the Diag log (Show banner → 🐞 Diag).');
+        } catch (e) {}
+    }, 0);
+}
+
+// Gate for every action that adds, removes or re-links attached files.
+// Returns true when it is safe to go ahead; otherwise explains and returns false.
+function __msAttachmentsWritable(action) {
+    const s = window.__msAttLoad;
+    if (!s || s.state === 'ready') return true;
+    try { if (window.__diag) window.__diag.log('WARN', 'Attachment action held: attached files not loaded from the database yet', { action: action || '', state: s.state, attempts: s.attempts }); } catch (e) {}
+    const stuck = s.state === 'loading' && (Date.now() - s.startedAt) > ATT_LOAD_WATCHDOG_MS;
+    let msg;
+    if (s.state === 'failed') {
+        msg = 'Your attached files could not be loaded from the database this session, so adding or removing files is paused to protect them. Nothing has been changed.\n\n'
+            + 'Please quit and reopen the app. If this keeps happening, send Claude the Diag log (Show banner → 🐞 Diag).';
+    } else if (stuck) {
+        msg = 'Your attached files are taking unusually long to load from the database, so adding or removing files is held to protect them. Nothing has been changed.\n\n'
+            + 'Please quit and reopen the app. If this keeps happening, send Claude the Diag log (Show banner → 🐞 Diag).';
+    } else {
+        msg = 'Your attached files are still loading from the database (this takes a few seconds after the app opens).\n\nPlease try again in a few seconds.';
+    }
+    try { alert(msg); } catch (e) {}
+    return false;
+}
+
 function initAttachments() {
     try {
         const raw = localStorage.getItem(ATTACHMENTS_KEY);
@@ -37663,6 +37778,14 @@ function initAttachments() {
     // the canonical load path. localStorage's role for this bucket is now
     // just an opportunistic warm cache from the boot shim.
     setTimeout(function () { __refreshAttachmentsFromSQLite(); }, 0);
+    // 8EQ — if the database copy has still not arrived after a minute, flag it
+    // in Diag (red indicator). Adding/removing files stays held until it does.
+    setTimeout(function () {
+        const s = window.__msAttLoad;
+        if (s && s.state === 'loading') {
+            try { if (window.__diag) window.__diag.log('ERROR', 'Attached files still loading from the database after 60 s: adding or removing files is held until they arrive', { attempts: s.attempts }); } catch (e) {}
+        }
+    }, ATT_LOAD_WATCHDOG_MS);
 }
 
 // 8AW — Helper: regroup a flat array of attachment records into the keyed
@@ -37690,25 +37813,33 @@ function __ingestAttachmentsArray(parsed, source) {
 // Failures fall through silently — the in-memory map already has whatever
 // localStorage provided (Pass 1). We log to diag for visibility.
 async function __refreshAttachmentsFromSQLite() {
+    // 8EQ — every outcome now settles the load state (see __msAttLoad above):
+    // success -> 'ready'; failure -> retried after 2 s, then 5 s -> 'failed'.
+    // Per-attempt failures are logged as WARN by __msAttRetryOrFail; only the
+    // final failure is CRITICAL (with a plain-English message).
+    const st = window.__msAttLoad;
+    if (st) st.attempts++;
     try {
         var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
         if (!t || !t.invoke) {
             try { if (window.__diag) window.__diag.log('INFO', 'attachments SQLite refresh: Tauri unavailable, keeping localStorage data'); } catch (e) {}
+            // Browser shell: localStorage IS the store, so Pass 1 was the full load.
+            __msAttSettle('ready', 'localStorage');
             return;
         }
         var r = await t.invoke('storage_load_attachments');
         if (!r || !r.ok) {
-            try { if (window.__diag) window.__diag.log('ERROR', 'attachments SQLite refresh failed', { error: r && r.error }); } catch (e) {}
+            __msAttRetryOrFail('attachments SQLite refresh failed: ' + String((r && r.error) || 'no result'));
             return;
         }
         var payload = r.payload || '[]';
         var arr;
         try { arr = JSON.parse(payload); } catch (e) {
-            try { if (window.__diag) window.__diag.log('CRITICAL', 'attachments SQLite payload parse failed', { error: String(e && e.message) }); } catch (ie) {}
+            __msAttRetryOrFail('attachments SQLite payload parse failed: ' + String(e && e.message));
             return;
         }
         if (!Array.isArray(arr)) {
-            try { if (window.__diag) window.__diag.log('ERROR', 'attachments SQLite payload not an array'); } catch (e) {}
+            __msAttRetryOrFail('attachments SQLite payload not an array');
             return;
         }
         // Count what was in pass 1 vs SQLite to surface any mismatch.
@@ -37719,9 +37850,13 @@ async function __refreshAttachmentsFromSQLite() {
             if (window.__diag) window.__diag.log('INFO', 'attachments SQLite refresh complete', {
                 sqliteRecords: arr.length,
                 pass1Records: pass1Count,
-                deltaFromPass1: arr.length - pass1Count
+                deltaFromPass1: arr.length - pass1Count,
+                attempt: st ? st.attempts : 1,
+                msSinceStart: st ? (Date.now() - st.startedAt) : null
             });
         } catch (e) {}
+        // 8EQ — the files are in memory now: saving, uploads and the boot scan may go ahead.
+        __msAttSettle('ready', 'SQLite');
         // If any UI was rendered between pass 1 and pass 2 and depends on
         // the attachments count being correct, re-render here. The lists
         // we know touch attachments:
@@ -37734,7 +37869,7 @@ async function __refreshAttachmentsFromSQLite() {
         // that's usually zero. The diag delta number above tells us if it's
         // worth tightening.
     } catch (e) {
-        try { if (window.__diag) window.__diag.log('CRITICAL', 'attachments SQLite refresh threw', { error: String(e && e.message) }); } catch (ie) {}
+        __msAttRetryOrFail('attachments SQLite refresh threw: ' + String(e && e.message));
     }
 }
 
@@ -37798,6 +37933,16 @@ function flattenAttachmentsForSave() {
 }
 
 function saveAttachments() {
+    // 8EQ — backstop: never send the attachments set before it has loaded
+    // from the database. The database replaces its whole attachments table
+    // with what is sent, so an early save would erase every file not yet in
+    // memory. (Upload/remove/re-link actions are held earlier, with a
+    // message; arriving here held means a path was missed, so it is logged.)
+    if (!__msAttachmentsLoaded()) {
+        diag('ERROR', 'saveAttachments blocked: attached files not loaded from the database yet', { state: window.__msAttLoad ? window.__msAttLoad.state : 'unknown' });
+        __msAttachmentsWritable('save');
+        return false;
+    }
     try {
         // 8AK — Serialize as a flat array (Rust expects this shape).
         const flat = flattenAttachmentsForSave();
@@ -37931,6 +38076,10 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
         return;
     }
 
+    // 8EQ — hold uploads until the attached files have loaded from the
+    // database: a save before then would erase the files not loaded yet.
+    if (!__msAttachmentsWritable('upload')) return;
+
     // Pre-validation
     if (file.size > ATT_MAX_FILE_BYTES) {
         diag('ERROR', `addAttachment: file too large`, { sizeBytes: file.size, limit: ATT_MAX_FILE_BYTES });
@@ -38023,6 +38172,8 @@ function removeAttachment(entityType, entityId, attId, onSuccess) {
         if (typeof onSuccess === 'function') onSuccess();
         return;
     }
+    // 8EQ — never delete while the attached files are still loading.
+    if (!__msAttachmentsWritable('remove')) return;
     const att = attachments[key].find(a => a.id === attId);
     if (!confirm(`Delete attachment "${att.filename}" (${fmtBytes(att.sizeBytes)})? This cannot be undone.`)) return;
     attachments[key] = attachments[key].filter(a => a.id !== attId);
@@ -43162,6 +43313,18 @@ function diag(category, message, data) {
    actual file is gone from the attachments map.
    ====================================================================== */
 function __diagRunBootScan() {
+    // 8EQ — wait for the attached files to arrive from the database before
+    // comparing signed PDFs against them. Checking earlier reported every
+    // signed PDF as missing (false CRITICAL + clean-up banner, 5 Oct 2026).
+    const __attState = (window.__msAttLoad && window.__msAttLoad.state) || 'ready';
+    if (__attState === 'loading') {
+        if (!__diagRunBootScan.__waiting) {
+            __diagRunBootScan.__waiting = true;
+            diag('INFO', 'Boot integrity scan waiting for attached files to load from the database');
+            window.__msWhenAttachmentsLoaded(function () { __diagRunBootScan(); });
+        }
+        return;
+    }
     try {
         diag('INFO', 'Boot integrity scan starting');
         const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
@@ -43170,7 +43333,12 @@ function __diagRunBootScan() {
         let signedRefs = 0;
         let signedFound = 0;
         let signedMissing = [];
+        // 8EQ — files could not be loaded this session: comparing would flag
+        // every signed PDF, so skip the comparison and say why.
+        const __skipSignedCheck = (__attState === 'failed');
+        if (__skipSignedCheck) diag('WARN', 'Boot scan: signed-PDF check skipped: attached files could not be loaded from the database this session');
         invList.forEach(function(inv) {
+            if (__skipSignedCheck) return;
             if (!inv.signedPdfAttachmentId) return;
             signedRefs++;
             const key = `invoice_${inv.id}`;
@@ -43185,7 +43353,7 @@ function __diagRunBootScan() {
                 signedMissing.push({ invoiceNumber: inv.invoiceNumber || inv.id, attId: inv.signedPdfAttachmentId, expectedKey: key, attachmentsForThisInvoice: list.length });
             }
         });
-        diag('INFO', `Boot scan: ${signedRefs} invoices reference a signed PDF, ${signedFound} match an attachment record`);
+        if (!__skipSignedCheck) diag('INFO', `Boot scan: ${signedRefs} invoices reference a signed PDF, ${signedFound} match an attachment record`);
         if (signedMissing.length > 0) {
             diag('CRITICAL', `${signedMissing.length} invoice(s) have signedPdfAttachmentId but NO matching attachment record`, signedMissing);
             // 8AJ — Auto-prompt for repair via a non-modal banner
@@ -43290,6 +43458,9 @@ window.__diagResyncInvoiceLinks = function() {
 
 window.__diagRepairOrphans = function() {
     try {
+        // 8EQ — the comparison means something only once the attached files
+        // have loaded; before that every signed PDF looks orphaned.
+        if (!__msAttachmentsWritable('orphan repair')) return;
         const invList = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
         const orphans = [];
         invList.forEach(function(inv) {
@@ -44688,6 +44859,8 @@ function buildAttachZoneHtml(list, entityType, entityId, descTag, uploadLabel) {
 
 function uploadConsultantAttachment(input, entityType, entityId, descTag) {
     if (!input.files || input.files.length === 0) return;
+    // 8EQ — hold uploads until the attached files have loaded from the database.
+    if (!__msAttachmentsWritable('consultant upload')) { input.value = ''; return; }
     const file = input.files[0];
     if (typeof addAttachmentFromFile === 'function') {
         // Use existing helper if available (handles size limits, base64, etc.)
@@ -44717,7 +44890,16 @@ function uploadConsultantAttachment(input, entityType, entityId, descTag) {
                 relatedEntityType: entityType,
                 relatedEntityId: entityId
             });
-            if (typeof saveAttachments === 'function') saveAttachments();
+            // 8EQ — if the save is refused or fails, take the file back out so
+            // the screen never shows a file that is not in the database.
+            const savedOk = (typeof saveAttachments === 'function') ? saveAttachments() : false;
+            if (savedOk === false) {
+                const k = `${entityType}_${entityId}`;
+                if (attachments[k]) {
+                    attachments[k].pop();
+                    if (attachments[k].length === 0) delete attachments[k];
+                }
+            }
             if (entityType === 'consultant_payment') {
                 const idVal = document.getElementById('conPayFormId').value;
                 renderConsultantPaymentAttachZones(idVal);
