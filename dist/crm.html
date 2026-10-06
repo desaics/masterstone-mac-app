@@ -5621,89 +5621,219 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
     }
 
-    // ── Inline modal helpers (Build B-fix-3) ─────────────────────────────
-    // Tauri's WebView on macOS silently no-ops native window.prompt(),
-    // window.confirm(), and window.alert(). These replacements use a styled
-    // inline DOM modal and return a Promise so the rest of the code can
-    // remain effectively synchronous-feeling with `await`.
+    // ── In-app question box (Build B-fix-3; rebuilt in Phase 8ES) ────────
+    // The Mac app's web view (wry) has no built-in alert, question or prompt
+    // boxes. The dialog plugin's stand-ins can't be waited on: its question
+    // box hands back a Promise, which the old code read as "yes", and since
+    // plugin 2.7.0 that box doesn't appear at all. So every question in the
+    // CRM goes through this in-app box. Each call returns a Promise that
+    // settles only when the user answers.
     //
-    // __msPrompt(message, defaultValue?) → Promise<string|null>
-    // __msConfirm(message)               → Promise<boolean>
-    // __msAlert(message)                 → Promise<void>
-    function __msBuildModal(message, kind /* 'prompt' | 'confirm' | 'alert' */, defaultValue) {
+    //   window.__msPrompt:  (message, defaultValue?) -> Promise<string|null>
+    //   window.__msConfirm: (message, opts?)         -> Promise<boolean>
+    //   window.__msAlert:   (message)                -> Promise<void>
+    //   window.__msAsk:     (message, opts?)         -> Promise<boolean>; never
+    //                       rejects - anything unexpected counts as "No"
+    //
+    //   opts: { ok: 'Delete', cancel: 'Keep invoice', danger: 'ok' | 'cancel' }
+    //     danger 'ok'     - the yes button is red; Return and Esc both answer No
+    //     danger 'cancel' - the no button is red;  Return and Esc both answer Yes
+    //     no danger       - Return answers Yes, Esc answers No
+    //
+    // Phase 8ES rules:
+    //   - one box at a time: a second question waits its turn, so one click
+    //     or key press can never answer two questions;
+    //   - each box wires its own buttons (B-fix-3 looked them up by a shared
+    //     ID, so a second box stole the first box's handlers);
+    //   - colours come from the app's theme (B-fix-3's text was unreadable in
+    //     dark mode) and the box sits above every other layer of the app;
+    //   - only the open box hears the keyboard; a held-down key's repeats are
+    //     ignored, and the key press that started an action can't answer it.
+    var __msBoxQueue = [];
+    var __msBoxCurrent = null;
+    var __msBoxSeq = 0;
+
+    function __msBoxStyles() {
+        if (document.getElementById('msAskBoxStyles')) return;
+        var css = [
+            '.ms-ask-overlay{position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;background:rgba(20,20,15,0.45);}',
+            'body.dark-mode .ms-ask-overlay{background:rgba(0,0,0,0.62);}',
+            '.ms-ask-overlay .ms-ask-box{width:100%;max-width:460px;min-width:300px;box-sizing:border-box;padding:18px 20px 12px;border-radius:10px;background:var(--glass-panel,#ffffff);color:var(--text-main,#14140f);border:1px solid var(--glass-border-strong,rgba(20,20,15,0.12));box-shadow:var(--shadow-xl,0 16px 48px rgba(20,20,15,0.13));font-family:var(--font-tech,-apple-system,BlinkMacSystemFont,sans-serif);text-align:left;}',
+            '.ms-ask-overlay .ms-ask-row{display:flex;gap:12px;align-items:flex-start;}',
+            '.ms-ask-overlay .ms-ask-icon{flex:0 0 auto;font-size:17px;line-height:1.35;color:var(--accent-cyan,#0c5e5b);}',
+            '.ms-ask-overlay .ms-ask-box.is-danger .ms-ask-icon{color:var(--danger,#8a2424);}',
+            '.ms-ask-overlay .ms-ask-msg{flex:1 1 auto;min-width:0;max-height:60vh;overflow:auto;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}',
+            '.ms-ask-overlay .ms-ask-input{display:block;margin-top:12px;}',
+            '.ms-ask-overlay .ms-ask-btns{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px;}',
+            '.ms-ask-overlay .ms-ask-btn{font-family:inherit;font-size:12.5px;font-weight:500;line-height:1.2;padding:7px 14px;border-radius:6px;cursor:pointer;background:transparent;color:var(--text-main,#14140f);border:1px solid var(--glass-border-strong,rgba(20,20,15,0.12));}',
+            '.ms-ask-overlay .ms-ask-btn.is-primary{background:var(--accent-cyan,#0c5e5b);border-color:var(--accent-cyan,#0c5e5b);color:var(--glass-panel,#ffffff);}',
+            '.ms-ask-overlay .ms-ask-btn.is-danger{background:var(--danger,#8a2424);border-color:var(--danger,#8a2424);color:var(--glass-panel,#ffffff);}',
+            '.ms-ask-overlay .ms-ask-btn.is-danger-quiet{color:var(--danger,#8a2424);border-color:var(--danger,#8a2424);}',
+            '.ms-ask-overlay .ms-ask-btn:focus{outline:none;box-shadow:0 0 0 2px var(--glass-panel,#ffffff),0 0 0 4px var(--accent-cyan,#0c5e5b);}',
+            '.ms-ask-overlay .ms-ask-keys{margin-top:8px;font-size:11px;text-align:right;color:var(--text-dim,#74716a);}'
+        ].join('\n');
+        var st = document.createElement('style');
+        st.id = 'msAskBoxStyles';
+        st.textContent = css;
+        (document.head || document.documentElement).appendChild(st);
+    }
+
+    function __msBuildModal(message, kind /* 'prompt' | 'confirm' | 'alert' */, defaultValue, opts) {
         return new Promise(function (resolve) {
-            var overlay = document.createElement('div');
-            overlay.className = 'ms-modal-overlay';
-            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
-
-            var box = document.createElement('div');
-            box.style.cssText = 'background:#1f2937;color:var(--detail-bg);padding:20px 24px;border-radius:8px;max-width:480px;min-width:320px;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:system-ui,-apple-system,sans-serif;';
-            box.innerHTML =
-                '<div style="font-size:13px;line-height:1.5;margin-bottom:14px;white-space:pre-wrap;color:var(--detail-bg);">' + escapeHtml(message) + '</div>' +
-                (kind === 'prompt' ?
-                    '<input type="text" id="msModalInput" style="width:100%;padding:8px;background:#374151;color:var(--detail-bg);border:1px solid #4b5563;border-radius:4px;font-size:13px;margin-bottom:14px;box-sizing:border-box;" />' : '') +
-                '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
-                  (kind === 'alert' ? '' :
-                    '<button id="msModalCancel" style="padding:6px 14px;background:#374151;color:var(--detail-bg);border:1px solid #4b5563;border-radius:4px;font-size:12px;cursor:pointer;">Cancel</button>') +
-                  '<button id="msModalOk" style="padding:6px 14px;background:var(--accent-cyan);color:var(--glass-panel);border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">' +
-                    (kind === 'confirm' ? 'OK' : (kind === 'alert' ? 'OK' : 'OK')) +
-                  '</button>' +
-                '</div>';
-            overlay.appendChild(box);
-            document.body.appendChild(overlay);
-
-            var input = document.getElementById('msModalInput');
-            if (input) {
-                if (defaultValue !== undefined && defaultValue !== null) input.value = defaultValue;
-                setTimeout(function () { input.focus(); input.select(); }, 50);
-            }
-
-            function close(value) {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-                resolve(value);
-            }
-
-            function onKey(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    document.removeEventListener('keydown', onKey);
-                    if (kind === 'prompt') close(input ? input.value : null);
-                    else if (kind === 'confirm') close(true);
-                    else close(undefined);
-                } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    document.removeEventListener('keydown', onKey);
-                    if (kind === 'prompt') close(null);
-                    else if (kind === 'confirm') close(false);
-                    else close(undefined);
-                }
-            }
-            document.addEventListener('keydown', onKey);
-
-            var okBtn = document.getElementById('msModalOk');
-            if (okBtn) okBtn.onclick = function () {
-                document.removeEventListener('keydown', onKey);
-                if (kind === 'prompt') close(input ? input.value : null);
-                else if (kind === 'confirm') close(true);
-                else close(undefined);
-            };
-            var cancelBtn = document.getElementById('msModalCancel');
-            if (cancelBtn) cancelBtn.onclick = function () {
-                document.removeEventListener('keydown', onKey);
-                if (kind === 'prompt') close(null);
-                else if (kind === 'confirm') close(false);
-                else close(undefined);
-            };
+            __msBoxQueue.push({ message: message, kind: kind, defaultValue: defaultValue, opts: opts || {}, resolve: resolve });
+            __msBoxNext();
         });
     }
+
+    function __msBoxNext() {
+        // A box whose overlay something else removed counts as answered with
+        // its safe choice, so the queue can never jam.
+        if (__msBoxCurrent && !document.documentElement.contains(__msBoxCurrent.overlay)) __msBoxCurrent.dismiss();
+        if (__msBoxCurrent || !__msBoxQueue.length) return;
+        if (!document.body) { setTimeout(__msBoxNext, 50); return; }
+        __msBoxShow(__msBoxQueue.shift());
+    }
+
+    function __msBoxShow(req) {
+        __msBoxStyles();
+        var kind = req.kind, o = req.opts || {}, message = req.message;
+        var danger = (kind === 'confirm' && (o.danger === 'ok' || o.danger === 'cancel')) ? o.danger : '';
+        var enterYes = danger ? (danger === 'cancel') : true;    // what Return answers (questions)
+        var escYes = (danger === 'cancel');                       // what Esc answers (questions)
+        var prevFocus = document.activeElement;
+        var id = ++__msBoxSeq;
+
+        var overlay = document.createElement('div');
+        overlay.className = 'ms-ask-overlay';
+        overlay.setAttribute('data-ms-ask', kind);
+        var box = document.createElement('div');
+        box.className = 'ms-ask-box' + (danger === 'ok' ? ' is-danger' : '');
+        box.setAttribute('role', kind === 'alert' ? 'alertdialog' : 'dialog');
+        box.setAttribute('aria-modal', 'true');
+        box.setAttribute('aria-describedby', 'msAskMsg' + id);
+        var row = document.createElement('div');
+        row.className = 'ms-ask-row';
+        var icon = document.createElement('i');
+        icon.className = 'ms-ask-icon fas ' + (danger === 'ok' ? 'fa-exclamation-triangle' : (kind === 'alert' ? 'fa-info-circle' : 'fa-question-circle'));
+        icon.setAttribute('aria-hidden', 'true');
+        var msg = document.createElement('div');
+        msg.className = 'ms-ask-msg';
+        msg.id = 'msAskMsg' + id;
+        msg.textContent = (message === undefined || message === null) ? '' : String(message);
+        row.appendChild(icon);
+        row.appendChild(msg);
+        box.appendChild(row);
+
+        var input = null;
+        if (kind === 'prompt') {
+            input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'ms-ask-input';
+            if (req.defaultValue !== undefined && req.defaultValue !== null) input.value = String(req.defaultValue);
+            box.appendChild(input);
+        }
+        var btns = document.createElement('div');
+        btns.className = 'ms-ask-btns';
+        var cancelBtn = null;
+        if (kind !== 'alert') {
+            cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'ms-ask-btn ms-ask-cancel' + (danger === 'cancel' ? ' is-danger-quiet' : '');
+            cancelBtn.textContent = (kind === 'confirm' && o.cancel) ? String(o.cancel) : 'Cancel';
+            btns.appendChild(cancelBtn);
+        }
+        var okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.className = 'ms-ask-btn ms-ask-ok ' + (danger === 'ok' ? 'is-danger' : 'is-primary');
+        okBtn.textContent = (kind === 'confirm' && o.ok) ? String(o.ok) : 'OK';
+        btns.appendChild(okBtn);
+        box.appendChild(btns);
+        var defBtn = (kind === 'confirm' && !enterYes) ? cancelBtn : okBtn;
+        defBtn.classList.add('is-default');
+        if (kind === 'confirm') {
+            var keys = document.createElement('div');
+            keys.className = 'ms-ask-keys';
+            keys.textContent = 'Return = ' + (enterYes ? okBtn : cancelBtn).textContent +
+                               ' · Esc = ' + (escYes ? okBtn : cancelBtn).textContent;
+            box.appendChild(keys);
+        }
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        var settled = false;
+        function settle(value, how) {
+            if (settled) return;
+            settled = true;
+            window.removeEventListener('keydown', onKey, true);
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            __msBoxCurrent = null;
+            if (kind !== 'alert') {
+                window.__msEarlyDiag('INFO', 'Question answered: ' + how, {
+                    question: String(message === undefined || message === null ? '' : message).replace(/\s+/g, ' ').slice(0, 120)
+                });
+            }
+            try { if (prevFocus && prevFocus.focus && document.documentElement.contains(prevFocus)) prevFocus.focus(); } catch (e) {}
+            try { req.resolve(value); } finally { setTimeout(__msBoxNext, 0); }
+        }
+        function answer(yes, how) {
+            if (kind === 'prompt') settle(yes ? (input ? input.value : '') : null, how);
+            else if (kind === 'confirm') settle(!!yes, how);
+            else settle(undefined, how);
+        }
+        okBtn.addEventListener('click', function () { answer(true, '"' + okBtn.textContent + '"'); });
+        if (cancelBtn) cancelBtn.addEventListener('click', function () { answer(false, '"' + cancelBtn.textContent + '"'); });
+        function onKey(e) {
+            e.stopPropagation();                  // nothing behind the box hears the keyboard
+            if (e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') {
+                if (!box.contains(e.target)) e.preventDefault();   // and nothing behind it can be typed into
+                return;
+            }
+            e.preventDefault();
+            if (e.repeat) return;                 // a held-down key answers nothing
+            if (e.key === 'Enter') {
+                var a = document.activeElement;
+                if (a === okBtn) answer(true, 'Return on "' + okBtn.textContent + '"');
+                else if (cancelBtn && a === cancelBtn) answer(false, 'Return on "' + cancelBtn.textContent + '"');
+                else if (kind === 'confirm') answer(enterYes, 'Return ("' + (enterYes ? okBtn : cancelBtn).textContent + '")');
+                else answer(true, 'Return');
+            } else if (e.key === 'Escape') {
+                if (kind === 'confirm') answer(escYes, 'Esc ("' + (escYes ? okBtn : cancelBtn).textContent + '")');
+                else answer(false, 'Esc');
+            } else {
+                var order = [input, cancelBtn, okBtn].filter(Boolean);
+                var i = order.indexOf(document.activeElement);
+                var next = e.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i < 0 || i === order.length - 1 ? 0 : i + 1);
+                try { order[next].focus(); } catch (x) {}
+            }
+        }
+        // Capture phase on window, added while the triggering event (if any)
+        // is already past it — so the Return or click that started the action
+        // can never answer this box.
+        window.addEventListener('keydown', onKey, true);
+        __msBoxCurrent = { overlay: overlay, dismiss: function () {
+            answer(kind === 'confirm' ? escYes : false, 'box closed without an answer');
+        } };
+        try { if (input) { input.focus(); input.select(); } else defBtn.focus(); } catch (e) {}
+    }
+
     window.__msPrompt = function (message, defaultValue) {
         return __msBuildModal(message, 'prompt', defaultValue);
     };
-    window.__msConfirm = function (message) {
-        return __msBuildModal(message, 'confirm');
+    window.__msConfirm = function (message, opts) {
+        return __msBuildModal(message, 'confirm', undefined, opts);
     };
     window.__msAlert = function (message) {
         return __msBuildModal(message, 'alert');
+    };
+    // Phase 8ES — the helper every CRM question goes through.
+    window.__msAskBox = window.__msConfirm;
+    window.__msAsk = async function (message, opts) {
+        try {
+            return (await window.__msAskBox(message, opts)) === true;
+        } catch (e) {
+            window.__msEarlyDiag('WARN', 'Question box failed; treated as No', { error: String((e && e.message) || e) });
+            return false;
+        }
     };
 
     // ── Snapshot ─────────────────────────────────────────────────────────
@@ -6351,9 +6481,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // Remove an uploaded file from a row.
-    window.__msRemoveDocUpload = function (row, entityType) {
+    window.__msRemoveDocUpload = async function (row, entityType) {
         if (!row) return;
-        if (!confirm('Remove the uploaded PDF for this row? (The link/path stays.)')) return;
+        if (!(await __msAsk('Remove the uploaded PDF for this row? (The link/path stays.)', { ok: 'Remove', danger: 'ok' }))) return;
         var idAttr = entityType === 'apinvoice' ? 'data-apid' : 'data-cpoid';
         var entId = row.getAttribute(idAttr) || '';
         var attId = row.getAttribute('data-upload-attid') || '';
@@ -6404,10 +6534,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
     };
 
-    window.__msRemoveInternalPOUpload = function () {
+    window.__msRemoveInternalPOUpload = async function () {
         var statusEl = document.getElementById('internalPOUploadStatus');
         if (!statusEl) return;
-        if (!confirm('Remove the uploaded PDF for the Internal PO? (The link/path stays.)')) return;
+        if (!(await __msAsk('Remove the uploaded PDF for the Internal PO? (The link/path stays.)', { ok: 'Remove', danger: 'ok' }))) return;
         var attId = statusEl.getAttribute('data-attid') || '';
         var entId = statusEl.getAttribute('data-entid') || '';
         if (attId) { try { window.__msPurgeAttachment('internalpo', entId, attId); } catch (e) {} }
@@ -14166,6 +14296,24 @@ window.__msRenderMissingOneDriveLinks = function () {
 
 <script>
 
+// Phase 8ES — every question in the CRM ("Delete ...?", "Restore ...?") goes
+// through window.__msAsk, which returns a Promise that settles only when the
+// user answers. In the Mac app the shim (script block 3) defines it with the
+// in-app question box. This fallback serves the standalone-browser shell,
+// where the browser's own box blocks and returns a real answer. Anything
+// unexpected counts as "No".
+if (typeof window.__msAsk !== 'function') {
+    window.__msAsk = async function (message) {
+        try {
+            var answer = window.confirm(String(message));
+            if (answer && typeof answer.then === 'function') answer = await answer;
+            return answer === true;
+        } catch (e) {
+            return false;
+        }
+    };
+}
+
 // --- THEME INITIALIZATION ---
 function toggleTheme() {
     document.body.classList.toggle('dark-mode');
@@ -14916,11 +15064,11 @@ function cpEmailTplSave() {
     var note = document.getElementById('cpEmailTplSavedNote');
     if (note) { note.style.display = 'inline'; setTimeout(function () { if (note) note.style.display = 'none'; }, 2500); }
 }
-function cpEmailTplReset() {
+async function cpEmailTplReset() {
     var kind = (document.getElementById('cpEmailTplKind') || {}).value;
     var tone = (document.getElementById('cpEmailTplTone') || {}).value;
     if (!kind || !tone) return;
-    if (!confirm('Reset this template to the built-in default? Your custom text for this type and tone will be lost.')) return;
+    if (!(await __msAsk('Reset this template to the built-in default? Your custom text for this type and tone will be lost.', { ok: 'Reset', danger: 'ok' }))) return;
     var defs = _emailTemplatesDefaults();
     if (defs[kind] && defs[kind][tone]) {
         if (!companyProfile.emailTemplates) companyProfile.emailTemplates = {};
@@ -15588,14 +15736,14 @@ async function cpTplNew(type) {
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-plus-circle" style="color:var(--success);"></i> Template <strong>${pEsc(newTpl.name)}</strong> created. Add terms and remember to save Company Profile.`);
 }
 
-function cpTplDelete(type) {
+async function cpTplDelete(type) {
     const activeId = window.__cpTplActiveId[type];
     const tpl = getTemplateById(type, activeId);
     if (!tpl) return;
     const list = getTemplates(type);
     if (list.length === 1) { alert(`Cannot delete the only ${type} template. Create another one first.`); return; }
     if (tpl.isDefault) { alert(`Cannot delete the default template. Mark another template as default first, then delete this one.`); return; }
-    if (!confirm(`Delete template "${tpl.name}"? Documents already created using this template are not affected, but you won't be able to select it for new documents.`)) return;
+    if (!(await __msAsk(`Delete template "${tpl.name}"? Documents already created using this template are not affected, but you won't be able to select it for new documents.`, { ok: 'Delete', danger: 'ok' }))) return;
     companyProfile.termsTemplates[type] = list.filter(t => t.id !== activeId);
     const newActive = getDefaultTemplate(type);
     if (newActive) {
@@ -17684,7 +17832,7 @@ function onCmDefaultCommercialModelChange() {
     }
 }
 
-function saveClientMasterEntry() {
+async function saveClientMasterEntry() {
     const name = document.getElementById('cmCompanyName').value.trim();
     if (!name) { alert("Company Name is required."); return; }
 
@@ -17694,7 +17842,7 @@ function saveClientMasterEntry() {
     // If name changed during edit, we need to delete old key and migrate
     if (existingKey && existingKey !== key) {
         if (clientMaster[key]) {
-            if (!confirm(`A client named "${key}" already exists. Merging will overwrite it. Continue?`)) return;
+            if (!(await __msAsk(`A client named "${key}" already exists. Merging will overwrite it. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
         }
         // Migrate: remove old, update contract references too
         delete clientMaster[existingKey];
@@ -17730,7 +17878,7 @@ function saveClientMasterEntry() {
     const invalidGstins = gstEntries.filter(e => e.gstin && !isValidGstin(e.gstin));
     if (invalidGstins.length > 0) {
         const bad = invalidGstins.map(e => e.gstin).join(', ');
-        if (!confirm(`The following GSTIN(s) don't match the standard 15-character format:\n\n${bad}\n\nSave anyway?`)) return;
+        if (!(await __msAsk(`The following GSTIN(s) don't match the standard 15-character format:\n\n${bad}\n\nSave anyway?`))) return;
     }
 
     // Derive legacy primary string fields from the primary array entries
@@ -17810,13 +17958,13 @@ function saveClientMasterEntry() {
     populatePortfolioFilter();
 }
 
-function deleteClientMasterEntry(key) {
+async function deleteClientMasterEntry(key) {
     const contractCount = contracts.filter(c => cmKey(c.client) === key).length;
     let msg = `Delete client "${key}" from the master?`;
     if (contractCount > 0) {
         msg += `\n\nNote: ${contractCount} contract(s) reference this client. The contracts will NOT be deleted — only the master record. You can re-sync later if needed.`;
     }
-    if (!confirm(msg)) return;
+    if (!(await __msAsk(msg, { ok: 'Delete', danger: 'ok' }))) return;
     delete clientMaster[key];
     saveClientMasterData();
     populateClientMasterDatalist();
@@ -18132,8 +18280,8 @@ function cpHandleLogoUpload(input) {
     reader.readAsDataURL(file);
 }
 
-function cpClearLogo() {
-    if (!confirm("Remove the company logo?")) return;
+async function cpClearLogo() {
+    if (!(await __msAsk("Remove the company logo?", { ok: 'Remove', danger: 'ok' }))) return;
     companyProfile.logoDataUrl = '';
     const fileEl = document.getElementById('cp_logoFile');
     if (fileEl) fileEl.value = '';
@@ -18159,8 +18307,8 @@ function cpHandleSignatureUpload(input) {
     reader.readAsDataURL(file);
 }
 
-function cpClearSignature() {
-    if (!confirm("Remove the signature image?")) return;
+async function cpClearSignature() {
+    if (!(await __msAsk("Remove the signature image?", { ok: 'Remove', danger: 'ok' }))) return;
     companyProfile.signatureImageDataUrl = '';
     const fileEl = document.getElementById('cp_signatureFile');
     if (fileEl) fileEl.value = '';
@@ -18189,8 +18337,8 @@ function cpHandleStampUpload(input) {
     reader.readAsDataURL(file);
 }
 
-function cpClearStamp() {
-    if (!confirm("Remove the stamp image?")) return;
+async function cpClearStamp() {
+    if (!(await __msAsk("Remove the stamp image?", { ok: 'Remove', danger: 'ok' }))) return;
     companyProfile.stampImageDataUrl = '';
     const fileEl = document.getElementById('cp_stampFile');
     if (fileEl) fileEl.value = '';
@@ -18233,8 +18381,8 @@ function cpHandleBankSignatureUpload(input) {
     reader.readAsDataURL(file);
 }
 
-function cpClearBankSignature() {
-    if (!confirm("Remove the banking signature image?")) return;
+async function cpClearBankSignature() {
+    if (!(await __msAsk("Remove the banking signature image?", { ok: 'Remove', danger: 'ok' }))) return;
     companyProfile.bankSignatureImageDataUrl = '';
     const fileEl = document.getElementById('cp_bankSignatureFile');
     if (fileEl) fileEl.value = '';
@@ -18274,8 +18422,8 @@ function cpHandleLetterheadUpload(input) {
     reader.readAsDataURL(file);
 }
 
-function cpClearLetterhead() {
-    if (!confirm("Remove the letterhead template? Proposal PDFs will revert to the default layout.")) return;
+async function cpClearLetterhead() {
+    if (!(await __msAsk("Remove the letterhead template? Proposal PDFs will revert to the default layout.", { ok: 'Remove', danger: 'ok' }))) return;
     companyProfile.letterheadDataUrl = '';
     const fileEl = document.getElementById('cp_letterheadFile');
     if (fileEl) fileEl.value = '';
@@ -18297,7 +18445,7 @@ function cpRenderLetterheadPreview() {
 }
 
 // Save the form → companyProfile → localStorage
-function cpSave() {
+async function cpSave() {
     const val = (id) => { const el = document.getElementById(id); return el ? (el.value || '').trim() : ''; };
     const valNum = (id, dflt) => { const v = parseFloat(val(id)); return isNaN(v) ? dflt : v; };
 
@@ -18371,7 +18519,7 @@ function cpSave() {
     if (companyProfile.gstin && companyProfile.gstin.length >= 2) {
         const gstState = companyProfile.gstin.substring(0, 2);
         if (companyProfile.stateCode && companyProfile.stateCode !== gstState) {
-            if (!confirm(`Warning: Your GSTIN starts with "${gstState}" but your selected state is code "${companyProfile.stateCode}". This may cause GST calculation errors. Save anyway?`)) {
+            if (!(await __msAsk(`Warning: Your GSTIN starts with "${gstState}" but your selected state is code "${companyProfile.stateCode}". This may cause GST calculation errors. Save anyway?`))) {
                 return;
             }
         }
@@ -18387,8 +18535,8 @@ function cpSave() {
 }
 
 // Reload from storage, discarding unsaved form changes
-function cpReload() {
-    if (cpIsDirty && !confirm("Discard your unsaved changes and reload the last saved profile?")) return;
+async function cpReload() {
+    if (cpIsDirty && !(await __msAsk("Discard your unsaved changes and reload the last saved profile?", { ok: 'Discard changes', danger: 'ok' }))) return;
     initCompanyProfile();
     cpLoadForm();
 }
@@ -19215,8 +19363,8 @@ function addOemFromInlinePanel() {
     setTimeout(function () { closeInlineNewOemPanel(); }, 1400);
 }
 
-function deleteMasterOem(oem) {
-    if(confirm(`Are you sure you want to delete ${oem} and all its products?`)) {
+async function deleteMasterOem(oem) {
+    if(await __msAsk(`Are you sure you want to delete ${oem} and all its products?`, { ok: 'Delete', danger: 'ok' })) {
         delete oemMasterData[oem];
         saveOemMaster();
         // Also remove OEM metadata (state code, GSTIN, address, etc.)
@@ -19319,7 +19467,7 @@ function countOemReferences(oemName) {
     return counts;
 }
 
-function commitOemRename() {
+async function commitOemRename() {
     const input = document.getElementById('oemNameEditInput');
     if (!input || !activeMasterOem) { cancelOemRename(); return; }
     const oldName = activeMasterOem;
@@ -19353,7 +19501,7 @@ function commitOemRename() {
         '  • ' + counts.proposalLines + ' proposal line item' + (counts.proposalLines === 1 ? '' : 's') + '\n\n' +
         'Invoice line items keep the original name in their product description ' +
         '(edit manually per invoice if needed).';
-    if (!confirm(msg)) return;
+    if (!(await __msAsk(msg))) return;
 
     // ---- 1. OEM Master (rekey products list) ----
     if (oemMasterData && Object.prototype.hasOwnProperty.call(oemMasterData, oldName)) {
@@ -19869,13 +20017,13 @@ function commitServicesEditor() {
     if (label) label.textContent = rec.name || '(unnamed)';
 }
 
-function deleteCurrentService() {
+async function deleteCurrentService() {
     const id = document.getElementById('servicesEditor_id').value;
     if (!id) return;
     const list = getServicesCatalog().slice();
     const rec = list.find(s => s.id === id);
     if (!rec) return;
-    if (!confirm(`Delete service "${rec.name || '(unnamed)'}"?\n\nProposals and invoices that reference this service will keep their existing data — only the catalog entry is removed.`)) return;
+    if (!(await __msAsk(`Delete service "${rec.name || '(unnamed)'}"?\n\nProposals and invoices that reference this service will keep their existing data — only the catalog entry is removed.`, { ok: 'Delete', danger: 'ok' }))) return;
     const newList = list.filter(s => s.id !== id);
     setServicesCatalog(newList);
     window.__servicesEditorActiveId = '';
@@ -19991,11 +20139,11 @@ function onProposalServiceChange() {
 
 // Force-reload scope from the currently-selected catalog entry, replacing any
 // edits. Confirms before destruction.
-function reloadProposalScopeFromCatalog() {
+async function reloadProposalScopeFromCatalog() {
     var sel = document.getElementById('proposalServiceId');
     if (!sel || !sel.value) { alert('Pick a service from the catalog first.'); return; }
     if (proposalServiceScopeSections.length > 0) {
-        if (!confirm('This will replace your current scope sections with the catalog template. Continue?')) return;
+        if (!(await __msAsk('This will replace your current scope sections with the catalog template. Continue?', { ok: 'Replace', danger: 'ok' }))) return;
     }
     var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
     var rec = list.find(function (s) { return s.id === sel.value; });
@@ -20175,7 +20323,7 @@ function populateInvoiceServiceCatalogDropdown() {
 
 // Replace the current invoice line items with a single line built from the
 // chosen catalog entry. Confirms before clobbering existing lines.
-function applyInvoiceServicePrefill() {
+async function applyInvoiceServicePrefill() {
     var sel = document.getElementById('invServiceCatalogPick');
     if (!sel || !sel.value) return;
     var list = (typeof getServicesCatalog === 'function') ? getServicesCatalog() : [];
@@ -20190,7 +20338,7 @@ function applyInvoiceServicePrefill() {
         return (li.product || '').trim() || parseFloat(li.qty || 0) > 1 || parseFloat(li.unitPrice || 0) > 0;
     });
     if (hasMeaningful) {
-        if (!confirm('Replace existing invoice line items with the chosen service?')) return;
+        if (!(await __msAsk('Replace existing invoice line items with the chosen service?', { ok: 'Replace', danger: 'ok' }))) return;
     }
 
     // Pre-fill SAC code field
@@ -22145,7 +22293,7 @@ function toggleDetail(row) {
     }
 }
 
-function saveContract() {
+async function saveContract() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     // 8DD — contract type. Service engagements: no OEM/cost side, single
     // full-term billing cycle, fee lives in sellINR.
@@ -22163,7 +22311,7 @@ function saveContract() {
     // 8DD — service engagements: nudge (don't block) if the fee is 0/blank.
     if (isService) {
         const _svcFeeChk = parseFloat(document.getElementById('sellINR').value) || 0;
-        if (_svcFeeChk <= 0 && !confirm("Total Professional Fee is 0 — save this service engagement anyway?")) return;
+        if (_svcFeeChk <= 0 && !(await __msAsk("Total Professional Fee is 0 — save this service engagement anyway?"))) return;
     }
 
     const s = new Date(startEl.value);
@@ -22179,7 +22327,7 @@ function saveContract() {
         const _prevType = (contracts[idx].type === 'service') ? 'service' : 'subscription';
         if (_prevType !== contractType) {
             const _lbl = t => t === 'service' ? 'Service / Consultancy' : 'Subscription / Reseller';
-            if (!confirm(`This contract was saved as ${_lbl(_prevType)} and is being re-saved as ${_lbl(contractType)}.\n\nBilling cycles will be rebuilt for the new type (cycle 1's invoice/payment flags are preserved; extra cycles are dropped when switching to Service). Continue?`)) return;
+            if (!(await __msAsk(`This contract was saved as ${_lbl(_prevType)} and is being re-saved as ${_lbl(contractType)}.\n\nBilling cycles will be rebuilt for the new type (cycle 1's invoice/payment flags are preserved; extra cycles are dropped when switching to Service). Continue?`, { ok: 'Rebuild cycles', danger: 'ok' }))) return;
         }
     }
 
@@ -22681,8 +22829,8 @@ function editContract(i) {
     }
 }
 
-function deleteContract(i) { 
-    if(confirm("Delete contract?")) { 
+async function deleteContract(i) { 
+    if(await __msAsk("Delete contract?", { ok: 'Delete', danger: 'ok' })) { 
         contracts.splice(i,1); 
         persistData();
         renderContracts(); updateClientDropdown(); populatePortfolioFilter(); debouncedCalcDashboard(); 
@@ -23912,7 +24060,7 @@ function importBackup() {
     if (!f) return;
     showStatus('status-restore', 'Restoring...', 'pending');
     const r = new FileReader();
-    r.onload = e => {
+    r.onload = async e => {
         try {
             const parsed = JSON.parse(e.target.result);
 
@@ -23928,7 +24076,7 @@ function importBackup() {
                     ? '\n\nATTACHED FILES: this backup also holds attached files. Restoring will REPLACE all your current attached files with the ones in this file; any added since it was made will be lost.'
                     : (inApp ? '\n\nATTACHED FILES: not in this backup file. Your current attached files (signed PDFs and other uploads) are left as they are.' : '');
                 const exportedAt = parsed._exportedAt ? new Date(parsed._exportedAt).toLocaleString() : 'unknown';
-                if (!confirm(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}${filesNote}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`)) {
+                if (!(await __msAsk(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}${filesNote}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`, { ok: 'Restore', danger: 'ok' }))) {
                     showStatus('status-restore', 'Restore cancelled.');
                     return;
                 }
@@ -23952,7 +24100,7 @@ function importBackup() {
 
             // Format 1 (legacy): plain array of contracts
             if (Array.isArray(parsed)) {
-                if (!confirm(`LEGACY BACKUP DETECTED\n\nThis is an older single-array backup (contracts only — ${parsed.length} contract(s)). Your prospects, proposals, POs, invoices, clients, attachments, and other data will NOT be restored from this file because it doesn't contain them.\n\nContinue anyway?`)) {
+                if (!(await __msAsk(`LEGACY BACKUP DETECTED\n\nThis is an older single-array backup (contracts only — ${parsed.length} contract(s)). Your prospects, proposals, POs, invoices, clients, attachments, and other data will NOT be restored from this file because it doesn't contain them.\n\nContinue anyway?`, { ok: 'Restore', danger: 'ok' }))) {
                     showStatus('status-restore', 'Restore cancelled.');
                     return;
                 }
@@ -24434,7 +24582,7 @@ function processImportFile(input) {
     showStatus('status-import', 'Analyzing file...', 'pending');
     const reader = new FileReader();
     
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
         try {
             const data = new Uint8Array(e.target.result);
             const workbook = XLSX.read(data, { type: 'array', cellDates: true });
@@ -24443,7 +24591,7 @@ function processImportFile(input) {
             
             if(rows.length === 0) { alert("File is empty"); return; }
             
-            if(confirm(`Ready to import ${rows.length} subscriptions?`)) {
+            if(await __msAsk(`Ready to import ${rows.length} subscriptions?`)) {
                 let importCount = 0; let failCount = 0; let failReasons = [];
                 const globalFx = parseFloat(document.getElementById('globalFX').value) || 83.5;
 
@@ -25741,11 +25889,11 @@ function saveProspectFromForm() {
     }
 }
 
-function archiveProspectFromForm() {
+async function archiveProspectFromForm() {
     const idVal = document.getElementById('prospectFormId').value;
     const rec = prospects.find(x => x.id === idVal);
     if (!rec) return;
-    if (!confirm("Archive this prospect? It will be hidden from default views but preserved.")) return;
+    if (!(await __msAsk("Archive this prospect? It will be hidden from default views but preserved."))) return;
     rec.archived = true;
     rec.updatedAt = new Date().toISOString();
     saveProspects();
@@ -25766,12 +25914,12 @@ function restoreProspectFromForm() {
     // Bug fix #40 — see archiveProspectFromForm note above.
 }
 
-function deleteProspectFromForm() {
+async function deleteProspectFromForm() {
     const idVal = document.getElementById('prospectFormId').value;
     const rec = prospects.find(x => x.id === idVal);
     if (!rec) return;
-    if (!confirm("Permanently delete this prospect? This cannot be undone. Consider archiving instead.")) return;
-    if (!confirm("Really delete? This will also remove all activity history for this prospect.")) return;
+    if (!(await __msAsk("Permanently delete this prospect? This cannot be undone. Consider archiving instead.", { ok: 'Delete', danger: 'ok' }))) return;
+    if (!(await __msAsk("Really delete? This will also remove all activity history for this prospect.", { ok: 'Delete', danger: 'ok' }))) return;
     prospects = prospects.filter(x => x.id !== idVal);
     saveProspects();
     closeProspectForm();
@@ -26033,11 +26181,11 @@ function saveActivityFromForm() {
     renderActivityFeed(p);
 }
 
-function deleteActivity(actId) {
+async function deleteActivity(actId) {
     if (!currentProspectDetailId) return;
     const p = prospects.find(x => x.id === currentProspectDetailId);
     if (!p) return;
-    if (!confirm("Delete this activity entry?")) return;
+    if (!(await __msAsk("Delete this activity entry?", { ok: 'Delete', danger: 'ok' }))) return;
     p.activities = (p.activities || []).filter(a => a.id !== actId);
     p.updatedAt = new Date().toISOString();
     saveProspects();
@@ -26253,14 +26401,14 @@ function processProspectImport(input) {
     const file = input.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
         try {
             const data = new Uint8Array(e.target.result);
             const wb = XLSX.read(data, { type: 'array', cellDates: true });
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(sheet);
             if (!rows || rows.length === 0) { alert("File is empty."); return; }
-            if (!confirm(`Import ${rows.length} prospects? New rows will be added (existing ones with matching IDs will be updated).`)) return;
+            if (!(await __msAsk(`Import ${rows.length} prospects? New rows will be added (existing ones with matching IDs will be updated).`))) return;
             let added = 0, updated = 0, failed = 0;
             rows.forEach((row, ix) => {
                 try {
@@ -26917,13 +27065,13 @@ function clearProposalsFilters() {
 }
 
 // ===== Form (Create / Edit) =====
-function openProposalForm(id) {
+async function openProposalForm(id) {
     setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #38 — Modal converted to a full-page tab. Navigate via showTab().
     const title = document.getElementById('proposalFormTitle');
     // Warn if Company Profile isn't set up
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. Proposals can still be drafted, but generated PDFs will be missing GSTIN, bank details, or signatory.\n\nContinue anyway?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. Proposals can still be drafted, but generated PDFs will be missing GSTIN, bank details, or signatory.\n\nContinue anyway?"))) return false;
     }
     populateProposalClientDropdown();
     populateProposalProspectDropdown();
@@ -27193,13 +27341,13 @@ function onProposalBillingChange() {
 }
 
 // When a prospect is chosen, pre-populate client / subject / line items
-function onProposalProspectChange() {
+async function onProposalProspectChange() {
     const pid = document.getElementById('proposalProspectId').value;
     if (!pid) return;
     if (typeof prospects === 'undefined') return;
     const prospect = prospects.find(x => x.id === pid);
     if (!prospect) return;
-    if (!confirm(`Pre-populate this proposal from prospect "${prospect.oppName}"?\n\nThis will overwrite the current client, subject, and line items.`)) {
+    if (!(await __msAsk(`Pre-populate this proposal from prospect "${prospect.oppName}"?\n\nThis will overwrite the current client, subject, and line items.`, { ok: 'Pre-fill', danger: 'ok' }))) {
         // Reset selection back to ''
         document.getElementById('proposalProspectId').value = '';
         return;
@@ -27808,10 +27956,10 @@ function attachAllTermsToolbars() {
 
 /* =============== END TERMS TOOLBAR MODULE =============== */
 
-function loadDefaultProposalTerms() {
+async function loadDefaultProposalTerms() {
     const termsEl = document.getElementById('proposalTerms');
     if (!termsEl) return;
-    if (termsEl.value.trim() && !confirm("Replace current terms with default from Company Profile (or client-specific override if any)?")) return;
+    if (termsEl.value.trim() && !(await __msAsk("Replace current terms with default from Company Profile (or client-specific override if any)?", { ok: 'Replace', danger: 'ok' }))) return;
     const clientName = (document.getElementById('proposalClient') || {}).value || '';
     const eff = getEffectiveTerms('proposal', clientName);
     // For proposals the single textarea holds both T&C and payment terms — compose
@@ -27826,12 +27974,12 @@ function loadDefaultProposalTerms() {
 }
 
 // Load defaults from Company Profile (or client override) into the PO form (Phase 3 addendum)
-function loadDefaultPOTerms() {
+async function loadDefaultPOTerms() {
     const termsEl = document.getElementById('poTerms');
     const payEl = document.getElementById('poPaymentTerms');
     if (!termsEl && !payEl) return;
     const hasContent = (termsEl && termsEl.value.trim()) || (payEl && payEl.value.trim());
-    if (hasContent && !confirm("Replace current PO terms and payment terms with defaults (or client override)?")) return;
+    if (hasContent && !(await __msAsk("Replace current PO terms and payment terms with defaults (or client override)?", { ok: 'Replace', danger: 'ok' }))) return;
     // Note: PO form uses OEM client (poClient is the OEM). Since OEMs don't have custom terms
     // the way customer clients do, we always fall back to Company Profile defaults for POs.
     // However if a user has set OEM custom terms via Client Master (OEMs as clients), honour them.
@@ -27847,11 +27995,11 @@ function loadDefaultPOTerms() {
 // Phase 8K — load the company-profile-level Default Instructions to Vendor
 // into the per-PO textarea. Mirrors loadDefaultPOTerms() but for the single
 // global instructions field.
-function loadDefaultPOInstructions() {
+async function loadDefaultPOInstructions() {
     const el = document.getElementById('poInstructionsToVendor');
     if (!el) return;
     const def = (companyProfile && companyProfile.defaultPOInstructions) || '';
-    if (el.value.trim() && !confirm("Replace current Instructions with the default from Company Profile?")) return;
+    if (el.value.trim() && !(await __msAsk("Replace current Instructions with the default from Company Profile?", { ok: 'Replace', danger: 'ok' }))) return;
     el.value = def;
     if (typeof showProspectToast === 'function') {
         showProspectToast(`<i class="fas fa-file-import" style="color:var(--accent-cyan);"></i> Instructions loaded from Company Profile.`);
@@ -27927,12 +28075,12 @@ async function fetchPOFX() {
 }
 
 // Load defaults from Company Profile (or client override) into the Invoice form (Phase 3 addendum)
-function loadDefaultInvoiceTerms() {
+async function loadDefaultInvoiceTerms() {
     const termsEl = document.getElementById('invTerms');
     const payEl = document.getElementById('invPaymentTerms');
     if (!termsEl && !payEl) return;
     const hasContent = (termsEl && termsEl.value.trim()) || (payEl && payEl.value.trim());
-    if (hasContent && !confirm("Replace current invoice terms and payment terms with defaults (or client override)?")) return;
+    if (hasContent && !(await __msAsk("Replace current invoice terms and payment terms with defaults (or client override)?", { ok: 'Replace', danger: 'ok' }))) return;
     const clientName = (document.getElementById('invClient') || {}).value || '';
     const eff = getEffectiveTerms('invoice', clientName);
     if (termsEl) termsEl.value = eff.terms || '';
@@ -27945,7 +28093,7 @@ function loadDefaultInvoiceTerms() {
 // Preview how Terms & Payment Terms will render on the generated PDF (Phase 3 addendum — T-1)
 // Document-form template picker change handler (Phase 3 addendum — T-2)
 // Loads the selected template's contents into the form's Terms/Payment fields.
-function onDocumentTemplateChange(type, templateId) {
+async function onDocumentTemplateChange(type, templateId) {
     if (!templateId) return;
     const tpl = getTemplateById(type, templateId);
     if (!tpl) return;
@@ -27963,7 +28111,7 @@ function onDocumentTemplateChange(type, templateId) {
     // Warn if existing content would be overwritten
     const hasContent = (termsEl && termsEl.value.trim()) || (payEl && payEl.value.trim());
     if (hasContent) {
-        if (!confirm(`Load template "${tpl.name}" and replace current terms? Current content will be lost.`)) {
+        if (!(await __msAsk(`Load template "${tpl.name}" and replace current terms? Current content will be lost.`, { ok: 'Replace', danger: 'ok' }))) {
             // Revert the dropdown to the previous selection (we don't track that explicitly,
             // so just leave the fields alone — the dropdown selection stays on the chosen one
             // but the user sees their content is still intact; they can switch back manually).
@@ -28102,7 +28250,7 @@ function updateProposalTerm() {
     out.value = msFormatTermLabel(msComputeTermMonths(sEl.value, eEl.value));
 }
 
-function saveProposalFromForm() {
+async function saveProposalFromForm() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const client = document.getElementById('proposalClient').value;
     const subject = document.getElementById('proposalSubject').value.trim();
@@ -28117,7 +28265,7 @@ function saveProposalFromForm() {
         if (!isFinite(svcFee) || svcFee <= 0) { alert("Please enter a valid Total Professional Fee (positive number)."); return; }
     } else {
         if (proposalFormLineItems.length === 0) {
-            if (!confirm("No line items — proposal will be empty. Save anyway?")) return;
+            if (!(await __msAsk("No line items — proposal will be empty. Save anyway?"))) return;
         }
     }
 
@@ -28428,11 +28576,11 @@ function syncProposalToProspect(proposal, isNewProposal) {
     }
 }
 
-function deleteProposalFromForm() {
+async function deleteProposalFromForm() {
     const idVal = document.getElementById('proposalFormId').value;
     const rec = proposals.find(x => x.id === idVal);
     if (!rec) return;
-    if (!confirm(`Permanently delete proposal ${rec.proposalNumber}? This cannot be undone.`)) return;
+    if (!(await __msAsk(`Permanently delete proposal ${rec.proposalNumber}? This cannot be undone.`, { ok: 'Delete', danger: 'ok' }))) return;
     proposals = proposals.filter(x => x.id !== idVal);
     saveProposals();
     closeProposalForm();
@@ -28808,11 +28956,11 @@ function _renderProposalRevisionHistory(p) {
         + '</div>';
 }
 
-function markProposalSent(id) {
+async function markProposalSent(id) {
     const p = proposals.find(x => x.id === id);
     if (!p) return;
     if (p.status !== 'Draft') return;
-    if (!confirm(`Mark proposal ${p.proposalNumber} as Sent?`)) return;
+    if (!(await __msAsk(`Mark proposal ${p.proposalNumber} as Sent?`))) return;
     p.status = 'Sent';
     p.statusHistory = p.statusHistory || [];
     p.statusHistory.push({ status: 'Sent', changedAt: new Date().toISOString() });
@@ -28838,10 +28986,10 @@ function markProposalSent(id) {
     }
 }
 
-function markProposalAccepted(id) {
+async function markProposalAccepted(id) {
     const p = proposals.find(x => x.id === id);
     if (!p) return;
-    if (!confirm(`Mark proposal ${p.proposalNumber} as Accepted?`)) return;
+    if (!(await __msAsk(`Mark proposal ${p.proposalNumber} as Accepted?`))) return;
     const now = new Date().toISOString();
     p.status = 'Accepted';
     p.acceptedAt = now;
@@ -28854,7 +29002,7 @@ function markProposalAccepted(id) {
     if (p.prospectId && typeof prospects !== 'undefined') {
         const prospect = prospects.find(x => x.id === p.prospectId);
         if (prospect && isStageOpen(prospect.stage)) {
-            if (confirm(`Also mark linked prospect "${prospect.oppName}" as Won?`)) {
+            if (await __msAsk(`Also mark linked prospect "${prospect.oppName}" as Won?`)) {
                 prospect.stage = 'Won';
                 prospect.actualCloseDate = now.slice(0, 10);
                 prospect.stageHistory = prospect.stageHistory || [];
@@ -28884,17 +29032,20 @@ function markProposalAccepted(id) {
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-trophy"></i> Proposal <strong>${pEsc(p.proposalNumber)}</strong> marked Accepted!`);
 
     // Offer contract conversion
-    setTimeout(() => {
-        if (confirm(`Convert accepted proposal to a contract now?\n\nThis opens the Provisioning form with client, product, licenses, sell value, and dates pre-populated from the proposal's line items. You can review and save, or cancel.`)) {
+    setTimeout(async () => {
+        if (await __msAsk(`Convert accepted proposal to a contract now?\n\nThis opens the Provisioning form with client, product, licenses, sell value, and dates pre-populated from the proposal's line items. You can review and save, or cancel.`)) {
             convertProposalToContract(p.id);
         }
     }, 500);
 }
 
-function markProposalRejected(id) {
+async function markProposalRejected(id) {
     const p = proposals.find(x => x.id === id);
     if (!p) return;
-    const reason = prompt(`Rejection reason for proposal ${p.proposalNumber} (optional):`);
+    // Phase 8ES — the Mac app's web view has no built-in prompt box: the raw
+    // prompt answered "cancelled" at once, so Reject never ran in the app.
+    const _rejMsg = `Rejection reason for proposal ${p.proposalNumber} (optional):`;
+    const reason = (typeof window.__msPrompt === 'function') ? await window.__msPrompt(_rejMsg, '') : prompt(_rejMsg);
     if (reason === null) return; // cancelled
     const now = new Date().toISOString();
     p.status = 'Rejected';
@@ -28909,7 +29060,7 @@ function markProposalRejected(id) {
     if (p.prospectId && typeof prospects !== 'undefined') {
         const prospect = prospects.find(x => x.id === p.prospectId);
         if (prospect && isStageOpen(prospect.stage)) {
-            if (confirm(`Also mark linked prospect "${prospect.oppName}" as Lost?`)) {
+            if (await __msAsk(`Also mark linked prospect "${prospect.oppName}" as Lost?`)) {
                 prospect.stage = 'Lost';
                 prospect.actualCloseDate = now.slice(0, 10);
                 prospect.lostReasonCategory = 'Other';
@@ -28999,17 +29150,18 @@ function processProposalImport(input) {
 }
 
 // Entry from the prospect detail page — opens the proposal form pre-filled
-function generateProposalFromProspect(prospectId) {
+async function generateProposalFromProspect(prospectId) {
     if (typeof prospects === 'undefined') { alert("Prospects module not loaded."); return; }
     const prospect = prospects.find(x => x.id === prospectId);
     if (!prospect) { alert("Prospect not found."); return; }
     // Switch to proposals tab, open form, then trigger the prospect-based population
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. Generated proposals will be missing GSTIN/bank details. Continue?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. Generated proposals will be missing GSTIN/bank details. Continue?"))) return;
     }
     showTab('proposalsTab');
-    setTimeout(() => {
-        openProposalForm(null);
+    setTimeout(async () => {
+        // Phase 8ES — wait for the form; if it didn't open, don't pre-fill anything.
+        if ((await openProposalForm(null)) === false) return;
         // After the form opens, programmatically set the prospect dropdown and trigger population
         setTimeout(() => {
             const sel = document.getElementById('proposalProspectId');
@@ -30501,14 +30653,14 @@ function openPreviewInPageModal(fullHtml, opts) {
 }
 
 // Opens a new window showing the rendered proposal — usable for print preview
-function previewProposalPDF(proposalId, opts) {
+async function previewProposalPDF(proposalId, opts) {
     opts = opts || {};
     const autoPrint = !!opts.autoPrint;
     const p = proposals.find(x => x.id === proposalId);
     if (!p) { alert("Proposal not found."); return; }
     // Gentle reminder if company profile is incomplete
     if (!isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete — the PDF will be missing fields (GSTIN, bank details, or signatory). Continue anyway?\n\nYou can fix this in System Controls → Company Profile.")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete — the PDF will be missing fields (GSTIN, bank details, or signatory). Continue anyway?\n\nYou can fix this in System Controls → Company Profile."))) return;
     }
     const html = buildProposalPDFHTML(p);
     const titleSuffix = autoPrint ? 'Save as PDF' : 'Preview';
@@ -30632,10 +30784,10 @@ async function convertProposalToContract(proposalId) {
     const p = proposals.find(x => x.id === proposalId);
     if (!p) { alert("Proposal not found."); return; }
     if (p.status !== 'Accepted') {
-        if (!confirm(`Proposal is in '${p.status}' status. Usually you'd convert only Accepted proposals. Continue anyway?`)) return;
+        if (!(await __msAsk(`Proposal is in '${p.status}' status. Usually you'd convert only Accepted proposals. Continue anyway?`))) return;
     }
     if (p.convertedContractIdx !== null && p.convertedContractIdx !== undefined) {
-        if (!confirm(`This proposal has already been converted to a contract. Create another one anyway?`)) return;
+        if (!(await __msAsk(`This proposal has already been converted to a contract. Create another one anyway?`))) return;
     }
     if (p.type !== 'service' && (!p.lineItems || p.lineItems.length === 0)) {
         alert("Proposal has no line items — cannot convert.");
@@ -31199,12 +31351,12 @@ function clearPOsFilters() {
 }
 
 // ===== Form =====
-function openPOForm(id) {
+async function openPOForm(id) {
     setTimeout(__msFormatAllMoney, 0); // 8CV — show Indian commas on populated money fields
     // Bug fix #38 — Modal converted to a full-page tab. Navigate via showTab().
     const title = document.getElementById('poFormTitle');
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. POs can still be drafted but PDFs will be missing GSTIN/bank details.\n\nContinue anyway?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. POs can still be drafted but PDFs will be missing GSTIN/bank details.\n\nContinue anyway?"))) return false;
     }
     populatePOOemDropdown();
     populatePOEndClientDropdown();
@@ -31456,13 +31608,13 @@ function onPOCurrencyChange() {
     updatePOTotalsDisplay();
 }
 
-function onPOProposalChange() {
+async function onPOProposalChange() {
     const pid = document.getElementById('poLinkedProposalId').value;
     if (!pid) return;
     if (typeof proposals === 'undefined') return;
     const proposal = proposals.find(x => x.id === pid);
     if (!proposal) return;
-    if (!confirm(`Pre-populate this PO from proposal "${proposal.proposalNumber} — ${proposal.subject}"?\n\nThis will set the end client and pre-fill line items from the proposal's OEM + product combinations.`)) {
+    if (!(await __msAsk(`Pre-populate this PO from proposal "${proposal.proposalNumber} — ${proposal.subject}"?\n\nThis will set the end client and pre-fill line items from the proposal's OEM + product combinations.`, { ok: 'Pre-fill', danger: 'ok' }))) {
         document.getElementById('poLinkedProposalId').value = '';
         return;
     }
@@ -31724,7 +31876,7 @@ function onPOContractDateChange() {
     }
 }
 
-function savePOFromForm() {
+async function savePOFromForm() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const oem = document.getElementById('poOem').value;
     const subject = document.getElementById('poSubject').value.trim();
@@ -31740,7 +31892,7 @@ function savePOFromForm() {
         return;
     }
     if (poFormLineItems.length === 0) {
-        if (!confirm("No line items — PO will be empty. Save anyway?")) return;
+        if (!(await __msAsk("No line items — PO will be empty. Save anyway?"))) return;
     }
 
     const idVal = document.getElementById('poFormId').value;
@@ -31860,11 +32012,11 @@ function savePOFromForm() {
     }
 }
 
-function deletePOFromForm() {
+async function deletePOFromForm() {
     const idVal = document.getElementById('poFormId').value;
     const rec = purchaseOrders.find(x => x.id === idVal);
     if (!rec) return;
-    if (!confirm(`Permanently delete PO ${rec.poNumber}? This cannot be undone.`)) return;
+    if (!(await __msAsk(`Permanently delete PO ${rec.poNumber}? This cannot be undone.`, { ok: 'Delete', danger: 'ok' }))) return;
     purchaseOrders = purchaseOrders.filter(x => x.id !== idVal);
     savePurchaseOrders();
     closePOForm();
@@ -32009,11 +32161,11 @@ function renderPODetail(po) {
 }
 
 // ===== Status transitions =====
-function markPOIssued(id) {
+async function markPOIssued(id) {
     const po = purchaseOrders.find(x => x.id === id);
     if (!po) return;
     if (po.status !== 'Draft') return;
-    if (!confirm(`Mark PO ${po.poNumber} as Issued? This sends it to the OEM.`)) return;
+    if (!(await __msAsk(`Mark PO ${po.poNumber} as Issued? This sends it to the OEM.`))) return;
     po.status = 'Issued';
     po.statusHistory = po.statusHistory || [];
     po.statusHistory.push({ status: 'Issued', changedAt: new Date().toISOString() });
@@ -32030,10 +32182,10 @@ function markPOIssued(id) {
         }
     }
 }
-function markPOAcknowledged(id) {
+async function markPOAcknowledged(id) {
     const po = purchaseOrders.find(x => x.id === id);
     if (!po) return;
-    if (!confirm(`Mark PO ${po.poNumber} as Acknowledged by OEM?`)) return;
+    if (!(await __msAsk(`Mark PO ${po.poNumber} as Acknowledged by OEM?`))) return;
     const now = new Date().toISOString();
     po.status = 'Acknowledged';
     po.acknowledgedAt = now;
@@ -32045,10 +32197,10 @@ function markPOAcknowledged(id) {
     renderPOsPage();
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-thumbs-up"></i> PO <strong>${pEsc(po.poNumber)}</strong> acknowledged.`);
 }
-function markPOReceived(id) {
+async function markPOReceived(id) {
     const po = purchaseOrders.find(x => x.id === id);
     if (!po) return;
-    if (!confirm(`Mark PO ${po.poNumber} as Received (goods/licenses delivered)?`)) return;
+    if (!(await __msAsk(`Mark PO ${po.poNumber} as Received (goods/licenses delivered)?`))) return;
     const now = new Date().toISOString();
     po.status = 'Received';
     po.receivedAt = now;
@@ -32060,10 +32212,10 @@ function markPOReceived(id) {
     renderPOsPage();
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-box-open"></i> PO <strong>${pEsc(po.poNumber)}</strong> marked Received.`);
 }
-function markPOClosed(id) {
+async function markPOClosed(id) {
     const po = purchaseOrders.find(x => x.id === id);
     if (!po) return;
-    if (!confirm(`Close PO ${po.poNumber}? Typically done after vendor payment is settled.`)) return;
+    if (!(await __msAsk(`Close PO ${po.poNumber}? Typically done after vendor payment is settled.`))) return;
     const now = new Date().toISOString();
     po.status = 'Closed';
     po.closedAt = now;
@@ -32139,8 +32291,9 @@ function generatePOFromProposal(proposalId) {
     const proposal = proposals.find(x => x.id === proposalId);
     if (!proposal) { alert("Proposal not found."); return; }
     showTab('purchaseOrdersTab');
-    setTimeout(() => {
-        openPOForm(null);
+    setTimeout(async () => {
+        // Phase 8ES — wait for the form; if it didn't open, don't pre-fill anything.
+        if ((await openPOForm(null)) === false) return;
         setTimeout(() => {
             // Pre-fill via the linked-proposal picker without the confirm prompt
             const sel = document.getElementById('poLinkedProposalId');
@@ -32193,8 +32346,9 @@ function generatePOFromContract(contractIdx) {
     if (typeof contracts === 'undefined' || !contracts[contractIdx]) { alert("Contract not found."); return; }
     const contract = contracts[contractIdx];
     showTab('purchaseOrdersTab');
-    setTimeout(() => {
-        openPOForm(null);
+    setTimeout(async () => {
+        // Phase 8ES — wait for the form; if it didn't open, don't pre-fill anything.
+        if ((await openPOForm(null)) === false) return;
         setTimeout(() => {
             const ecSel = document.getElementById('poEndClient');
             if (ecSel) {
@@ -32249,14 +32403,14 @@ function generatePOFromContract(contractIdx) {
 // from the PO + Client Master, leaves Client PO container empty for manual
 // entry, and back-links po.linkedContractIdx after saveContract completes
 // (via the window.__msPendingPoToContractLink relay).
-function convertPOToContract(poId) {
+async function convertPOToContract(poId) {
     const po = purchaseOrders.find(x => x.id === poId);
     if (!po) { alert("PO not found."); return; }
     if (po.status === 'Draft' || po.status === 'Cancelled') {
-        if (!confirm(`PO is in '${po.status}' status. Usually you'd convert only Issued/Acknowledged/Received/Closed POs. Continue anyway?`)) return;
+        if (!(await __msAsk(`PO is in '${po.status}' status. Usually you'd convert only Issued/Acknowledged/Received/Closed POs. Continue anyway?`))) return;
     }
     if (po.linkedContractIdx !== '' && po.linkedContractIdx !== null && po.linkedContractIdx !== undefined) {
-        if (!confirm(`This PO is already linked to a contract. Create another one anyway?`)) return;
+        if (!(await __msAsk(`This PO is already linked to a contract. Create another one anyway?`))) return;
     }
     if (!po.lineItems || po.lineItems.length === 0) {
         alert("PO has no line items — cannot convert.");
@@ -32869,13 +33023,13 @@ ${pdfFitScript()}`;
 }
 
 // ===== PDF actions =====
-function previewPOPDF(poId, opts) {
+async function previewPOPDF(poId, opts) {
     opts = opts || {};
     const autoPrint = !!opts.autoPrint;
     const po = purchaseOrders.find(x => x.id === poId);
     if (!po) { alert("PO not found."); return; }
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. The PDF will be missing GSTIN/bank/signatory. Continue?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. The PDF will be missing GSTIN/bank/signatory. Continue?"))) return;
     }
     const html = buildPOPDFHTML(po);
     const titleSuffix = autoPrint ? 'Save as PDF' : 'Preview';
@@ -33928,20 +34082,20 @@ window.__msResumeInvoiceDraft = function () {
     window.scrollTo({ top: 0, behavior: 'instant' });
 };
 
-window.__msDiscardInvoiceDraft = function () {
-    if (!confirm('Discard the invoice draft in progress?\n\nAnything typed but not saved will be lost.')) return;
+window.__msDiscardInvoiceDraft = async function () {
+    if (!(await __msAsk('Discard the invoice draft in progress?\n\nAnything typed but not saved will be lost.', { ok: 'Discard draft', danger: 'ok' }))) return;
     window.__msInvDraftActive = false;
     invFormLineItems = [];
     window.__msUpdateInvDraftPill('');
     if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-trash"></i> Invoice draft discarded.');
 };
 
-function openInvoiceForm(id) {
+async function openInvoiceForm(id) {
     // Phase 8EH — never silently overwrite a live draft.
     if (window.__msInvDraftActive) {
-        if (confirm('You have an invoice in progress that has not been saved yet.\n\nOK \u2014 go back to that draft\nCancel \u2014 start fresh here (the draft is discarded)')) {
+        if (await __msAsk('You have an invoice in progress that has not been saved yet.', { ok: 'Go back to draft', cancel: 'Start fresh (discard draft)', danger: 'cancel' })) {
             window.__msResumeInvoiceDraft();
-            return;
+            return false;   // Phase 8ES — no fresh form opened (callers must not pre-fill)
         }
         window.__msInvDraftActive = false;
     }
@@ -33951,7 +34105,7 @@ function openInvoiceForm(id) {
     // scroll to the top so the user lands at the page header.
     const title = document.getElementById('invFormTitle');
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. Invoices can still be drafted but PDFs will be missing GSTIN/bank details.\n\nContinue anyway?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. Invoices can still be drafted but PDFs will be missing GSTIN/bank details.\n\nContinue anyway?"))) return false;
     }
     populateInvoiceClientDropdown();
     populateInvoiceContractDropdown();
@@ -34778,7 +34932,7 @@ function updateInvoiceTotalsDisplay() {
     `;
 }
 
-function saveInvoiceFromForm() {
+async function saveInvoiceFromForm() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const clientName = document.getElementById('invClient').value;
     const subject = document.getElementById('invSubject').value.trim();
@@ -34798,15 +34952,15 @@ function saveInvoiceFromForm() {
             const _y8ei = (document.getElementById('invLinkedCycleYearIdx') || {}).value || '';
             const _missing8ei = _msInvoiceLinkageGaps(_c8ei, _y8ei);
             if (_missing8ei.length) {
-                if (!confirm('This invoice has no ' + _missing8ei.join(' and ') + '.\n\n'
+                if (!(await __msAsk('This invoice has no ' + _missing8ei.join(' and ') + '.\n\n'
                     + 'In the CA Export that means no OneDrive hyperlink on the invoice number, '
-                    + 'and BUSINESS HEAD falling back to "SERVICE".\n\nSave anyway?')) return;
+                    + 'and BUSINESS HEAD falling back to "SERVICE".\n\nSave anyway?'))) return;
             }
         }
     } catch (_) {}
 
     if (invFormLineItems.length === 0) {
-        if (!confirm("No line items — invoice will have zero total. Save anyway?")) return;
+        if (!(await __msAsk("No line items — invoice will have zero total. Save anyway?"))) return;
     }
 
     const idVal = document.getElementById('invFormId').value;
@@ -34911,11 +35065,11 @@ function saveInvoiceFromForm() {
     }
 }
 
-function deleteInvoiceFromForm() {
+async function deleteInvoiceFromForm() {
     const idVal = document.getElementById('invFormId').value;
     const rec = invoices.find(x => x.id === idVal);
     if (!rec) return;
-    if (!confirm(`Permanently delete invoice ${rec.invoiceNumber}? This cannot be undone.\n\n(Tip: for already-issued invoices, use "Cancelled" or "Credit Note Issued" status instead, to preserve the audit trail.)`)) return;
+    if (!(await __msAsk(`Permanently delete invoice ${rec.invoiceNumber}? This cannot be undone.\n\n(Tip: for already-issued invoices, use "Cancelled" or "Credit Note Issued" status instead, to preserve the audit trail.)`, { ok: 'Delete', danger: 'ok' }))) return;
     // Capture cycle pointer BEFORE removing — we still need it to recompute the cycle.
     const deletedRecCopy = { linkedContractIdx: rec.linkedContractIdx, linkedCycleYearIdx: rec.linkedCycleYearIdx };
     invoices = invoices.filter(x => x.id !== idVal);
@@ -35237,7 +35391,7 @@ function getInvoiceSignedPdfAttachment(inv) {
 // Triggers a hidden file picker so the user doesn't need to navigate to the
 // attachments panel separately. If an existing signed PDF is on file, the user
 // is asked to confirm replacement; the prior attachment is removed first.
-function triggerSignedPdfUpload(invId) {
+async function triggerSignedPdfUpload(invId) {
     diag('INFO', `triggerSignedPdfUpload called`, { invId: invId });
     const inv = invoices.find(x => x.id === invId);
     if (!inv) { diag('ERROR', 'triggerSignedPdfUpload: invoice not found', { invId: invId }); return; }
@@ -35273,7 +35427,7 @@ function triggerSignedPdfUpload(invId) {
     if (isReplace) {
         const cur = getInvoiceSignedPdfAttachment(inv);
         const curName = cur ? cur.filename : '(unknown)';
-        if (!confirm(`Replace existing signed PDF for ${inv.invoiceNumber}?\n\nCurrent file: ${curName}\nThis cannot be undone (the previous file will be deleted from this invoice).`)) {
+        if (!(await __msAsk(`Replace existing signed PDF for ${inv.invoiceNumber}?\n\nCurrent file: ${curName}\nThis cannot be undone (the previous file will be deleted from this invoice).`, { ok: 'Replace', danger: 'ok' }))) {
             diag('INFO', 'triggerSignedPdfUpload: user declined replace confirmation');
             return;
         }
@@ -35403,10 +35557,10 @@ function downloadSignedInvoicePdf(invId) {
     }
 }
 
-function markInvoiceCancelled(id) {
+async function markInvoiceCancelled(id) {
     const inv = invoices.find(x => x.id === id);
     if (!inv) return;
-    if (!confirm(`Cancel invoice ${inv.invoiceNumber}?\n\nFor GST compliance, prefer issuing a Credit Note instead of cancelling. A cancelled invoice should not have been shared with the client or filed in GSTR-1.`)) return;
+    if (!(await __msAsk(`Cancel invoice ${inv.invoiceNumber}?\n\nFor GST compliance, prefer issuing a Credit Note instead of cancelling. A cancelled invoice should not have been shared with the client or filed in GSTR-1.`, { ok: 'Cancel invoice', cancel: 'Keep invoice', danger: 'ok' }))) return;
     const now = new Date().toISOString();
     inv.status = 'Cancelled';
     inv.cancelledAt = now;
@@ -35493,13 +35647,13 @@ function savePaymentFromForm() {
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-money-check-alt" style="color:var(--success);"></i> Payment of <strong>${fmtInr(amount)}</strong> recorded. Outstanding: ${fmtInr(inv.amountOutstanding)}.`);
 }
 
-function deletePaymentFromForm() {
+async function deletePaymentFromForm() {
     const invoiceId = document.getElementById('invPaymentInvoiceId').value;
     const inv = invoices.find(x => x.id === invoiceId);
     if (!inv) return;
     const paymentIdx = parseInt(document.getElementById('invPaymentIdx').value);
     if (isNaN(paymentIdx) || !inv.payments || !inv.payments[paymentIdx]) return;
-    if (!confirm("Delete this payment record? Invoice outstanding will be recalculated.")) return;
+    if (!(await __msAsk("Delete this payment record? Invoice outstanding will be recalculated.", { ok: 'Delete', danger: 'ok' }))) return;
     inv.payments.splice(paymentIdx, 1);
     inv.updatedAt = new Date().toISOString();
     refreshInvoiceComputedFields(inv);
@@ -36299,7 +36453,7 @@ ${pdfFitScript()}`;
 }
 
 // ===== PDF actions =====
-function previewInvoicePDF(invId, opts) {
+async function previewInvoicePDF(invId, opts) {
     opts = opts || {};
     const autoPrint = !!opts.autoPrint;
     // Bug fix #24 — editable QR/IRN mode for the "Send to CA" workflow.
@@ -36307,7 +36461,7 @@ function previewInvoicePDF(invId, opts) {
     const inv = invoices.find(x => x.id === invId);
     if (!inv) { alert("Invoice not found."); return; }
     if (typeof isCompanyProfileComplete === 'function' && !isCompanyProfileComplete()) {
-        if (!confirm("Your Company Profile is incomplete. The invoice PDF will be missing GSTIN/bank/signatory. Continue?")) return;
+        if (!(await __msAsk("Your Company Profile is incomplete. The invoice PDF will be missing GSTIN/bank/signatory. Continue?"))) return;
     }
     const html = buildInvoicePDFHTML(inv, { editableQrIrn: editableQrIrn });
     const titleSuffix = editableQrIrn ? 'Editable for CA' : (autoPrint ? 'Save as PDF' : 'Preview');
@@ -36503,12 +36657,17 @@ function previewInvoicePDF(invId, opts) {
 
         // Reset button — clear edits
         const resetBtn = document.getElementById('btnResetCaEdits');
+        // Phase 8ES — this page normally opens in your default browser (8AC),
+        // where the browser's own question box works. If it ever opens in an app
+        // window instead, the Mac app's dialog plugin turns the question into a
+        // Promise: wait for it, and treat anything but a clear yes as No.
         if (resetBtn) {
             resetBtn.addEventListener('click', function() {
-                if (confirm('Clear pasted QR and typed IRN?')) {
+                Promise.resolve(confirm('Clear pasted QR and typed IRN?')).then(function (ok) {
+                    if (ok !== true) return;
                     clearQrImage();
                     if (irnText) irnText.textContent = '';
-                }
+                }, function () { /* no usable answer: leave the edits alone */ });
             });
         }
 
@@ -36802,7 +36961,7 @@ function findInvoiceForContractCycle(cIdx, yIdx) {
 
 // ===== Entry: Generate invoice from a contract's billing cycle =====
 // Called from AR Register rows + "Invoices to be Raised" dashboard card.
-function generateInvoiceFromContractCycle(cIdx, yIdx) {
+async function generateInvoiceFromContractCycle(cIdx, yIdx) {
     if (typeof contracts === 'undefined' || !contracts[cIdx]) { alert("Contract not found."); return; }
     const contract = contracts[cIdx];
     if (!contract.billingYears || !contract.billingYears[yIdx]) { alert("Billing cycle not found."); return; }
@@ -36810,7 +36969,7 @@ function generateInvoiceFromContractCycle(cIdx, yIdx) {
     // Check for existing linked invoice first (avoid accidental duplication)
     const existing = findInvoiceForContractCycle(cIdx, yIdx);
     if (existing) {
-        if (confirm(`An invoice (${existing.invoiceNumber}) is already linked to this cycle. Open it instead?`)) {
+        if (await __msAsk(`An invoice (${existing.invoiceNumber}) is already linked to this cycle. Open it instead?`)) {
             openInvoiceDetail(existing.id);
         }
         return;
@@ -36818,8 +36977,9 @@ function generateInvoiceFromContractCycle(cIdx, yIdx) {
 
     showTab('invoicesTab');
     // Delay to ensure tab is ready before opening modal
-    setTimeout(() => {
-        openInvoiceForm(null);
+    setTimeout(async () => {
+        // Phase 8ES — wait for the form; if it didn't open, don't pre-fill anything.
+        if ((await openInvoiceForm(null)) === false) return;
         setTimeout(() => {
             // Pre-populate the form
             const cycle = contract.billingYears[yIdx];
@@ -36918,7 +37078,7 @@ function issueCreditNoteForInvoice(invId) {
 
 function closeCreditNoteModal() { document.getElementById('invCreditNoteModal').style.display = 'none'; }
 
-function saveCreditNoteFromForm() {
+async function saveCreditNoteFromForm() {
     const invId = document.getElementById('cnInvoiceId').value;
     const inv = invoices.find(x => x.id === invId);
     if (!inv) return;
@@ -36928,7 +37088,7 @@ function saveCreditNoteFromForm() {
     if (!cnNumber) { alert("Credit note number is required."); return; }
     if (!cnDate) { alert("Credit note date is required."); return; }
     if (!cnReason) { alert("Reason is required for audit trail."); return; }
-    if (!confirm(`Issue credit note ${cnNumber} against invoice ${inv.invoiceNumber}?\n\nThis changes status to "Credit Note Issued" (irreversible for audit integrity — you can only edit the credit note details going forward).`)) return;
+    if (!(await __msAsk(`Issue credit note ${cnNumber} against invoice ${inv.invoiceNumber}?\n\nThis changes status to "Credit Note Issued" (irreversible for audit integrity — you can only edit the credit note details going forward).`, { ok: 'Issue credit note', danger: 'ok' }))) return;
     const now = new Date().toISOString();
     inv.status = 'Credit Note Issued';
     inv.creditNoteNumber = cnNumber;
@@ -37018,7 +37178,7 @@ function clearIrnQrImage() {
     if (_fileEl) _fileEl.value = '';
 }
 
-function saveIRNFromForm() {
+async function saveIRNFromForm() {
     const invId = document.getElementById('irnInvoiceId').value;
     const inv = invoices.find(x => x.id === invId);
     if (!inv) return;
@@ -37028,7 +37188,7 @@ function saveIRNFromForm() {
     const irnSignedQR = document.getElementById('irnSignedQR').value.trim();
     // IRN is a 64-char hex string — light validation, warn but don't block
     if (irnNumber && !/^[a-f0-9]{64}$/i.test(irnNumber)) {
-        if (!confirm("The IRN you entered doesn't look like a standard 64-character hex string. Save anyway?")) return;
+        if (!(await __msAsk("The IRN you entered doesn't look like a standard 64-character hex string. Save anyway?"))) return;
     }
     inv.irn = irnNumber;
     inv.irnAckNumber = irnAckNumber;
@@ -37053,11 +37213,11 @@ function saveIRNFromForm() {
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-qrcode" style="color:var(--success);"></i> IRN saved against invoice ${pEsc(inv.invoiceNumber)}.`);
 }
 
-function clearIRNForInvoice(invId) {
+async function clearIRNForInvoice(invId) {
     const inv = invoices.find(x => x.id === invId);
     if (!inv) return;
     if (!inv.irn && !inv.qrCodeImageDataUrl) return;
-    if (!confirm("Clear the IRN, signed QR, and QR image from this invoice? Use this only if the IRN was cancelled on the IRP portal.")) return;
+    if (!(await __msAsk("Clear the IRN, signed QR, and QR image from this invoice? Use this only if the IRN was cancelled on the IRP portal.", { ok: 'Clear', danger: 'ok' }))) return;
     inv.irn = '';
     inv.irnAckNumber = '';
     inv.irnAckDate = '';
@@ -37546,11 +37706,11 @@ function addRenewalActivity() {
     if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-stream"></i> Activity logged.`);
 }
 
-function deleteRenewalActivity(activityIdx) {
+async function deleteRenewalActivity(activityIdx) {
     const idx = parseInt(document.getElementById('renDetailContractIdx').value);
     const c = contracts[idx];
     if (!c || !Array.isArray(c.renewalActivities)) return;
-    if (!confirm("Delete this activity entry?")) return;
+    if (!(await __msAsk("Delete this activity entry?", { ok: 'Delete', danger: 'ok' }))) return;
     c.renewalActivities.splice(activityIdx, 1);
     try { safeSetStorage(JSON.stringify(contracts)); } catch (e) { console.warn('Contracts save:', e); }
     renderRenewalActivityFeed(c);
@@ -37580,7 +37740,7 @@ function saveRenewalDetail() {
 }
 
 // ===== Generate Renewal Proposal =====
-function generateRenewalProposal(contractIdx) {
+async function generateRenewalProposal(contractIdx) {
     // 8DE — accept an optional contract index so the button on each renewal
     // ROW can call this directly as generateRenewalProposal(i). Called with no
     // argument (from the Renewal Detail modal footer) it falls back to the
@@ -37594,12 +37754,13 @@ function generateRenewalProposal(contractIdx) {
         alert("Proposals module not available.");
         return;
     }
-    if (!confirm(`Create a new proposal for "${c.client}" — renewal of ${c.product}? This will open the proposal form pre-filled.`)) return;
+    if (!(await __msAsk(`Create a new proposal for "${c.client}" — renewal of ${c.product}? This will open the proposal form pre-filled.`))) return;
 
     closeRenewalDetail();
     showTab('proposalsTab');
-    setTimeout(() => {
-        openProposalForm(null);
+    setTimeout(async () => {
+        // Phase 8ES — wait for the form; if it didn't open, don't pre-fill anything.
+        if ((await openProposalForm(null)) === false) return;
         setTimeout(() => {
             const val = (i, v) => { const el = document.getElementById(i); if (el) el.value = v; };
             // Client
@@ -38409,7 +38570,7 @@ function attGetIconClass(mimeType, filename) {
 }
 
 // ===== Add (upload) =====
-function addAttachment(entityType, entityId, file, description, onSuccess) {
+async function addAttachment(entityType, entityId, file, description, onSuccess) {
     // 8AJ — Wrap entire body in try/catch as a safety net. If any unexpected
     // throw happens (e.g., during size math or FileReader setup), it becomes
     // a visible diagnostic instead of a silent UI freeze.
@@ -38455,7 +38616,7 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
     }
     if (globalSize + file.size > ATT_WARN_GLOBAL_BYTES) {
         diag('INFO', `addAttachment: soft warning threshold crossed`, { globalSize: globalSize, addingSize: file.size, warnLimit: ATT_WARN_GLOBAL_BYTES });
-        if (!confirm(`Warning: global attachment storage will exceed ${fmtBytes(ATT_WARN_GLOBAL_BYTES)} (soft limit). Current: ${fmtBytes(globalSize)}. Adding this ${fmtBytes(file.size)} file will bring you close to the hard cap. Continue?`)) {
+        if (!(await __msAsk(`Warning: global attachment storage will exceed ${fmtBytes(ATT_WARN_GLOBAL_BYTES)} (soft limit). Current: ${fmtBytes(globalSize)}. Adding this ${fmtBytes(file.size)} file will bring you close to the hard cap. Continue?`))) {
             diag('INFO', 'addAttachment: user declined soft-limit confirmation');
             return;
         }
@@ -38509,7 +38670,7 @@ function addAttachment(entityType, entityId, file, description, onSuccess) {
 }
 
 // ===== Remove =====
-function removeAttachment(entityType, entityId, attId, onSuccess) {
+async function removeAttachment(entityType, entityId, attId, onSuccess) {
     const key = attEntityKey(entityType, entityId);
     // 8AJ — Always-call-callback fix. The previous code returned early on a
     // missing key/record, which left calling code (e.g. triggerSignedPdfUpload's
@@ -38528,7 +38689,7 @@ function removeAttachment(entityType, entityId, attId, onSuccess) {
     // 8EQ — never delete while the attached files are still loading.
     if (!__msAttachmentsWritable('remove')) return;
     const att = attachments[key].find(a => a.id === attId);
-    if (!confirm(`Delete attachment "${att.filename}" (${fmtBytes(att.sizeBytes)})? This cannot be undone.`)) return;
+    if (!(await __msAsk(`Delete attachment "${att.filename}" (${fmtBytes(att.sizeBytes)})? This cannot be undone.`, { ok: 'Delete', danger: 'ok' }))) return;
     attachments[key] = attachments[key].filter(a => a.id !== attId);
     if (attachments[key].length === 0) delete attachments[key];
     saveAttachments();
@@ -38602,7 +38763,7 @@ function downloadAttachment(attId) {
 }
 
 // ===== Preview =====
-function previewAttachment(attId) {
+async function previewAttachment(attId) {
     const info = findAttachmentById(attId);
     if (!info) { alert("Attachment not found."); return; }
     const att = info.att;
@@ -38636,7 +38797,7 @@ function previewAttachment(attId) {
         w.document.write(fullHtml);
         w.document.close();
     } else {
-        if (confirm(`Preview is only supported for images and PDFs. Download "${att.filename}" instead?`)) {
+        if (await __msAsk(`Preview is only supported for images and PDFs. Download "${att.filename}" instead?`)) {
             downloadAttachment(attId);
         }
     }
@@ -40014,7 +40175,7 @@ function closeResellerMasterForm() {
     showTab(returnTab);
 }
 
-function saveResellerMasterEntry() {
+async function saveResellerMasterEntry() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const name = document.getElementById('rmCompanyName').value.trim();
     if (!name) { alert("Company Name is required."); return; }
@@ -40024,7 +40185,7 @@ function saveResellerMasterEntry() {
 
     if (existingKey && existingKey !== key) {
         if (resellerMaster[key]) {
-            if (!confirm(`A reseller named "${key}" already exists. Merging will overwrite it. Continue?`)) return;
+            if (!(await __msAsk(`A reseller named "${key}" already exists. Merging will overwrite it. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
         }
         delete resellerMaster[existingKey];
     }
@@ -40042,7 +40203,7 @@ function saveResellerMasterEntry() {
     const invalidGstins = gstEntries.filter(e => e.gstin && typeof isValidGstin === 'function' && !isValidGstin(e.gstin));
     if (invalidGstins.length > 0) {
         const bad = invalidGstins.map(e => e.gstin).join(', ');
-        if (!confirm(`The following GSTIN(s) don't match the standard format:\n\n${bad}\n\nSave anyway?`)) return;
+        if (!(await __msAsk(`The following GSTIN(s) don't match the standard format:\n\n${bad}\n\nSave anyway?`))) return;
     }
 
     const contactsArr = rmReadContactsFromForm();
@@ -40111,8 +40272,8 @@ function saveResellerMasterEntry() {
     }
 }
 
-function deleteResellerMasterEntry(key) {
-    if (!confirm(`Delete reseller "${key}" from the master?\n\nThis does NOT affect any existing contracts, invoices, or client records.`)) return;
+async function deleteResellerMasterEntry(key) {
+    if (!(await __msAsk(`Delete reseller "${key}" from the master?\n\nThis does NOT affect any existing contracts, invoices, or client records.`, { ok: 'Delete', danger: 'ok' }))) return;
     delete resellerMaster[key];
     saveResellerMasterData();
     if (rmActiveResellerKey === key) rmActiveResellerKey = null;
@@ -41283,7 +41444,7 @@ function downloadPreRepairBackup() {
     a.click();
 }
 
-function commitProposalClientNameRepair() {
+async function commitProposalClientNameRepair() {
     const ctx = __consistencyRepair_ctx;
     if (!ctx) return;
 
@@ -41307,7 +41468,7 @@ function commitProposalClientNameRepair() {
     const riskyInvoices = selected.invoiceRouting.filter(m => m.status === 'Issued' || m.status === 'Paid');
     if (riskyInvoices.length > 0) {
         const riskTxt = riskyInvoices.map(m => m.invoiceNumber).join(', ');
-        if (!confirm(`Warning: ${riskyInvoices.length} selected invoice${riskyInvoices.length === 1 ? '' : 's'} ${riskyInvoices.length === 1 ? 'is' : 'are'} already Issued or Paid (${riskTxt}).\n\nChanging commercial routing on issued/paid invoices can affect GSTR/audit consistency.\n\nProceed with these repairs?`)) return;
+        if (!(await __msAsk(`Warning: ${riskyInvoices.length} selected invoice${riskyInvoices.length === 1 ? '' : 's'} ${riskyInvoices.length === 1 ? 'is' : 'are'} already Issued or Paid (${riskTxt}).\n\nChanging commercial routing on issued/paid invoices can affect GSTR/audit consistency.\n\nProceed with these repairs?`, { ok: 'Apply repairs', danger: 'ok' }))) return;
     }
 
     // Backup BEFORE any mutation
@@ -41770,7 +41931,7 @@ function closeCommissionPayoutModal() {
     if (m) m.style.display = 'none';
 }
 
-function commitCommissionPayout() {
+async function commitCommissionPayout() {
     __msStripAllMoney(); // 8CV — make every money read in this save comma-safe
     const accrualId = document.getElementById('commissionPayoutAccrualId').value;
     const accrual = (commissionLedger.accruals || []).find(a => a.id === accrualId);
@@ -41789,7 +41950,7 @@ function commitCommissionPayout() {
     const newPaid = currentPaid + amount;
     const accrualTotal = parseFloat(accrual.commissionAmountINR) || 0;
     if (newPaid > accrualTotal + 0.01) {
-        if (!confirm(`This payout (${amount.toFixed(2)}) plus prior payouts (${currentPaid.toFixed(2)}) will exceed the accrual amount (${accrualTotal.toFixed(2)}). Proceed anyway?`)) return;
+        if (!(await __msAsk(`This payout (${amount.toFixed(2)}) plus prior payouts (${currentPaid.toFixed(2)}) will exceed the accrual amount (${accrualTotal.toFixed(2)}). Proceed anyway?`))) return;
     }
 
     const payout = {
@@ -43575,8 +43736,8 @@ window.__diag = (function() {
         const clearBtn = document.createElement('button');
         clearBtn.innerText = '🗑 Clear';
         clearBtn.style.cssText = 'padding:6px 12px; font-size:11.5px; border:1px solid #ccc; background:#f5f5f5; border-radius:4px; cursor:pointer;';
-        clearBtn.onclick = function() {
-            if (confirm('Clear the diagnostic log?')) { clear(); modal.remove(); show(); }
+        clearBtn.onclick = async function() {
+            if (await __msAsk('Clear the diagnostic log?', { ok: 'Clear log', danger: 'ok' })) { clear(); modal.remove(); show(); }
         };
         const closeBtn = document.createElement('button');
         closeBtn.innerText = '✕ Close';
@@ -43809,7 +43970,7 @@ window.__diagResyncInvoiceLinks = function() {
     }
 };
 
-window.__diagRepairOrphans = function() {
+window.__diagRepairOrphans = async function() {
     try {
         // 8EQ — the comparison means something only once the attached files
         // have loaded; before that every signed PDF looks orphaned.
@@ -43832,7 +43993,7 @@ window.__diagRepairOrphans = function() {
         }
         const list = orphans.map(function(inv) { return `  • ${inv.invoiceNumber || inv.id} (orphan ref: ${inv.signedPdfAttachmentId})`; }).join('\n');
         const message = `Found ${orphans.length} invoice(s) with orphaned "signed PDF" references — the metadata says a signed PDF exists, but no actual file is in the database.\n\n${list}\n\nClear these dead references? This will:\n  • Remove the DSC-Signed badge from these invoices\n  • Restore the regular "Upload Signed PDF" workflow\n  • NOT recover any lost PDF files (those are already gone from storage)\n\nProceed?`;
-        if (!confirm(message)) {
+        if (!(await __msAsk(message, { ok: 'Clear references', danger: 'ok' }))) {
             diag('INFO', 'Orphan repair: user declined');
             return;
         }
@@ -44957,11 +45118,11 @@ function saveConsultantPaymentFromForm() {
     showConsultantsSubtab('register');
 }
 
-function deleteConsultantPayment() {
+async function deleteConsultantPayment() {
     const idVal = document.getElementById('conPayFormId').value;
     const rec = consultantPayments.find(p => p.id === idVal);
     if (!rec) return;
-    if (!confirm(`Permanently delete payment ${rec.paymentNumber}? This cannot be undone. Attached files will also be removed.`)) return;
+    if (!(await __msAsk(`Permanently delete payment ${rec.paymentNumber}? This cannot be undone. Attached files will also be removed.`, { ok: 'Delete', danger: 'ok' }))) return;
     consultantPayments = consultantPayments.filter(p => p.id !== idVal);
     // Clean up attachments for this payment
     if (typeof attachments === 'object' && attachments) {
@@ -45133,11 +45294,11 @@ function saveConsultantFromForm() {
     showConsultantsSubtab('master');
 }
 
-function archiveConsultant() {
+async function archiveConsultant() {
     const idVal = document.getElementById('conMasterFormId').value;
     const c = getConsultantById(idVal);
     if (!c) return;
-    if (!confirm(`Archive ${c.name}? They won't appear in new-payment dropdowns. Existing payments are preserved. You can unarchive later.`)) return;
+    if (!(await __msAsk(`Archive ${c.name}? They won't appear in new-payment dropdowns. Existing payments are preserved. You can unarchive later.`))) return;
     c.archived = true;
     c.updatedAt = new Date().toISOString();
     saveConsultants();
@@ -45266,8 +45427,8 @@ function uploadConsultantAttachment(input, entityType, entityId, descTag) {
     input.value = '';  // reset so same file can be re-uploaded if needed
 }
 
-function removeConsultantAttachment(entityType, entityId, attId) {
-    if (!confirm('Remove this file?')) return;
+async function removeConsultantAttachment(entityType, entityId, attId) {
+    if (!(await __msAsk('Remove this file?', { ok: 'Remove', danger: 'ok' }))) return;
     const key = `${entityType}_${entityId}`;
     if (attachments[key]) {
         attachments[key] = attachments[key].filter(a => a.id !== attId);
@@ -48867,11 +49028,11 @@ function onGenDocIssuedFilePicked(input) {
 }
 
 // ---- Delete -----------------------------------------------------------
-function deleteGeneratedDoc(id) {
+async function deleteGeneratedDoc(id) {
     var list = __msLoadGenDocs();
     var d = list.find(function (x) { return x.id === id; });
     if (!d) return;
-    if (!confirm('Delete this generated document' + (d.status === 'issued' ? ' and its issued PDF' : '') + '? This cannot be undone.')) return;
+    if (!(await __msAsk('Delete this generated document' + (d.status === 'issued' ? ' and its issued PDF' : '') + '? This cannot be undone.', { ok: 'Delete', danger: 'ok' }))) return;
     // Remove the issued attachment if present.
     if (d.issuedAttachmentId && typeof attEntityKey === 'function') {
         try {
@@ -50871,13 +51032,14 @@ function __msBuildTemplatePageHtml(t, values, docName) {
         '</body></html>';
 }
 
-function printTemplate() {
+function printTemplate() { return __msPrintTemplate8es(); }   // Phase 8ES: plain wrapper, so the paginator guard region (which ends at this line) stays byte-identical
+async function __msPrintTemplate8es() {
     var t = __msLoadTemplates().find(function (x) { return x.id === __msFillTemplateId; });
     if (!t) { __msToast('Template not found', 'error'); return; }
     // Soft nudge if letterhead isn't configured (still allows plain output).
     var cp = (typeof companyProfile === 'object' && companyProfile) ? companyProfile : {};
     if (!cp.letterheadDataUrl) {
-        if (!confirm('No letterhead image is configured in System Controls, so this will print on a plain page. Continue?')) return;
+        if (!(await __msAsk('No letterhead image is configured in System Controls, so this will print on a plain page. Continue?'))) return;
     }
     // 8BU — guard: if Track is on but no client/Other assigned, block before print.
     if (typeof __msValidateTrackBeforePrint === 'function' && !__msValidateTrackBeforePrint()) return;
@@ -51028,11 +51190,11 @@ function duplicateTemplate(id) {
     __msToast('Template duplicated', 'success');
     renderTemplateLibrary();
 }
-function deleteTemplate(id) {
+async function deleteTemplate(id) {
     var list = __msLoadTemplates();
     var t = list.find(function (x) { return x.id === id; });
     if (!t) return;
-    if (!confirm('Delete template "' + (t.name || '') + '"? This cannot be undone.')) return;
+    if (!(await __msAsk('Delete template "' + (t.name || '') + '"? This cannot be undone.', { ok: 'Delete', danger: 'ok' }))) return;
     __msTemplates = list.filter(function (x) { return x.id !== id; });
     __msPersistTemplates();
     __msToast('Template deleted', 'success');
