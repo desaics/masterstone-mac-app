@@ -6048,17 +6048,21 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // reload or override. We pause polling while the modal is open to avoid
     // re-firing.
     var conflictModalOpen = false;
+    // 8EV — the on/off setting is read once and remembered (the app settings now carry
+    // the expenses, so reading them all every 30 seconds is not free); __msSaveSettings
+    // updates it when the box in Settings is changed.
+    var __msConflictGuardOn = null;
     async function pollConflictGuard() {
         if (conflictModalOpen) return;
         try {
             var t = getTauri();
             if (!t || !t.invoke) return;
             // Skip if user has disabled it via settings
-            var settings = await t.invoke('get_app_settings');
-            if (settings && settings.ok && settings.settings &&
-                settings.settings['ms_app__conflict_guard_enabled'] === '0') {
-                return;
+            if (__msConflictGuardOn === null) {
+                var settings = await t.invoke('get_app_settings');
+                if (settings && settings.ok && settings.settings) __msConflictGuardOn = settings.settings['ms_app__conflict_guard_enabled'] !== '0';
             }
+            if (__msConflictGuardOn === false) return;
             var r = await t.invoke('check_db_conflict');
             if (r && r.ok && r.conflict) {
                 conflictModalOpen = true;
@@ -6217,6 +6221,7 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             for (var i = 0; i < keys.length; i++) {
                 await t.invoke('save_app_setting', { key: keys[i][0], value: keys[i][1] });
             }
+            __msConflictGuardOn = (conflictGuard !== '0');   // 8EV — the poll remembers the setting
 
             window.__msCloseSettings();
             showActionToast('Settings saved.', 'success');
@@ -7597,6 +7602,8 @@ window.__msRenderMissingOneDriveLinks = function () {
   <!-- 8YZ — Consultants module: tracks payments to consultants/freelancers
        who serve across clients. Not PO-driven, not client-linked. -->
   <div class="nav-item" title="Consultants" onclick="showTab('consultantsTab')"><i class="fas fa-user-tie"></i> Consultants</div>
+  <!-- 8EV — Expenses: the bank and card lines from the CA pack, under heads -->
+  <div class="nav-item" title="Expenses" onclick="showTab('expensesTab')"><i class="fas fa-wallet"></i> Expenses</div>
   <!-- Bug fix #27 — Cleanup: removed hidden arApTab nav fallback. Original removal in #13 Batch 3B; transitional stub no longer needed. -->
 
   <div class="nav-section-header">Insights</div>
@@ -12235,6 +12242,11 @@ window.__msRenderMissingOneDriveLinks = function () {
   </div>
 
 </div><!-- end #consultantsTab -->
+
+<!-- ===== Phase 8EV — Expenses (drawn by renderExpensesPage) ===== -->
+<div id="expensesTab" class="hidden">
+  <div id="msExpRoot"></div>
+</div><!-- end #expensesTab -->
 
 <!-- ============================================================================
      8YZ — CONSULTANT PAYMENT FORM (full-page tab, mirrors Invoice form pattern)
@@ -20544,6 +20556,8 @@ async function exportBackup() {
     // browser storage, so this file normally does not carry them. Record it so
     // the summary below and a later restore can say so plainly.
     envelope._attachmentsIncluded = (envelope._storageKeys['ms_attachments_v1'] !== undefined);
+    // 8EV — expenses live in the app's database, not browser storage: they ride along here.
+    try { if (typeof window.__msExpBackupPayload === 'function') envelope._expenses = window.__msExpBackupPayload(); } catch (e) {}
 
     // Update schema meta with last-backup timestamp
     try {
@@ -20557,7 +20571,7 @@ async function exportBackup() {
     const dataStr = JSON.stringify(envelope, null, 2);
     const sizeKB = Math.round(dataStr.length / 1024);
     const counts = envelope._recordCounts;
-    const summary = `${counts.contracts} contracts · ${counts.prospects} prospects · ${counts.proposals} proposals · ${counts.purchaseOrders} POs · ${counts.invoices} invoices · ${counts.clients} clients · ${envelope._attachmentsIncluded ? (counts.attachments + ' attachments') : 'attached files not included (kept in the app database)'} · ${sizeKB} KB`;
+    const summary = `${counts.contracts} contracts · ${counts.prospects} prospects · ${counts.proposals} proposals · ${counts.purchaseOrders} POs · ${counts.invoices} invoices · ${counts.clients} clients · ${envelope._attachmentsIncluded ? (counts.attachments + ' attachments') : 'attached files not included (kept in the app database)'}${(envelope._expenses && envelope._expenses.included) ? ' · ' + envelope._expenses.lines + ' expense entries' : ''} · ${sizeKB} KB`;
 
     const blob = new Blob([dataStr], {type: 'application/json'});
     const a = document.createElement('a');
@@ -20972,7 +20986,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#prospectPipelineTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#prospectFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -21169,6 +21183,15 @@ function showTab(tab) {
         } catch (e) { console.warn('Phase 4A status display:', e); }
         // Phase 4D — render Commission Payable dashboard
         try { if (typeof renderCommissionPayableDashboard === 'function') renderCommissionPayableDashboard(); } catch (e) { console.warn('Commission dashboard:', e); }
+    }
+
+    // Phase 8EV — Expenses: draw the page, and look in the CA pack if that hasn't
+    // happened in the last two minutes.
+    if (tab === 'expensesTab') {
+        try {
+            if (typeof renderExpensesPage === 'function') renderExpensesPage();
+            if (typeof __msExpCheck === 'function' && __msExp.state === 'ready' && !__msExp.check.running && Date.now() - (__msExp.check.at || 0) > 120000) __msExpCheck();
+        } catch (e) { console.warn('Expenses tab error:', e); }
     }
 
     // Phase 8EH — show/hide the "invoice draft in progress" pill.
@@ -23881,6 +23904,22 @@ function closeUnifiedModal() {
     document.getElementById('unifiedCycleModal').style.display = 'none'; 
 }
 
+// 8EV — GST / TDS on a vendor bill row of the open Manage Cycle window, read live
+// like the rest of the export: what the 8ET boxes hold (a box that isn't a number
+// counts as what was saved, as Save does). Overseas OEM bills: none (reverse
+// charge; the CA export never uses figures on them). '' = not recorded.
+function __msCycleApTax(row) {
+    if (row.getAttribute('data-taxkind') === 'foreign' || !row.querySelector('.ap-gst')) return { gst: '', tds: '' };
+    const rec = __msApTaxRead(row, {});
+    return { gst: __msApHasNum(rec.gstAmount) ? Number(rec.gstAmount) : '', tds: __msApHasNum(rec.tdsAmount) ? Number(rec.tdsAmount) : '' };
+}
+// 8EV — the Invoices module's issued invoice with this number (not a draft, not cancelled).
+function __msCycleArInvoice(no) {
+    const k = String(no || '').trim().toLowerCase();
+    if (!k || typeof invoices === 'undefined' || !Array.isArray(invoices)) return null;
+    return invoices.find(i => i && String(i.invoiceNumber || '').trim().toLowerCase() === k && i.status !== 'Draft' && i.status !== 'Cancelled') || null;
+}
+
 // 8DC — Export the currently-open "Manage Cycle" modal (one contract cycle:
 // its AR client invoices + AP vendor invoices) to a single-sheet Excel.
 // Reads the LIVE modal rows (so unsaved edits are captured), mirrors the
@@ -23923,7 +23962,7 @@ function exportCycleExcel() {
         const fx = __msNumVal(row.querySelector('.ap-fx'));
         const pd = row.querySelector('.ap-paydate') ? row.querySelector('.ap-paydate').value : '';
         const lk = (row.querySelector('.ap-link') ? row.querySelector('.ap-link').value : '').trim();
-        if (no || dt || amt > 0) { apRows.push({ no, dt, amt, fx, pd, lk }); apSum += amt; apWFx += amt * fx; }
+        if (no || dt || amt > 0) { apRows.push({ no, dt, amt, fx, pd, lk, tax: __msCycleApTax(row) }); apSum += amt; apWFx += amt * fx; }   // 8EV — + GST/TDS
     });
 
     // --- FX + realized margin (mirror updateModalSums) ---
@@ -23973,36 +24012,62 @@ function exportCycleExcel() {
 
     // AR table
     aoa.push(['ACCOUNTS RECEIVABLE (Client Invoices)']);
-    aoa.push(['Invoice #', 'Date Raised', 'Amount (INR)', 'Date Paid', 'Document Link']);
-    let arTot = 0;
+    // 8EV — + GST and the invoice total, from the Invoices module's issued invoice with that number
+    aoa.push(['Invoice #', 'Date Raised', 'Amount (INR)', 'GST (INR)', 'Invoice Total (INR)', 'Date Paid', 'Document Link']);
+    let arTot = 0, arGst = 0, arAny = false;
     arRows.forEach(rw => {
-        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), toD(rw.pd), rw.lk]);
-        dateCells.push({ r: at(), c: 1 }); dateCells.push({ r: at(), c: 3 });
-        moneyCells.push({ r: at(), c: 2 });
+        const inv = __msCycleArInvoice(rw.no);
+        const g = inv ? r2((parseFloat(inv.cgst) || 0) + (parseFloat(inv.sgst) || 0) + (parseFloat(inv.igst) || 0)) : '';
+        const tot = inv ? r2(inv.grandTotal) : '';
+        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), g, tot, toD(rw.pd), rw.lk]);
+        dateCells.push({ r: at(), c: 1 }); dateCells.push({ r: at(), c: 5 });
+        moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 3 }); moneyCells.push({ r: at(), c: 4 });
         arTot += rw.amt;
+        if (inv) { arAny = true; arGst += g; }
     });
     if (arRows.length === 0) aoa.push(['(no client invoices entered)']);
-    aoa.push(['', 'Total Entered (INR)', r2(arTot), '', '']); moneyCells.push({ r: at(), c: 2 });
+    // totals: GST as found; Invoice Total = Amount + GST, so the totals row adds up (a blank counts as 0)
+    aoa.push(['', 'Total Entered (INR)', r2(arTot), arAny ? r2(arGst) : '', arAny ? r2(arTot + arGst) : '', '', '']);
+    moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 3 }); moneyCells.push({ r: at(), c: 4 });
+    if (arRows.length) aoa.push(['', 'GST and Invoice Total come from the Invoices module (issued invoice with that number); blank = no such invoice there. Totals row: GST as found, Invoice Total = Amount total + GST total.']);
     aoa.push([]);
 
     // AP table
     aoa.push(['ACCOUNTS PAYABLE (Vendor Invoices)']);
-    aoa.push(['OEM Inv #', 'Date Raised', 'Amount (' + costCur + ')', 'FX Rate', 'Date Paid', 'INR Value', 'Document Link']);
+    // 8EV — + GST (split as the CA export splits it), TDS and the net after TDS, as recorded on each bill (8ET)
+    aoa.push(['OEM Inv #', 'Date Raised', 'Amount (' + costCur + ')', 'FX Rate', 'Date Paid', 'INR Value', 'GST (INR)', 'CGST (INR)', 'SGST (INR)', 'IGST (INR)', 'TDS (INR)', 'Net after TDS (INR)', 'Document Link']);
     let apInrTot = 0;
+    const apTaxTot = { gst: 0, cgst: 0, sgst: 0, igst: 0, tds: 0, net: 0, any: false };
+    const apOem = (typeof __msApRowCtx === 'function') ? __msApRowCtx().oem : '';
     apRows.forEach(rw => {
         const inr = isINR ? rw.amt : rw.amt * (rw.fx || effFX);
-        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), (isINR ? '' : (rw.fx || '')), toD(rw.pd), r2(inr), rw.lk]);
+        const tx = rw.tax || { gst: '', tds: '' };
+        const has = tx.gst !== '' || tx.tds !== '';
+        const sp = (tx.gst !== '' && typeof __msOemGstSplit === 'function') ? __msOemGstSplit(apOem, tx.gst) : { cgst: '', sgst: '', igst: '' };
+        const net = has ? r2(inr + (tx.gst === '' ? 0 : tx.gst) - (tx.tds === '' ? 0 : tx.tds)) : '';
+        aoa.push([rw.no, toD(rw.dt), r2(rw.amt), (isINR ? '' : (rw.fx || '')), toD(rw.pd), r2(inr),
+                  tx.gst === '' ? '' : r2(tx.gst), tx.gst === '' ? '' : r2(sp.cgst), tx.gst === '' ? '' : r2(sp.sgst), tx.gst === '' ? '' : r2(sp.igst),
+                  tx.tds === '' ? '' : r2(tx.tds), net, rw.lk]);
         dateCells.push({ r: at(), c: 1 }); dateCells.push({ r: at(), c: 4 });
-        moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 5 });
+        [2, 5, 6, 7, 8, 9, 10, 11].forEach(cc => moneyCells.push({ r: at(), c: cc }));
         apInrTot += inr;
+        if (has) {
+            apTaxTot.any = true;
+            if (tx.gst !== '') { apTaxTot.gst += tx.gst; apTaxTot.cgst += sp.cgst; apTaxTot.sgst += sp.sgst; apTaxTot.igst += sp.igst; }
+            if (tx.tds !== '') apTaxTot.tds += tx.tds;
+        }
     });
     if (apRows.length === 0) aoa.push(['(no vendor invoices entered)']);
-    aoa.push(['', 'Total Entered', r2(apSum), (isINR ? '' : (autoFx ? Number(autoFx.toFixed(2)) : '')), '', r2(apInrTot), '']);
-    moneyCells.push({ r: at(), c: 2 }); moneyCells.push({ r: at(), c: 5 });
+    // totals: GST and TDS as recorded; Net = INR Value + GST − TDS over every bill, so the totals row adds up (a blank counts as 0)
+    apTaxTot.net = apInrTot + apTaxTot.gst - apTaxTot.tds;
+    const tt = k => apTaxTot.any ? r2(apTaxTot[k]) : '';
+    aoa.push(['', 'Total Entered', r2(apSum), (isINR ? '' : (autoFx ? Number(autoFx.toFixed(2)) : '')), '', r2(apInrTot), tt('gst'), tt('cgst'), tt('sgst'), tt('igst'), tt('tds'), tt('net'), '']);
+    [2, 5, 6, 7, 8, 9, 10, 11].forEach(cc => moneyCells.push({ r: at(), c: cc }));
+    if (apRows.length) aoa.push(['', isOemForeign(apOem) ? 'Overseas OEM: no GST or TDS on these bills (reverse charge on the CA export).' : 'GST and TDS as recorded on each bill in Manage Cycle; blank = not recorded, counted as 0 in the totals.']);
 
     // --- Sheet + formatting ---
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 42 }];
+    ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 42 }];
     dateCells.forEach(m => {
         const cell = ws[XLSX.utils.encode_cell({ r: m.r, c: m.c })];
         // aoa_to_sheet may store the Date as a numeric serial (t='n') or a
@@ -24014,10 +24079,10 @@ function exportCycleExcel() {
         const cell = ws[XLSX.utils.encode_cell({ r: m.r, c: m.c })];
         if (cell && cell.t === 'n') cell.z = '#,##0.00';
     });
-    // Hyperlink the Document Link cells (AR col4, AP col6) where a URL is present.
+    // Hyperlink the Document Link cells (AR col6, AP col12 since 8EV) where a URL is present.
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let r = range.s.r; r <= range.e.r; r++) {
-        [4, 6].forEach(cc => {
+        [6, 12].forEach(cc => {
             const cell = ws[XLSX.utils.encode_cell({ r, c: cc })];
             if (cell && cell.t === 's' && /^https?:\/\//i.test(cell.v)) {
                 cell.l = { Target: cell.v, Tooltip: 'Open document' };
@@ -24377,12 +24442,28 @@ function importBackup() {
                 const filesNote = bkHasFiles
                     ? '\n\nATTACHED FILES: this backup also holds attached files. Restoring will REPLACE all your current attached files with the ones in this file; any added since it was made will be lost.'
                     : (inApp ? '\n\nATTACHED FILES: not in this backup file. Your current attached files (signed PDFs and other uploads) are left as they are.' : '');
+                // 8EV — expenses (kept in the app's database) travel in their own part of the file.
+                const bkExp = (parsed._expenses && parsed._expenses.included && parsed._expenses.keys) ? parsed._expenses : null;
+                const expN = (bkExp && typeof window.__msExpBackupCount === 'function') ? window.__msExpBackupCount(bkExp) : null;
+                const expNote = !inApp ? '' : (bkExp
+                    ? '\n\nEXPENSES: this backup holds ' + (expN === null ? 'the' : expN) + ' expense entries. Restoring REPLACES the expenses in the app with them (months from the CA pack come back by themselves afterwards).'
+                    : '\n\nEXPENSES: not in this backup file. The expenses in the app are left as they are.');
                 const exportedAt = parsed._exportedAt ? new Date(parsed._exportedAt).toLocaleString() : 'unknown';
-                if (!(await __msAsk(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}${filesNote}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`, { ok: 'Restore', danger: 'ok' }))) {
+                if (!(await __msAsk(`RESTORE CONFIRMATION\n\nBackup exported: ${exportedAt}\nBuild: ${parsed._appBuild || 'unknown'}\n\nThis backup contains:\n${summary}${filesNote}${expNote}\n\nRestoring will COMPLETELY OVERWRITE your current data. Your current data will be LOST.\n\nContinue?`, { ok: 'Restore', danger: 'ok' }))) {
                     showStatus('status-restore', 'Restore cancelled.');
                     return;
                 }
 
+                // 8EV — the expenses go back first: if they can't, stop before anything else changes.
+                if (bkExp && inApp && typeof window.__msExpRestore === 'function') {
+                    const er = await window.__msExpRestore(bkExp);
+                    if (!er || !er.ok) {
+                        showStatus('status-restore', 'Restore stopped: the expenses could not be put back (' + ((er && er.error) || 'unknown') + '). '
+                            + ((er && er.restoredBack) ? 'The expenses are as they were before. ' : 'Some expense records may have changed: quit the app, open it again and check Expenses before restoring again. ')
+                            + 'Nothing else was changed.');
+                        return;
+                    }
+                }
                 // Apply — overwrite every known storage key from the envelope,
                 // and remove keys that existed previously but aren't in the backup
                 // (only within the ALL_MS_STORAGE_KEYS allowlist; leaves other keys alone).
@@ -27219,12 +27300,16 @@ function renderProposalsKPIs(filtered) {
     const allOpen = proposals.filter(p => isProposalOpen(p.status));
     const activeAcc = sumProposalTotalsByCurrency(allOpen); // 8ED — per-currency, never mixed
 
-    // YTD accepted
-    const ytdStart = new Date(new Date().getFullYear(), 0, 1);
+    // Accepted (YTD) — Indian financial year, 1 April to 31 March (8EV). Was the
+    // calendar year, which reset on 1 January in the middle of the FY.
+    const __fy = getCurrentFYRange();
+    const ytdStart = __fy.start;
+    const __fyY = __fy.start.getFullYear();
+    const __fyLabel = 'FY ' + String(__fyY).slice(2) + '-' + String(__fyY + 1).slice(2);
     const acceptedYTD = proposals.filter(p => {
         if (p.status !== 'Accepted') return false;
         const d = new Date(p.acceptedAt || p.updatedAt);
-        return !isNaN(d.getTime()) && d >= ytdStart;
+        return !isNaN(d.getTime()) && d >= ytdStart && d <= __fy.end;
     });
     const acceptedAcc = sumProposalTotalsByCurrency(acceptedYTD); // 8ED — per-currency
 
@@ -27251,7 +27336,7 @@ function renderProposalsKPIs(filtered) {
     set('propk_activeSub', `${allOpen.filter(p => p.status === 'Draft').length} Draft, ${allOpen.filter(p => p.status === 'Sent').length} Sent`);
     set('propk_activeValue', fmtProposalDualTotals(activeAcc));
     set('propk_acceptedValue', fmtProposalDualTotals(acceptedAcc));
-    set('propk_acceptedSub', acceptedYTD.length + ' proposal' + (acceptedYTD.length === 1 ? '' : 's'));
+    set('propk_acceptedSub', acceptedYTD.length + ' proposal' + (acceptedYTD.length === 1 ? '' : 's') + ' \u00b7 ' + __fyLabel);
     set('propk_winRate', winRate.toFixed(0) + '%');
     set('propk_winRateSub', accepted12.length + ' accepted of ' + closed12.length + ' closed');
     set('propk_expiring', String(expiring.length));
@@ -31495,10 +31580,15 @@ function renderPOsKPIs(filtered) {
         return s + poToInr(t.grandTotal, po.currency, po.fxRate);
     }, 0);
 
-    const ytdStart = new Date(new Date().getFullYear(), 0, 1);
+    // Issued / Closed (YTD) — Indian financial year, 1 April to 31 March (8EV). Was
+    // the calendar year, which reset on 1 January in the middle of the FY.
+    const __fy = getCurrentFYRange();
+    const ytdStart = __fy.start;
+    const __fyY = __fy.start.getFullYear();
+    const __fyLabel = 'FY ' + String(__fyY).slice(2) + '-' + String(__fyY + 1).slice(2);
     const issuedYTD = purchaseOrders.filter(po => {
         const d = new Date(po.createdAt);
-        if (isNaN(d.getTime()) || d < ytdStart) return false;
+        if (isNaN(d.getTime()) || d < ytdStart || d > __fy.end) return false;
         // "Issued" KPI = any PO that has progressed past Draft
         return po.status !== 'Draft' && po.status !== 'Cancelled';
     });
@@ -31511,7 +31601,7 @@ function renderPOsKPIs(filtered) {
     const closedYTD = purchaseOrders.filter(po => {
         if (po.status !== 'Closed') return false;
         const d = new Date(po.closedAt || po.updatedAt);
-        return !isNaN(d.getTime()) && d >= ytdStart;
+        return !isNaN(d.getTime()) && d >= ytdStart && d <= __fy.end;
     });
     const closedVal = closedYTD.reduce((s, po) => {
         const gst = determinePOGSTMode(po.oem);
@@ -31526,9 +31616,9 @@ function renderPOsKPIs(filtered) {
     set('pok_openSub', `${allOpen.filter(p => p.status === 'Draft').length} Draft, ${allOpen.filter(p => p.status === 'Issued').length} Issued, ${allOpen.filter(p => p.status === 'Acknowledged').length} Ack, ${allOpen.filter(p => p.status === 'Received').length} Received`);
     set('pok_openValue', fmtMoneyShort(openVal));
     set('pok_issuedValue', fmtMoneyShort(issuedVal));
-    set('pok_issuedSub', issuedYTD.length + ' PO' + (issuedYTD.length === 1 ? '' : 's'));
+    set('pok_issuedSub', issuedYTD.length + ' PO' + (issuedYTD.length === 1 ? '' : 's') + ' \u00b7 ' + __fyLabel);
     set('pok_closedValue', fmtMoneyShort(closedVal));
-    set('pok_closedSub', closedYTD.length + ' PO' + (closedYTD.length === 1 ? '' : 's'));
+    set('pok_closedSub', closedYTD.length + ' PO' + (closedYTD.length === 1 ? '' : 's') + ' \u00b7 ' + __fyLabel);
     set('pok_foreignCount', String(foreignOpen.length));
 }
 
@@ -49515,6 +49605,32 @@ function __deExtFromName(name, mime) {
     return '';
 }
 
+// 8EV — the file ending a packed file needs: '' when its name already ends in a
+// known one, else the one its type calls for, else what its first bytes say
+// (a PDF starts with %PDF). Uploaded files are named after their label, which
+// carries no ending, so a bank's or the CA's computer could not open them.
+var __DE_KNOWN_ENDING = /\.(pdf|png|jpe?g|gif|webp|heic|heif|tiff?|bmp|docx?|xlsx?|xlsm|csv|txt|zip|eml|msg|pptx?|rtf|odt|ods)$/i;
+var __DE_ENDING_BY_TYPE = {
+    'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
+    'image/heic': '.heic', 'image/heif': '.heif', 'image/tiff': '.tif', 'text/csv': '.csv', 'text/plain': '.txt', 'application/zip': '.zip',
+    'application/msword': '.doc', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx', 'message/rfc822': '.eml'
+};
+function __deFileEnding(name, mime, bytes) {
+    if (__DE_KNOWN_ENDING.test(String(name || ''))) return '';
+    var byType = __DE_ENDING_BY_TYPE[String(mime || '').toLowerCase().split(';')[0].trim()];
+    if (byType) return byType;
+    try {
+        var b = bytes;
+        if (b && b.length >= 4) {
+            if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return '.pdf';
+            if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return '.png';
+            if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return '.jpg';
+        }
+    } catch (e) {}
+    return '';
+}
+
 // ---- Gather scoped to ONE selected OEM invoice (8BW) -------------------
 // ref = { cIdx, yi, apIdx }  (apIdx === 'L' means the legacy single
 // by.oemInvoiceNo/Link/LocalPath fields on that billing year).
@@ -50263,10 +50379,13 @@ function __deDownloadZip(g, opts) {
         try {
             var bytes = __deDataUrlToUint8(it.dataUrl);
             var name = it.filename || (it.label + '');
+            // 8EV — with the file ending its type calls for (".pdf" for a PDF)
+            var safe = __deSafeName(name);
+            safe = safe + __deFileEnding(safe, it.mimeType, bytes);
             // ensure uniqueness — keep original filename, number only on clash
             var base = folder ? (folder + '/') : '';
-            var path = base + __deSafeName(name);
-            if (zip.file(path)) path = base + zipped + '_' + __deSafeName(name);
+            var path = base + safe;
+            if (zip.file(path)) path = base + zipped + '_' + safe;
             zip.file(path, bytes);
             zipped++;
         } catch (e) { console.warn('zip add failed for', it.label, e); }
@@ -51659,7 +51778,7 @@ async function __msRemitZip(st, t, decl) {
             // An uploaded file is named after its label, which carries no file
             // ending: add the one its type calls for, so the bank's computer
             // opens it (".pdf" for a PDF).
-            if (!/\.(pdf|png|jpe?g|gif|webp|heic|tiff?|docx?|xlsx?|csv|txt|zip|eml|msg)$/i.test(name)) name += (__deExtFromName('', it.mimeType) || '');
+            name += __deFileEnding(name, it.mimeType, bytes);   // 8EV — the shared helper
             var path = name;
             if (zip.file(path)) path = zipped + '_' + name;
             zip.file(path, bytes);
@@ -51769,6 +51888,1274 @@ async function __msRemitPreview() {
     }
 }
 // =================== /Phase 8EU — Remittance bundle ===================
+// ===================== Phase 8EV — Expenses (from the CA pack) =====================
+// Every month, after the CA pack is built (Prepare, and again at Finalise), the
+// pack's engine writes that month's bank and card lines, each under a head, to
+//   <CA Pack>/_engine/app_expenses/<yyyy-mm>.json   (+ index.json, the list)
+// This module picks those files up by itself (a little after the app opens, and
+// when the Expenses page is opened), and keeps the lines in the app's database,
+// one record per financial year:
+//   ms_app__expenses_fy<start year>   e.g. ms_app__expenses_fy2026 = FY 2026-27
+//   ms_app__expenses_meta_v1          the months taken in, your head rules, the folder
+// Not in browser storage (that is what filled up in 8EO): straight to the
+// database with save_app_setting, read back with get_app_settings.
+//  - A month is replaced as a whole when the CA pack writes it again (finalise):
+//    nothing is counted twice, and a head you moved or a note you added on a
+//    line is kept (lines keep their id between runs).
+//  - Heads come from the remarks (his words); you can move a line, or tell the
+//    app to put every line with a remark under a head (now and in later months).
+//  - Company expenses are the tracker's totals. Payments to vendors and
+//    consultants (Payables / Consultants hold those) and money that isn't an
+//    expense (own transfers, card bills, GST/TDS paid, partners) are shown apart.
+//  - Nothing is written to the CA pack's folder from here.
+var MS_EXP_HEADS = [
+    { id: 'salaries', label: 'Salaries & bonus', group: 'exp' },
+    { id: 'partner_salary', label: "Partners' salary", group: 'exp' },
+    { id: 'rent_office', label: 'Rent & office', group: 'exp' },
+    { id: 'software', label: 'Software & subscriptions', group: 'exp' },
+    { id: 'utilities', label: 'Phone, internet & electricity', group: 'exp' },
+    { id: 'local_travel', label: 'Local travel', group: 'exp' },
+    { id: 'travel', label: 'Travel (outstation)', group: 'exp' },
+    { id: 'car', label: 'Car', group: 'exp' },
+    { id: 'food_client', label: 'Food - Client', group: 'exp' },
+    { id: 'food_partner', label: 'Food - Partner', group: 'exp' },
+    { id: 'promotion', label: 'Gifts & promotion', group: 'exp' },
+    { id: 'professional', label: 'Professional fees', group: 'exp' },
+    { id: 'bank', label: 'Bank charges & OD interest', group: 'exp' },
+    { id: 'repairs', label: 'Repairs & maintenance', group: 'exp' },
+    { id: 'admin', label: 'Courier & admin', group: 'exp' },
+    { id: 'govt', label: 'Govt fees & professional tax', group: 'exp' },
+    { id: 'petty_cash', label: 'Petty cash', group: 'exp' },
+    { id: 'other', label: 'Other', group: 'exp' },
+    { id: 'oem', label: 'OEM purchases', group: 'vendor' },
+    { id: 'vendors', label: 'Vendors & consultants', group: 'vendor' },
+    { id: 'commission', label: 'Commissions', group: 'vendor' },
+    { id: 'import_clearing', label: 'Import clearing & freight', group: 'vendor' },
+    { id: 'transfers', label: 'Own transfers & card bills', group: 'other' },
+    { id: 'partners', label: 'Money to partners', group: 'other' },
+    { id: 'partner_tax', label: "Partners' tax", group: 'other' },
+    { id: 'gst_tds', label: 'GST & TDS paid', group: 'other' },
+    { id: 'loan', label: 'Car loan EMI', group: 'other' },
+    { id: 'assets', label: 'Assets, deposits & FDs', group: 'other' },
+    { id: 'client_refund', label: 'Refunds to clients', group: 'other' }
+];
+var MS_EXP_GROUPS = [
+    { id: 'exp', label: 'Company expenses', hint: 'The tracker\'s totals' },
+    { id: 'vendor', label: 'Vendors & consultants', hint: 'Payables and Consultants hold these; shown here so nothing is missed' },
+    { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST/TDS paid, partners, loans, deposits' }
+];
+var MS_EXP_ACCTS = [
+    { id: 'HDFC_BANK', label: 'HDFC Bank' }, { id: 'ICICI_BANK', label: 'ICICI Bank' },
+    { id: 'YES_CURRENT', label: 'YES Bank Current' }, { id: 'YES_OD', label: 'YES Bank OD' },
+    { id: 'AMEX_CARD', label: 'AMEX card' }, { id: 'HDFC_CARD', label: 'HDFC card' },
+    { id: 'CASH', label: 'Cash' }, { id: 'PERSONAL', label: 'Paid personally' }
+];
+var MS_EXP_FY_PREFIX = 'ms_app__expenses_fy';
+var MS_EXP_META_KEY = 'ms_app__expenses_meta_v1';
+var MS_EXP_CAPACK_UNDER_HOME = '/Library/CloudStorage/OneDrive-Masterstone/Masterstone/CA Pack';
+var MS_EXP_APP_DIR = '/_engine/app_expenses';
+var MS_EXP_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
+var MS_EXP_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+var MS_EXP_NO_BILL_FROM = 5000;      // the CA pack's own "bigger payments with no bill" line
+var MS_EXP_LIST_STEP = 250;
+var MS_EXP_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;   // a line's id (the CA pack's content hash, or man_… for one added by hand)
+var MS_EXP_ORPHANS_MAX = 1000;       // heads/notes kept aside for lines that left a month (in case they come back)
+
+var __msExp = {
+    state: 'idle',                   // idle | loading | ready | failed | unavailable | restoring | restored
+    loadError: '',
+    booted: false,                   // the first look in the CA pack has been scheduled
+    fys: {},                         // start year -> { v, fy, lines: [...] }
+    meta: { v: 1, caPackPath: '', months: {}, rules: {}, extraHeads: [], orphans: {}, lastCheck: '' },
+    dirty: {},                       // setting key -> true
+    saving: false, saveError: '', saveTimer: null, retryTimer: null,
+    check: { running: false, status: '', detail: '', at: 0, path: '' },
+    ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false },
+    chart: null, editing: null
+};
+
+// ---- small helpers ----------------------------------------------------------
+function __msExpTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
+function __msExpEsc(s) { return (typeof pEsc === 'function') ? pEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function __msExpLog(level, msg, data) { try { if (typeof diag === 'function') diag(level, 'Expenses: ' + msg, data || {}); } catch (e) {} }
+function __msExpNormRemark(r) { return String(r || '').trim().toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').replace(/^-\s*/, '').trim(); }
+function __msExpFyOf(iso) {
+    var y = parseInt(String(iso).slice(0, 4), 10), m = parseInt(String(iso).slice(5, 7), 10);
+    return (m >= 4) ? y : y - 1;
+}
+function __msExpFyLabel(fy) { return 'FY ' + fy + '-' + String(fy + 1).slice(2); }
+function __msExpFyShort(fy) { return 'FY ' + String(fy).slice(2) + '-' + String(fy + 1).slice(2); }
+function __msExpMonthKey(fy, i) { var m = i + 4, y = fy; if (m > 12) { m -= 12; y += 1; } return y + '-' + (m < 10 ? '0' : '') + m; }
+function __msExpMonthLabel(ym) { var m = parseInt(ym.slice(5, 7), 10); return MS_EXP_MONTH_NAMES[m - 1] + ' ' + ym.slice(0, 4); }
+function __msExpShortMonth(ym) { var m = parseInt(ym.slice(5, 7), 10); return MS_EXP_MONTH_NAMES[m - 1].slice(0, 3) + ' ' + ym.slice(2, 4); }
+function __msExpCurrentFy() { var d = new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; }
+function __msExpHeads() {
+    var list = MS_EXP_HEADS.slice();
+    (__msExp.meta.extraHeads || []).forEach(function (h) { if (h && h.id && !list.some(function (x) { return x.id === h.id; })) list.push(h); });
+    return list;
+}
+function __msExpHead(id) { var hs = __msExpHeads(); for (var i = 0; i < hs.length; i++) if (hs[i].id === id) return hs[i]; return null; }
+function __msExpHeadLabel(id) { var h = __msExpHead(id); return h ? h.label : 'Other'; }
+function __msExpAcctLabel(id) { for (var i = 0; i < MS_EXP_ACCTS.length; i++) if (MS_EXP_ACCTS[i].id === id) return MS_EXP_ACCTS[i].label; return String(id || ''); }
+// The head a line counts under: yours (moved), else your rule for its remark, else the CA pack's.
+function __msExpEffHead(ln) {
+    if (ln.o && __msExpHead(ln.o)) return ln.o;
+    if (ln.s !== 'manual' && ln.r) { var rh = __msExp.meta.rules[__msExpNormRemark(ln.r)]; if (rh && __msExpHead(rh)) return rh; }
+    return __msExpHead(ln.h) ? ln.h : 'other';
+}
+function __msExpGroupOf(ln) { var h = __msExpHead(__msExpEffHead(ln)); return h ? h.group : 'exp'; }
+function __msExpSigned(ln) { return ln.dc === 'C' ? -ln.m : ln.m; }
+function __msExpGst(ln) {
+    var g = 0;
+    (ln.b || []).forEach(function (b) { g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });
+    return Math.round(g * 100) / 100;
+}
+function __msExpRupees(n) {
+    var v = Math.round(Number(n) || 0);
+    return (v < 0 ? '−₹' : '₹') + Math.abs(v).toLocaleString('en-IN');
+}
+function __msExpAllLines() {
+    var out = [];
+    Object.keys(__msExp.fys).forEach(function (k) { out = out.concat(__msExp.fys[k].lines); });
+    return out;
+}
+function __msExpStore(fy) {
+    if (!__msExp.fys[fy]) __msExp.fys[fy] = { v: 1, fy: fy, lines: [] };
+    return __msExp.fys[fy];
+}
+function __msExpKeyOfFy(fy) { return MS_EXP_FY_PREFIX + fy; }
+
+// ---- load and save (the app's database) -------------------------------------
+async function __msExpLoad() {
+    var t = __msExpTauri();
+    if (!t) { __msExp.state = 'unavailable'; return; }
+    if (__msExp.state !== 'idle') return;        // loading or loaded already, or a restore from a backup is in charge
+    __msExp.state = 'loading';
+    var settings = null, lastErr = '';
+    for (var attempt = 0; attempt < 3 && !settings; attempt++) {
+        try {
+            var r = await t.invoke('get_app_settings');
+            if (r && r.ok && r.settings) settings = r.settings; else lastErr = (r && r.error) || 'no data';
+        } catch (e) { lastErr = String((e && e.message) || e); }
+        if (!settings && attempt < 2) await new Promise(function (res) { setTimeout(res, 1500); });
+    }
+    if (__msExp.state !== 'loading') return;      // a restore from a backup took over meanwhile: its state stands
+    if (!settings) {
+        __msExp.state = 'failed';
+        __msExp.loadError = lastErr;
+        __msExpLog('CRITICAL', 'could not be read from the database; nothing will be saved this session', { error: lastErr });
+        __msExpRefreshIfOpen();
+        return;
+    }
+    var fys = {}, meta = null, bad = [];
+    Object.keys(settings).forEach(function (k) {
+        if (k === MS_EXP_META_KEY) {
+            try { meta = JSON.parse(settings[k]); } catch (e) { bad.push(k); }
+        } else if (k.indexOf(MS_EXP_FY_PREFIX) === 0) {
+            var fy = parseInt(k.slice(MS_EXP_FY_PREFIX.length), 10);
+            try {
+                var rec = JSON.parse(settings[k]);
+                if (!rec || !Array.isArray(rec.lines) || !(fy > 2000)) throw new Error('not an expenses record');
+                fys[fy] = { v: 1, fy: fy, lines: rec.lines.filter(__msExpLineOk) };
+            } catch (e) { bad.push(k); }
+        }
+    });
+    if (bad.length) {
+        // A damaged record is never overwritten: everything stays read-only this session.
+        __msExp.state = 'failed';
+        __msExp.loadError = 'damaged record(s): ' + bad.join(', ');
+        __msExpLog('CRITICAL', 'a stored record could not be read; nothing will be saved this session', { keys: bad });
+        __msExpRefreshIfOpen();
+        return;
+    }
+    __msExp.fys = fys;
+    if (meta && typeof meta === 'object') {
+        __msExp.meta = {
+            v: 1, caPackPath: String(meta.caPackPath || ''), months: (meta.months && typeof meta.months === 'object') ? meta.months : {},
+            rules: (meta.rules && typeof meta.rules === 'object') ? meta.rules : {},
+            extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads : [],
+            orphans: (meta.orphans && typeof meta.orphans === 'object') ? meta.orphans : {}, lastCheck: String(meta.lastCheck || '')
+        };
+    }
+    __msExp.state = 'ready';
+    __msExpLog('INFO', 'loaded', { lines: __msExpAllLines().length, months: Object.keys(__msExp.meta.months).length, years: Object.keys(fys).length });
+    __msExpRefreshIfOpen();
+    // The first look in the CA pack, a moment after the first load (whichever path loaded: start-up or the page opening first).
+    if (!__msExp.booted) {
+        __msExp.booted = true;
+        setTimeout(function () { if (!__msExp.check.at) __msExpCheck(); }, 2500);
+    }
+}
+// A stored or restored line in the expected shape (id, date, amount).
+function __msExpLineOk(l) {
+    return !!(l && typeof l === 'object' && MS_EXP_ID_RE.test(String(l.i || '')) && /^\d{4}-\d{2}-\d{2}$/.test(String(l.d)) && isFinite(Number(l.m)));
+}
+
+function __msExpMarkDirty(key) {
+    __msExp.dirty[key] = true;
+    clearTimeout(__msExp.saveTimer);
+    __msExp.saveTimer = setTimeout(function () { __msExpFlush(); }, 250);
+}
+function __msExpValueOf(key) {
+    if (key === MS_EXP_META_KEY) return JSON.stringify(__msExp.meta);
+    var fy = parseInt(key.slice(MS_EXP_FY_PREFIX.length), 10);
+    var st = __msExp.fys[fy] || { v: 1, fy: fy, lines: [] };
+    return JSON.stringify({ v: 1, fy: fy, lines: st.lines });
+}
+// Saves every waiting record; resolves true when all of them are in the database.
+async function __msExpFlush() {
+    if (__msExp.state !== 'ready') return false;
+    var t = __msExpTauri();
+    if (!t) return false;
+    if (__msExp.saving) { await new Promise(function (res) { setTimeout(res, 120); }); return __msExpFlush(); }
+    __msExp.saving = true;
+    var failed = '', stopped = false;
+    try {
+        var keys = Object.keys(__msExp.dirty);
+        // the years first, the list of months taken in last: a month only counts as taken in once its lines are saved
+        keys.sort(function (a, b) { return (a === MS_EXP_META_KEY) - (b === MS_EXP_META_KEY); });
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            if (!__msExp.dirty[k]) continue;
+            if (__msExp.state !== 'ready') { stopped = true; break; }      // a restore from a backup began meanwhile: nothing more goes in
+            delete __msExp.dirty[k];
+            var r = null;
+            try { r = await t.invoke('save_app_setting', { key: k, value: __msExpValueOf(k) }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+            if (!r || !r.ok) {
+                __msExp.dirty[k] = true;
+                failed = (r && r.error) || 'not saved';
+                __msExpLog('CRITICAL', 'save failed', { key: k, error: failed });
+                if (k !== MS_EXP_META_KEY) break;      // keep the order: no list of months ahead of its lines
+            }
+        }
+    } finally { __msExp.saving = false; }
+    var had = __msExp.saveError;
+    __msExp.saveError = failed;
+    if (failed) {
+        clearTimeout(__msExp.retryTimer);
+        __msExp.retryTimer = setTimeout(function () { __msExpFlush(); }, 10000);
+    }
+    if (had !== failed) __msExpRefreshIfOpen();
+    return !failed && !stopped;
+}
+window.addEventListener('beforeunload', function () {
+    var t = __msExpTauri();
+    if (!t || __msExp.state !== 'ready') return;
+    Object.keys(__msExp.dirty).forEach(function (k) { try { t.invoke('save_app_setting', { key: k, value: __msExpValueOf(k) }); } catch (e) {} });
+});
+
+// ---- the CA pack's files -------------------------------------------------------
+async function __msExpCaPackPath() {
+    if (__msExp.meta.caPackPath) return __msExp.meta.caPackPath;
+    try {
+        var P = window.__TAURI__ && window.__TAURI__.path;
+        if (P && typeof P.homeDir === 'function') {
+            var home = String(await P.homeDir() || '').replace(/\/+$/, '');
+            if (home) return home + MS_EXP_CAPACK_UNDER_HOME;
+        }
+    } catch (e) {}
+    return '';
+}
+function __msExpBytesToText(b64) {
+    var bin = atob(b64);
+    try {
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder('utf-8').decode(bytes);
+    } catch (e) {
+        return decodeURIComponent(escape(bin));
+    }
+}
+async function __msExpReadJson(path) {
+    var t = __msExpTauri();
+    var r = null;
+    try { r = await t.invoke('read_file_bytes', { path: path }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+    if (!r || !r.ok || !r.dataUrl) return { ok: false, missing: !!(r && /not found/i.test(String(r.error || ''))), error: (r && r.error) || 'could not be read' };
+    try {
+        var s = String(r.dataUrl);
+        return { ok: true, data: JSON.parse(__msExpBytesToText(s.slice(s.indexOf(',') + 1))) };
+    } catch (e) { return { ok: false, error: 'not readable (' + String((e && e.message) || e) + ')' }; }
+}
+// A line from the CA pack's file, in the app's (short) shape; null when it isn't usable.
+function __msExpFromFile(ym, source, l) {
+    if (!l || typeof l !== 'object') return null;
+    var d = String(l.date || ''), m = Number(l.amount);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !(m > 0) || !isFinite(m) || (l.dc !== 'D' && l.dc !== 'C') || !MS_EXP_ID_RE.test(String(l.id || ''))) return null;
+    var head = __msExpHead(String(l.head || '')) ? String(l.head) : 'other';
+    var out = { i: String(l.id), f: ym, s: source === 'history' ? 'history' : 'pack', d: d, a: String(l.acct || '').slice(0, 20),
+                dc: l.dc, m: Math.round(m * 100) / 100, t: String(l.text || '').slice(0, 160), r: String(l.remark || '').slice(0, 160),
+                rs: String(l.rsrc || '').slice(0, 10), h: head, hw: String(l.how || '').slice(0, 12) };
+    if (Array.isArray(l.bills) && l.bills.length) {
+        out.b = l.bills.slice(0, 6).map(function (b) {
+            var f = String((b && b.file) || '');
+            if (f.charAt(0) === '/' || /(^|\/)\.\.(\/|$)/.test(f)) f = '';      // only a path inside the Masterstone folder
+            var o = { file: f, vendor: String(b.vendor || '').slice(0, 80), gstin: String(b.gstin || '').slice(0, 20), no: String(b.no || '').slice(0, 60),
+                      date: String(b.date || '').slice(0, 10), taxable: Number(b.taxable) || 0, cgst: Number(b.cgst) || 0, sgst: Number(b.sgst) || 0,
+                      igst: Number(b.igst) || 0, total: Number(b.total) || 0 };
+            if (b.guessed) o.guessed = true;
+            return o;
+        });
+    }
+    if (l.app && typeof l.app === 'object') out.x = { party: String(l.app.party || '').slice(0, 80), invoice: String(l.app.invoice || '').slice(0, 60), tds: Number(l.app.tds) || 0 };
+    return out;
+}
+// Replace month `ym` with `lines`, keeping what you changed on a line (head, note) by its id.
+// A line's id is a hash of the statement line itself, so the same id under another
+// month is the same payment (a statement filed in two months): it is counted once.
+// Your head or note on a line that is not in this version of the month is kept aside
+// and put back if the line returns (e.g. a statement left out of one run).
+function __msExpMergeMonth(ym, lines) {
+    var kept = {}, touched = {}, incoming = {};
+    lines.forEach(function (ln) { incoming[ln.i] = true; });
+    Object.keys(__msExp.fys).forEach(function (k) {
+        var st = __msExp.fys[k], keep = [];
+        st.lines.forEach(function (ln) {
+            if (ln.s !== 'manual' && (ln.f === ym || incoming[ln.i])) {
+                if ((ln.o || ln.n) && !kept[ln.i]) kept[ln.i] = { o: ln.o, n: ln.n };
+                touched[k] = true;
+            } else keep.push(ln);
+        });
+        st.lines = keep;
+    });
+    if (!__msExp.meta.orphans || typeof __msExp.meta.orphans !== 'object') __msExp.meta.orphans = {};
+    var orph = __msExp.meta.orphans, orphChanged = false;
+    lines.forEach(function (ln) {
+        var k = kept[ln.i] || orph[ln.i];
+        if (k) { if (k.o) ln.o = k.o; if (k.n) ln.n = k.n; }
+        if (orph[ln.i]) { delete orph[ln.i]; orphChanged = true; }
+        delete kept[ln.i];
+        var fy = __msExpFyOf(ln.d);
+        __msExpStore(fy).lines.push(ln);
+        touched[fy] = true;
+    });
+    Object.keys(kept).forEach(function (id) { orph[id] = kept[id]; orphChanged = true; });
+    var ids = Object.keys(orph);
+    for (var i = 0; i < ids.length - MS_EXP_ORPHANS_MAX; i++) delete orph[ids[i]];
+    if (orphChanged) __msExpMarkDirty(MS_EXP_META_KEY);
+    Object.keys(touched).forEach(function (fy) { __msExpMarkDirty(__msExpKeyOfFy(parseInt(fy, 10))); });
+}
+
+// Look in the CA pack for months that are new or changed, and take them in.
+async function __msExpCheck(opts) {
+    opts = opts || {};
+    if (__msExp.state !== 'ready' || __msExp.check.running) return null;
+    var C = __msExp.check;
+    C.running = true;
+    __msExpRefreshIfOpen();
+    var result = { added: [], updated: [], waiting: [], bad: [] };
+    try {
+        var root = await __msExpCaPackPath();
+        C.path = root;
+        if (!root) { C.status = 'no-folder'; C.detail = 'The app could not work out where your CA Pack folder is.'; return result; }
+        var ix = await __msExpReadJson(root + MS_EXP_APP_DIR + '/index.json');
+        if (!ix.ok) {
+            var t = __msExpTauri(), ex = null;
+            try { ex = await t.invoke('check_file_exists', { path: root }); } catch (e) {}
+            if (ex && ex.ok && ex.exists) {
+                if (ix.missing) { C.status = 'no-data'; C.detail = 'The CA pack has not written expenses for the app yet.'; }
+                else { C.status = 'error'; C.detail = 'The CA pack\'s list of months ' + ix.error + '.'; }
+            } else { C.status = 'no-folder'; C.detail = 'No CA Pack folder at ' + root + '.'; }
+            return result;
+        }
+        if (__msExp.state !== 'ready') return result;     // a restore from a backup took over while the file was read
+        var idx = ix.data;
+        if (!idx || idx.kind !== 'masterstone-expenses-index' || !idx.months || typeof idx.months !== 'object') {
+            C.status = 'error'; C.detail = 'The CA pack\'s list of months is not in the expected shape.'; return result;
+        }
+        if (Array.isArray(idx.heads)) {
+            var extra = idx.heads.filter(function (h) {
+                return h && typeof h.id === 'string' && /^[a-z0-9_]{1,40}$/.test(h.id) && typeof h.label === 'string' && /^(exp|vendor|other)$/.test(h.group)
+                    && !MS_EXP_HEADS.some(function (x) { return x.id === h.id; });
+            }).map(function (h) { return { id: h.id, label: h.label.slice(0, 60), group: h.group }; });
+            if (JSON.stringify(extra) !== JSON.stringify(__msExp.meta.extraHeads || [])) { __msExp.meta.extraHeads = extra; __msExpMarkDirty(MS_EXP_META_KEY); }
+        }
+        var months = Object.keys(idx.months).filter(function (ym) { return /^\d{4}-\d{2}$/.test(ym); }).sort();
+        var taken = {};
+        for (var i = 0; i < months.length; i++) {
+            var ym = months[i], e = idx.months[ym] || {};
+            var had = __msExp.meta.months[ym];
+            if (had && had.sig && had.sig === e.sig) continue;
+            if (!/^\d{4}-\d{2}\.json$/.test(String(e.file || ''))) { result.bad.push(ym); continue; }
+            var mf = await __msExpReadJson(root + MS_EXP_APP_DIR + '/' + e.file);
+            if (__msExp.state !== 'ready') return result;
+            if (!mf.ok) { (mf.missing ? result.waiting : result.bad).push(ym); continue; }   // not there yet / there but unreadable: both tried again next time
+            var doc = mf.data;
+            if (!doc || doc.kind !== 'masterstone-expenses-month' || doc.month !== ym || !Array.isArray(doc.lines)) { result.bad.push(ym); continue; }
+            if (doc.sig !== e.sig) { result.waiting.push(ym); continue; }       // the file and the list don't agree yet: next time
+            var lines = [], dropped = 0;
+            doc.lines.forEach(function (l) { var x = __msExpFromFile(ym, doc.source, l); if (x) lines.push(x); else dropped++; });
+            if (dropped) __msExpLog('WARN', 'lines left out of a month (not in the expected shape)', { month: ym, dropped: dropped });
+            __msExpMergeMonth(ym, lines);
+            var exp = 0;
+            lines.forEach(function (ln) { if (__msExpGroupOf(ln) === 'exp') exp += __msExpSigned(ln); });
+            (had ? result.updated : result.added).push({ ym: ym, n: lines.length, exp: exp, source: doc.source });
+            taken[ym] = { sig: e.sig, source: doc.source === 'history' ? 'history' : 'pack', made: String(doc.made || ''), lines: lines.length };
+        }
+        // A month counts as taken in only once its lines are in the database (the years
+        // are saved before the list of months; a year that fails stops the save).
+        var pending = Object.keys(taken).length > 0;
+        var record = function () {
+            var now = new Date().toISOString();
+            Object.keys(taken).forEach(function (ym) { taken[ym].in = now; __msExp.meta.months[ym] = taken[ym]; });
+            __msExpMarkDirty(MS_EXP_META_KEY);
+        };
+        var savedLines = await __msExpFlush();
+        if (pending && savedLines) record();
+        __msExp.meta.lastCheck = new Date().toISOString();
+        __msExpMarkDirty(MS_EXP_META_KEY);
+        var savedAll = await __msExpFlush();               // the list of months, and the lines again if they failed above
+        if (pending && !savedLines && savedAll) { savedLines = true; record(); await __msExpFlush(); }
+        if (__msExp.state !== 'ready') return result;
+        if (pending && !savedLines) {
+            C.status = 'error'; C.detail = 'The new months could not be saved to the database yet; the app tries again.';
+        } else {
+            C.status = 'ok';
+            C.detail = result.waiting.length ? ('Still being written: ' + result.waiting.map(__msExpMonthLabel).join(', ') + '. Checked again next time.') : '';
+        }
+        if (result.bad.length) C.detail = (C.detail ? C.detail + ' ' : '') + 'Not readable: ' + result.bad.map(__msExpMonthLabel).join(', ') + '.';
+        if (result.added.length || result.updated.length || result.bad.length) {
+            __msExpLog('INFO', 'months taken in from the CA pack', { added: result.added.map(function (x) { return x.ym; }), updated: result.updated.map(function (x) { return x.ym; }),
+                waiting: result.waiting, bad: result.bad, saved: !pending || savedLines });
+        }
+        __msExpToastResult(result, !!opts.manual, !pending || savedLines);
+        return result;
+    } catch (e) {
+        C.status = 'error'; C.detail = String((e && e.message) || e);
+        __msExpLog('ERROR', 'checking the CA pack failed', { error: C.detail });
+        return result;
+    } finally {
+        C.running = false;
+        C.at = Date.now();
+        __msExpRefreshIfOpen();
+    }
+}
+function __msExpToastResult(r, manual, saved) {
+    if (typeof showProspectToast !== 'function') return;
+    var open = ' <a href="#" onclick="showTab(\'expensesTab\'); return false;" style="color:var(--accent-cyan); font-weight:600; margin-left:6px;">Open Expenses</a>';
+    var all = r.added.concat(r.updated);
+    if (!all.length) {
+        if (manual) showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Expenses are up to date with the CA pack.', 3500);
+        return;
+    }
+    var n = 0, exp = 0;
+    all.forEach(function (x) { n += x.n; exp += x.exp; });
+    if (!saved) {
+        showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> Expenses: ' + all.length + ' month' + (all.length === 1 ? '' : 's') + ' found in the CA pack (' + n + ' entries) but not saved to the database yet'
+            + (__msExp.saveError ? ' (' + __msExpEsc(__msExp.saveError) + ')' : '') + '. The app tries again.' + open, 9000);
+        return;
+    }
+    var what;
+    if (all.length === 1) {
+        what = __msExpEsc(__msExpMonthLabel(all[0].ym)) + (r.updated.length ? ' updated' : ' added') + ' from the CA pack: ' + n + ' entr' + (n === 1 ? 'y' : 'ies')
+             + ', ' + __msExpRupees(exp) + ' of company expenses.';
+    } else {
+        var yms = all.map(function (x) { return x.ym; }).sort();
+        what = all.length + ' months ' + (r.updated.length && !r.added.length ? 'updated' : 'added') + ' from the CA pack (' + __msExpEsc(__msExpShortMonth(yms[0])) + ' – '
+             + __msExpEsc(__msExpShortMonth(yms[yms.length - 1])) + '), ' + n.toLocaleString('en-IN') + ' entries.';
+    }
+    showProspectToast('<i class="fas fa-wallet" style="color:var(--accent-cyan);"></i> Expenses: ' + what + open, 7000);
+}
+
+// ---- your changes ----------------------------------------------------------------
+function __msExpFind(id) {
+    var keys = Object.keys(__msExp.fys);
+    for (var k = 0; k < keys.length; k++) {
+        var st = __msExp.fys[keys[k]];
+        for (var i = 0; i < st.lines.length; i++) if (st.lines[i].i === id) return { fy: parseInt(keys[k], 10), ln: st.lines[i], idx: i };
+    }
+    return null;
+}
+function __msExpCanEdit() {
+    if (__msExp.state === 'ready') return true;
+    if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> Expenses can\'t be changed right now: ' + __msExpEsc(__msExpStateText()), 5000);
+    return false;
+}
+function __msExpSetHead(id, head) {
+    if (!__msExpCanEdit()) return;
+    var f = __msExpFind(id);
+    if (!f || !__msExpHead(head)) return;
+    var ln = f.ln;
+    var auto = (ln.s !== 'manual' && ln.r && __msExp.meta.rules[__msExpNormRemark(ln.r)]) || ln.h;
+    if (ln.s === 'manual') { ln.h = head; delete ln.o; }
+    else if (head === auto) delete ln.o;
+    else ln.o = head;
+    __msExpMarkDirty(__msExpKeyOfFy(f.fy));
+    renderExpensesPage();
+    // Offer the same for every line with this remark (now and in later months).
+    var norm = __msExpNormRemark(ln.r);
+    if (ln.s === 'manual' || !norm || typeof showProspectToast !== 'function') return;
+    var others = __msExpAllLines().filter(function (x) { return x.i !== ln.i && x.s !== 'manual' && __msExpNormRemark(x.r) === norm && __msExpEffHead(x) !== head; }).length;
+    if (__msExp.meta.rules[norm] === head) return;
+    showProspectToast('<i class="fas fa-tag" style="color:var(--accent-cyan);"></i> Moved to <strong>' + __msExpEsc(__msExpHeadLabel(head)) + '</strong>. '
+        + '<a href="#" id="msExpRuleOffer" data-norm="' + __msExpEsc(norm) + '" data-head="' + __msExpEsc(head) + '" onclick="return __msExpRuleFromToast(this);" style="color:var(--accent-cyan); font-weight:600;">'
+        + (others ? 'Also move the other ' + others + ' “' + __msExpEsc(ln.r) + '” entr' + (others === 1 ? 'y' : 'ies') : 'Always put “' + __msExpEsc(ln.r) + '” here')
+        + ', and later months too</a>', 9000);
+}
+function __msExpRuleFromToast(a) {
+    __msExpSetRule(a.getAttribute('data-norm'), a.getAttribute('data-head'));
+    var t = document.getElementById('prospectToastEl');
+    if (t) t.classList.remove('show');
+    return false;
+}
+function __msExpSetRule(norm, head) {
+    if (!__msExpCanEdit() || !norm || !__msExpHead(head)) return;
+    __msExp.meta.rules[norm] = head;
+    // a line moved by hand to the same head no longer needs its own setting
+    Object.keys(__msExp.fys).forEach(function (k) {
+        var ch = false;
+        __msExp.fys[k].lines.forEach(function (ln) { if (ln.o === head && __msExpNormRemark(ln.r) === norm) { delete ln.o; ch = true; } });
+        if (ch) __msExpMarkDirty(__msExpKeyOfFy(parseInt(k, 10)));
+    });
+    __msExpMarkDirty(MS_EXP_META_KEY);
+    renderExpensesPage();
+    var n = __msExpAllLines().filter(function (x) { return x.s !== 'manual' && __msExpNormRemark(x.r) === norm; }).length;
+    if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> “' + __msExpEsc(norm) + '” now goes under <strong>'
+        + __msExpEsc(__msExpHeadLabel(head)) + '</strong>: ' + n + ' entr' + (n === 1 ? 'y' : 'ies') + ', and later months.', 5000);
+}
+function __msExpRemoveRule(norm) {
+    if (!__msExpCanEdit() || !Object.prototype.hasOwnProperty.call(__msExp.meta.rules, norm)) return;
+    delete __msExp.meta.rules[norm];
+    __msExpMarkDirty(MS_EXP_META_KEY);
+    renderExpensesPage();
+}
+function __msExpSetNote(id, note) {
+    if (!__msExpCanEdit()) return;
+    var f = __msExpFind(id);
+    if (!f) return;
+    note = String(note || '').trim().slice(0, 300);
+    if (note) f.ln.n = note; else delete f.ln.n;
+    __msExpMarkDirty(__msExpKeyOfFy(f.fy));
+}
+function __msExpEditNote(el) {
+    var id = el.getAttribute('data-id');
+    var f = __msExpFind(id);
+    if (!f || el.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = f.ln.n || '';
+    inp.placeholder = 'Add a note';
+    inp.style.cssText = 'width:100%; min-width:120px; font-size:12px; padding:4px 6px;';
+    var done = false;
+    var finish = function (save) {
+        if (done) return;
+        done = true;
+        if (save) __msExpSetNote(id, inp.value);
+        renderExpensesPage();
+    };
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
+    inp.addEventListener('blur', function () { finish(true); });
+    el.innerHTML = '';
+    el.appendChild(inp);
+    inp.focus();
+}
+function __msExpPickHead(el) {
+    var id = el.getAttribute('data-id');
+    var f = __msExpFind(id);
+    if (!f || el.querySelector('select')) return;
+    var cur = __msExpEffHead(f.ln);
+    var sel = document.createElement('select');
+    sel.style.cssText = 'font-size:12px; padding:3px 4px; max-width:210px;';
+    sel.innerHTML = __msExpHeadOptions(cur);
+    var done = false;
+    sel.addEventListener('change', function () { done = true; __msExpSetHead(id, sel.value); });
+    sel.addEventListener('blur', function () { if (!done) { done = true; renderExpensesPage(); } });
+    sel.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done = true; renderExpensesPage(); } });
+    el.innerHTML = '';
+    el.appendChild(sel);
+    sel.focus();
+}
+function __msExpHeadOptions(cur, withAll) {
+    var html = withAll ? '<option value="">All heads</option>' : '';
+    MS_EXP_GROUPS.forEach(function (g) {
+        html += '<optgroup label="' + __msExpEsc(g.label) + '">';
+        __msExpHeads().filter(function (h) { return h.group === g.id; }).forEach(function (h) {
+            html += '<option value="' + __msExpEsc(h.id) + '"' + (h.id === cur ? ' selected' : '') + '>' + __msExpEsc(h.label) + '</option>';
+        });
+        html += '</optgroup>';
+    });
+    return html;
+}
+
+// ---- a bill on the Mac --------------------------------------------------------
+async function __msExpOpenBill(id, k) {
+    var f = __msExpFind(id);
+    var b = f && f.ln.b && f.ln.b[k];
+    if (!b) return;
+    var path = b.path || '';
+    if (!path && b.file) {
+        var root = __msExp.check.path || await __msExpCaPackPath();
+        var masterstone = String(root || '').replace(/\/+$/, '').replace(/\/[^\/]+$/, '');   // the folder above CA Pack
+        path = masterstone ? masterstone + '/' + b.file : '';
+    }
+    if (!path) { if (typeof showProspectToast === 'function') showProspectToast('No file is recorded for this bill.', 3500); return; }
+    var t = __msExpTauri(), ex = null;
+    try { ex = t ? await t.invoke('check_file_exists', { path: path }) : null; } catch (e) {}
+    if (ex && ex.ok && !ex.exists) {
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The bill isn\'t at ' + __msExpEsc(path) + ' (moved or renamed?).', 6000);
+        return;
+    }
+    if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(path);
+}
+
+// ---- add / edit an expense by hand ----------------------------------------------
+function openExpenseForm(id) {
+    if (!__msExpCanEdit()) return;
+    var f = id ? __msExpFind(id) : null;
+    var ln = f ? f.ln : null;
+    if (id && (!ln || ln.s !== 'manual')) return;
+    closeExpenseForm();
+    __msExp.editing = ln ? ln.i : '';
+    var today = new Date();
+    var iso = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
+    var bill = ln && ln.b && ln.b[0] ? (ln.b[0].path || '') : '';
+    var acctOpts = MS_EXP_ACCTS.map(function (a) { return '<option value="' + a.id + '"' + ((ln ? ln.a : 'CASH') === a.id ? ' selected' : '') + '>' + __msExpEsc(a.label) + '</option>'; }).join('');
+    var field = 'width:100%; padding:7px 9px; box-sizing:border-box;';
+    var ov = document.createElement('div');
+    ov.id = 'msExpFormModal';
+    ov.className = 'modal';
+    ov.style.display = 'flex';
+    ov.innerHTML = '<div class="modal-content" style="max-width:560px;" role="dialog" aria-modal="true" aria-labelledby="msExpFormTitle">'
+        + '<h3 id="msExpFormTitle" style="margin:0 0 4px;"><i class="fas fa-wallet" style="color:var(--accent-cyan); margin-right:8px;"></i>' + (ln ? 'Edit expense' : 'Add an expense') + '</h3>'
+        + '<div style="font-size:12.5px; color:var(--text-dim); margin-bottom:14px;">For a spend that is not on a bank or card statement, e.g. cash. Statement lines come from the CA pack by themselves.</div>'
+        + '<div style="display:grid; grid-template-columns:130px 1fr; gap:10px 12px; align-items:center;">'
+        + '<label for="msExpFDate" style="font-size:12px; color:var(--text-dim);">Date</label><input type="date" id="msExpFDate" value="' + __msExpEsc(ln ? ln.d : iso) + '" style="' + field + '">'
+        + '<label for="msExpFAmt" style="font-size:12px; color:var(--text-dim);">Amount (₹)</label><input type="text" inputmode="decimal" id="msExpFAmt" value="' + __msExpEsc(ln ? String(ln.m) : '') + '" placeholder="e.g. 1250" style="' + field + '">'
+        + '<label for="msExpFHead" style="font-size:12px; color:var(--text-dim);">Head</label><select id="msExpFHead" style="' + field + '">' + __msExpHeadOptions(ln ? ln.h : 'other') + '</select>'
+        + '<label for="msExpFAcct" style="font-size:12px; color:var(--text-dim);">Paid from</label><select id="msExpFAcct" style="' + field + '">' + acctOpts + '</select>'
+        + '<label for="msExpFText" style="font-size:12px; color:var(--text-dim);">What for</label><input type="text" id="msExpFText" value="' + __msExpEsc(ln ? ln.t : '') + '" placeholder="e.g. Courier to client" style="' + field + '">'
+        + '<label for="msExpFNote" style="font-size:12px; color:var(--text-dim);">Note</label><input type="text" id="msExpFNote" value="' + __msExpEsc(ln ? (ln.n || '') : '') + '" style="' + field + '">'
+        + '<label for="msExpFBill" style="font-size:12px; color:var(--text-dim);">Bill (optional)</label>'
+        + '<div style="display:flex; gap:6px;"><input type="text" id="msExpFBill" value="' + __msExpEsc(bill) + '" placeholder="File on this Mac" style="' + field + ' flex:1;">'
+        + '<button type="button" class="btn btn-ghost btn-sm" onclick="__msExpPickBill()">Browse</button></div>'
+        + '</div>'
+        + '<div id="msExpFErr" style="color:var(--danger); font-size:12.5px; min-height:18px; margin-top:10px;"></div>'
+        + '<div style="display:flex; gap:10px; justify-content:flex-end; align-items:center; margin-top:6px;">'
+        + (ln ? '<button type="button" class="btn btn-ghost" style="margin-right:auto; color:var(--danger);" onclick="deleteExpense(\'' + __msExpEsc(ln.i) + '\')"><i class="fas fa-trash"></i> Delete</button>' : '')
+        + '<button type="button" class="btn btn-ghost" onclick="closeExpenseForm()">Cancel</button>'
+        + '<button type="button" class="btn btn-primary" id="msExpFSave" onclick="saveExpenseForm()">Save</button></div></div>';
+    document.body.appendChild(ov);
+    document.addEventListener('keydown', __msExpFormKey);
+    var a = document.getElementById('msExpFAmt');
+    if (a) a.focus();
+}
+function closeExpenseForm() {
+    var ov = document.getElementById('msExpFormModal');
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    document.removeEventListener('keydown', __msExpFormKey);
+    __msExp.editing = null;
+}
+function __msExpFormKey(e) {
+    if (e.key !== 'Escape' || document.querySelector('.ms-ask-overlay')) return;
+    closeExpenseForm();
+}
+async function __msExpPickBill() {
+    var t = __msExpTauri();
+    if (!t) return;
+    try {
+        var r = await t.invoke('pick_file', { title: 'Choose the bill' });
+        if (r && r.ok && r.path) { var el = document.getElementById('msExpFBill'); if (el) el.value = r.path; }
+    } catch (e) {}
+}
+function saveExpenseForm() {
+    if (!__msExpCanEdit()) return;
+    var v = function (id) { var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    var err = document.getElementById('msExpFErr');
+    var d = v('msExpFDate'), amt = parseFloat(v('msExpFAmt').replace(/[,₹\s]/g, '')), head = v('msExpFHead');
+    var problem = !/^\d{4}-\d{2}-\d{2}$/.test(d) ? 'Pick the date.' : (!(amt > 0) || !isFinite(amt)) ? 'Type the amount (more than 0).' : !__msExpHead(head) ? 'Pick a head.' : '';
+    if (problem) { if (err) err.textContent = problem; return; }
+    var acct = v('msExpFAcct') || 'CASH', bill = v('msExpFBill');
+    var ln;
+    if (__msExp.editing) {
+        var f = __msExpFind(__msExp.editing);
+        if (!f) { closeExpenseForm(); return; }
+        ln = f.ln;
+        __msExp.fys[f.fy].lines.splice(f.idx, 1);
+        __msExpMarkDirty(__msExpKeyOfFy(f.fy));
+    } else {
+        ln = { i: 'man_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), f: null, s: 'manual', dc: 'D', r: '', rs: 'you', hw: 'you' };
+    }
+    ln.d = d; ln.m = Math.round(amt * 100) / 100; ln.h = head; ln.a = acct; ln.t = v('msExpFText').slice(0, 160);
+    var note = v('msExpFNote').slice(0, 300);
+    if (note) ln.n = note; else delete ln.n;
+    delete ln.o;
+    if (bill) ln.b = [{ path: bill.slice(0, 500), file: '', vendor: '', gstin: '', no: '', date: d, taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 }];
+    else delete ln.b;
+    var fy = __msExpFyOf(d);
+    __msExpStore(fy).lines.push(ln);
+    __msExpMarkDirty(__msExpKeyOfFy(fy));
+    __msExpLog('INFO', __msExp.editing ? 'an expense added by hand was changed' : 'an expense was added by hand', { date: d, amount: ln.m, head: head });
+    closeExpenseForm();
+    __msExp.ui.fy = fy;
+    renderExpensesPage();
+}
+async function deleteExpense(id) {
+    if (!__msExpCanEdit()) return;
+    var f = __msExpFind(id);
+    if (!f || f.ln.s !== 'manual') return;
+    var ok = await __msAsk('Delete this expense?\n\n' + (f.ln.t || __msExpHeadLabel(f.ln.h)) + ' · ' + __msExpRupees(f.ln.m) + ' on ' + f.ln.d + '\n\nIt was added by hand, so it can\'t come back from the CA pack.', { ok: 'Delete', cancel: 'Keep it', danger: 'ok' });
+    if (!ok) return;
+    var g = __msExpFind(id);
+    if (!g) return;
+    __msExp.fys[g.fy].lines.splice(g.idx, 1);
+    __msExpMarkDirty(__msExpKeyOfFy(g.fy));
+    __msExpLog('INFO', 'an expense added by hand was deleted', { date: g.ln.d, amount: g.ln.m });
+    closeExpenseForm();
+    renderExpensesPage();
+}
+
+// ---- the CA Pack folder ------------------------------------------------------------
+async function __msExpChooseFolder() {
+    if (!__msExpCanEdit()) return;
+    var t = __msExpTauri();
+    if (!t) return;
+    var r = null;
+    try { r = await t.invoke('pick_folder', { title: 'Choose your CA Pack folder' }); } catch (e) { r = null; }
+    if (!r || !r.ok || !r.path) return;
+    var p = String(r.path).replace(/\/+$/, '');
+    // the Masterstone folder (one up) works too
+    var inner = null;
+    try { inner = await t.invoke('check_file_exists', { path: p + '/CA Pack/_engine' }); } catch (e) {}
+    if (inner && inner.ok && inner.exists) p = p + '/CA Pack';
+    __msExp.meta.caPackPath = p;
+    __msExpMarkDirty(MS_EXP_META_KEY);
+    await __msExpCheck({ manual: true });
+}
+function __msExpResetFolder() {
+    if (!__msExpCanEdit()) return;
+    __msExp.meta.caPackPath = '';
+    __msExpMarkDirty(MS_EXP_META_KEY);
+    __msExpCheck({ manual: true });
+}
+
+// ---- the page ----------------------------------------------------------------------
+function __msExpRefreshIfOpen() {
+    var tab = document.getElementById('expensesTab');
+    if (!tab || tab.classList.contains('hidden')) return;
+    // not while you are typing a note or picking a head: that finishes with a redraw of its own
+    var a = document.activeElement, root = document.getElementById('msExpRoot');
+    if (a && root && root.contains(a) && a.id !== 'msExpQ' && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) return;
+    var hadQ = !!(a && a.id === 'msExpQ');
+    renderExpensesPage();
+    if (hadQ) { var q = document.getElementById('msExpQ'); if (q) { q.focus(); try { q.setSelectionRange(q.value.length, q.value.length); } catch (e) {} } }
+}
+function __msExpStateText() {
+    if (__msExp.state === 'failed') return 'they could not be read from the database (' + (__msExp.loadError || 'unknown') + '). Restart the app; nothing is saved until then.';
+    if (__msExp.state === 'loading' || __msExp.state === 'idle') return 'they are still loading.';
+    if (__msExp.state === 'unavailable') return 'expenses live in the Mac app\'s database.';
+    if (__msExp.state === 'restoring') return 'a backup is being put back.';
+    if (__msExp.state === 'restored') return 'a backup was just put back and the app is restarting. If it doesn\'t, quit it and open it again.';
+    return '';
+}
+function __msExpLines(fy) {
+    var st = __msExp.fys[fy];
+    if (!st) return [];
+    var ui = __msExp.ui, q = ui.q.trim().toLowerCase();
+    var qn = q.replace(/[,₹\s]/g, '');
+    return st.lines.filter(function (ln) {
+        if (ui.acct !== 'ALL' && ln.a !== ui.acct) return false;
+        if (!q) return true;
+        if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
+        var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), (ln.b || []).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : ''].join(' ').toLowerCase();
+        return hay.indexOf(q) !== -1;
+    });
+}
+function __msExpTotals(lines, fy) {
+    var by = {}, months = {}, groups = { exp: 0, vendor: 0, other: 0 };
+    lines.forEach(function (ln) {
+        var h = __msExpEffHead(ln), g = __msExpGroupOf(ln), v = __msExpSigned(ln), ym = ln.d.slice(0, 7);
+        groups[g] = (groups[g] || 0) + v;
+        if (!by[h]) by[h] = { total: 0, months: {}, n: 0 };
+        by[h].total += v; by[h].n++;
+        by[h].months[ym] = (by[h].months[ym] || 0) + v;
+        if (!months[g]) months[g] = {};
+        months[g][ym] = (months[g][ym] || 0) + v;
+    });
+    return { by: by, months: months, groups: groups };
+}
+function renderExpensesPage() {
+    var root = document.getElementById('msExpRoot');
+    if (!root) return;
+    var S = __msExp, ui = S.ui;
+    if (S.state === 'idle' && __msExpTauri()) { __msExpLoad(); }
+    var head = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:12px;">'
+        + '<h2 style="margin:0;"><i class="fas fa-wallet" style="color:var(--accent-cyan); margin-right:8px;"></i> Expenses</h2>'
+        + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + '<button class="btn btn-ghost" id="msExpCheckBtn" onclick="__msExpCheck({ manual: true })"' + (S.state !== 'ready' || S.check.running ? ' disabled' : '') + ' title="Look in the CA pack for new or changed months"><i class="fas fa-rotate' + (S.check.running ? ' fa-spin' : '') + '"></i> Check CA pack</button>'
+        + '<button class="btn btn-ghost" onclick="exportExpensesExcel()"' + (S.state !== 'ready' ? ' disabled' : '') + ' title="This financial year, every head and entry"><i class="fas fa-file-excel"></i> Export</button>'
+        + '<button class="btn btn-primary" onclick="openExpenseForm()"' + (S.state !== 'ready' ? ' disabled' : '') + '><i class="fas fa-plus"></i> Add expense</button>'
+        + '</div></div>';
+    if (S.state !== 'ready') {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">'
+            + (S.state === 'failed' ? '<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Expenses can\'t be shown: ' : (S.state === 'unavailable' ? '<i class="fas fa-circle-info"></i> ' : '<i class="fas fa-spinner fa-spin"></i> Expenses: '))
+            + __msExpEsc(S.state === 'unavailable' ? 'Expenses live in the Mac app\'s database; open them in the Masterstone app.' : __msExpStateText()) + '</div>';
+        return;
+    }
+    if (ui.fy === null) ui.fy = __msExpCurrentFy();
+    var fys = Object.keys(S.fys).map(Number).filter(function (y) { return S.fys[y].lines.length; });
+    if (fys.indexOf(__msExpCurrentFy()) === -1) fys.push(__msExpCurrentFy());
+    if (fys.indexOf(ui.fy) === -1) fys.push(ui.fy);
+    fys.sort(function (a, b) { return b - a; });
+    var fy = ui.fy;
+    var lines = __msExpLines(fy);
+    var T = __msExpTotals(lines, fy);
+    var html = head + __msExpStatusHtml();
+    // filters (they scope everything below)
+    html += '<div class="card" style="padding:12px 16px; margin:12px 0 14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
+        + '<select id="msExpFy" onchange="__msExpSetUi(\'fy\', parseInt(this.value, 10))" style="width:140px;" aria-label="Financial year">'
+        + fys.map(function (y) { return '<option value="' + y + '"' + (y === fy ? ' selected' : '') + '>' + __msExpFyLabel(y) + '</option>'; }).join('') + '</select>'
+        + '<select id="msExpAcct" onchange="__msExpSetUi(\'acct\', this.value)" style="width:180px;" aria-label="Paid from"><option value="ALL">All accounts and cards</option>'
+        + MS_EXP_ACCTS.map(function (a) { return '<option value="' + a.id + '"' + (ui.acct === a.id ? ' selected' : '') + '>' + __msExpEsc(a.label) + '</option>'; }).join('') + '</select>'
+        + '<input type="text" id="msExpQ" value="' + __msExpEsc(ui.q) + '" placeholder="Search remark, description, amount…" style="flex:1; min-width:200px; max-width:340px;" oninput="__msExpSearch(this.value)">'
+        + '<div role="tablist" style="display:flex; gap:6px; margin-left:auto; flex-wrap:wrap;">'
+        + MS_EXP_GROUPS.map(function (g) {
+            var on = ui.group === g.id;
+            return '<button type="button" role="tab" aria-selected="' + on + '" class="btn btn-sm ' + (on ? 'btn-primary' : 'btn-ghost') + '" data-group="' + g.id + '" title="' + __msExpEsc(g.hint) + '" onclick="__msExpSetUi(\'group\', \'' + g.id + '\')">'
+                + __msExpEsc(g.label) + ' · ' + __msExpEsc(fmtMoneyShort(Math.round(T.groups[g.id] || 0))) + '</button>';
+        }).join('') + '</div></div></div>';
+    html += __msExpCardsHtml(fy, lines, T);
+    html += __msExpTableHtml(fy, T);
+    html += '<div class="card" style="padding:14px 18px 10px; margin-bottom:14px;">'
+        + '<div style="font-size:13px; font-weight:600; margin-bottom:2px;">' + __msExpEsc(MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label) + ' by month, ' + __msExpFyLabel(fy) + '</div>'
+        + '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Click a month to see its entries. The table above has every figure.</div>'
+        + '<div id="msExpChartBox" style="position:relative; height:210px;"><canvas id="msExpChart" aria-label="Monthly totals" role="img"></canvas></div></div>';
+    html += __msExpListHtml(fy, lines);
+    html += __msExpRulesHtml();
+    root.innerHTML = html;
+    __msExpDrawChart(fy, T);
+}
+function __msExpStatusHtml() {
+    var S = __msExp, C = S.check;
+    var months = Object.keys(S.meta.months).sort();
+    var parts = [];
+    if (months.length) {
+        var last = months[months.length - 1], lm = S.meta.months[last];
+        parts.push('From the CA pack: ' + __msExpEsc(__msExpShortMonth(months[0])) + ' – ' + __msExpEsc(__msExpShortMonth(last))
+            + ' (' + months.length + ' month' + (months.length === 1 ? '' : 's') + ')');
+        if (lm && lm.in) parts.push('latest taken in ' + __msExpEsc(new Date(lm.in).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })));
+    } else parts.push('Nothing from the CA pack yet');
+    if (C.running) parts.push('<i class="fas fa-spinner fa-spin"></i> checking…');
+    else if (S.meta.lastCheck) parts.push('checked ' + __msExpEsc(__msExpAgo(S.meta.lastCheck)));
+    var note = '';
+    if (C.status === 'no-folder') {
+        note = '<div style="margin-top:6px; color:var(--warning);"><i class="fas fa-folder-open"></i> ' + __msExpEsc(C.detail) + ' '
+            + '<a href="#" onclick="__msExpChooseFolder(); return false;" style="color:var(--accent-cyan); font-weight:600;">Choose the CA Pack folder…</a></div>';
+    } else if (C.status === 'no-data') {
+        note = '<div style="margin-top:6px;"><i class="fas fa-circle-info"></i> ' + __msExpEsc(C.detail) + ' They appear after the next CA pack run.</div>';
+    } else if (C.status === 'error') {
+        note = '<div style="margin-top:6px; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msExpEsc(C.detail) + '</div>';
+    } else if (C.detail) {
+        note = '<div style="margin-top:6px;"><i class="fas fa-circle-info"></i> ' + __msExpEsc(C.detail) + '</div>';
+    }
+    if (S.saveError) {
+        note += '<div style="margin-top:6px; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> Couldn\'t save to the database (' + __msExpEsc(S.saveError)
+            + '). Your changes are kept on screen and saved as soon as it works; the app tries again every few seconds.</div>';
+    }
+    var folder = S.meta.caPackPath ? ' · <a href="#" onclick="__msExpResetFolder(); return false;" style="color:var(--text-dim);" title="' + __msExpEsc(S.meta.caPackPath) + '">folder chosen by you (use the usual one)</a>'
+        : ' · <a href="#" onclick="__msExpChooseFolder(); return false;" style="color:var(--text-dim);">CA Pack folder…</a>';
+    return '<div id="msExpStatus" style="font-size:12.5px; color:var(--text-dim);">' + parts.join(' · ') + folder + note + '</div>';
+}
+function __msExpAgo(iso) {
+    var t = new Date(iso).getTime();
+    if (!isFinite(t)) return '';
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+function __msExpCardsHtml(fy, lines, T) {
+    var exp = lines.filter(function (ln) { return __msExpGroupOf(ln) === 'exp'; });
+    var total = 0, byMonth = {};
+    exp.forEach(function (ln) { var v = __msExpSigned(ln), ym = ln.d.slice(0, 7); total += v; byMonth[ym] = (byMonth[ym] || 0) + v; });
+    var ms = Object.keys(byMonth).sort();
+    var latest = ms.length ? ms[ms.length - 1] : '';
+    var avg = ms.length ? total / ms.length : 0;
+    var gst = 0, bills = 0;
+    exp.forEach(function (ln) { if (ln.b && ln.b.length) { gst += __msExpGst(ln); bills += ln.b.length; } });
+    var fromPack = exp.filter(function (ln) { return ln.s === 'pack'; });
+    var noBill = fromPack.filter(function (ln) { return ln.dc === 'D' && ln.m >= MS_EXP_NO_BILL_FROM && !(ln.b && ln.b.length) && __msExpEffHead(ln) !== 'salaries' && __msExpEffHead(ln) !== 'partner_salary' && __msExpEffHead(ln) !== 'bank' && __msExpEffHead(ln) !== 'petty_cash'; });
+    var noBillAmt = 0;
+    noBill.forEach(function (ln) { noBillAmt += ln.m; });
+    var card = function (icon, label, val, sub, color, id) {
+        return '<div class="proposal-kpi-card"' + (id ? ' id="' + id + '"' : '') + '><div class="proposal-kpi-lbl"><i class="fas ' + icon + '"></i> ' + label + '</div>'
+            + '<div class="proposal-kpi-val" style="color:' + color + ';">' + val + '</div><div class="proposal-kpi-sub">' + sub + '</div></div>';
+    };
+    return '<div class="proposal-kpi-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom:14px;">'
+        + card('fa-wallet', 'Company expenses', fmtMoneyShort(total), exp.length + ' entr' + (exp.length === 1 ? 'y' : 'ies') + ' · ' + __msExpFyShort(fy), 'var(--accent-cyan)', 'msExpCardTotal')
+        + card('fa-calendar', 'Latest month', latest ? fmtMoneyShort(byMonth[latest]) : '—', latest ? __msExpEsc(__msExpMonthLabel(latest)) : 'No entries yet', 'var(--text-main)', 'msExpCardLatest')
+        + card('fa-chart-simple', 'Monthly average', ms.length ? fmtMoneyShort(avg) : '—', ms.length ? 'over ' + ms.length + ' month' + (ms.length === 1 ? '' : 's') : '—', 'var(--text-main)', 'msExpCardAvg')
+        + card('fa-receipt', 'GST on bills', bills ? fmtMoneyShort(gst) : '—', bills ? 'on ' + bills + ' bill' + (bills === 1 ? '' : 's') + ' read by the CA pack' : 'Bills are read from the CA pack', 'var(--success)', 'msExpCardGst')
+        + card('fa-file-circle-question', 'No bill (₹' + MS_EXP_NO_BILL_FROM.toLocaleString('en-IN') + '+)', fromPack.length ? String(noBill.length) : '—',
+               fromPack.length ? (noBill.length ? fmtMoneyShort(noBillAmt) + ' · put the bills in the Expenses folder' : 'every one has its bill') : 'From the months the CA pack builds', noBill.length ? 'var(--warning)' : 'var(--text-main)', 'msExpCardNoBill')
+        + '</div>';
+}
+// The months a year's table shows: all twelve, or in the current year April to this
+// month (or to the latest month with an entry, so every row still adds up).
+function __msExpTableMonths(fy, T) {
+    var keys = MS_EXP_MONTHS.map(function (_m, i) { return __msExpMonthKey(fy, i); });
+    if (fy !== __msExpCurrentFy()) return keys;
+    var d = new Date(), last = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+    if (T && T.months) Object.keys(T.months).forEach(function (g) { Object.keys(T.months[g]).forEach(function (ym) { if (ym > last) last = ym; }); });
+    return keys.filter(function (ym) { return ym <= last; });
+}
+function __msExpTableHtml(fy, T) {
+    var ui = __msExp.ui;
+    var heads = __msExpHeads().filter(function (h) { return h.group === ui.group && T.by[h.id]; });
+    heads.sort(function (a, b) { if (a.id === 'other') return 1; if (b.id === 'other') return -1; return T.by[b.id].total - T.by[a.id].total; });
+    var keys = __msExpTableMonths(fy, T);
+    var groupTotal = T.groups[ui.group] || 0;
+    var cell = function (v, h, ym, strong) {
+        var sel = (ui.head === h || !ui.head) && (ui.month === ym || !ui.month) && (ui.head || ui.month) && (h || ym);
+        var one = sel && ui.head && ui.month;      // one figure picked: outline it; a row or a column: shade it
+        var style = 'text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; cursor:pointer;' + (strong ? ' font-weight:600;' : '')
+            + (sel ? ' background:var(--hover-bg);' : '') + (one ? ' outline:1.5px solid var(--accent-cyan); outline-offset:-2px;' : '');
+        return '<td style="' + style + '" onclick="__msExpSelect(\'' + (h || '') + '\', \'' + (ym || '') + '\')">' + (v ? __msExpRupees(v) : '<span style="color:var(--text-dim);">–</span>') + '</td>';
+    };
+    var html = '<div class="card" style="margin-bottom:14px;"><div class="table-scroll-wrap" style="max-height:none;"><table id="msExpTable" style="font-size:12.5px;">'
+        + '<thead><tr><th>Head</th>' + keys.map(function (ym, i) {
+            return '<th style="text-align:right; cursor:pointer;" onclick="__msExpSelect(\'\', \'' + ym + '\')" title="' + __msExpEsc(__msExpMonthLabel(ym)) + '">' + MS_EXP_MONTHS[i] + '</th>';
+        }).join('') + '<th style="text-align:right;">' + __msExpFyShort(fy) + '</th><th style="text-align:right;">Share</th></tr></thead><tbody>';
+    if (!heads.length) {
+        html += '<tr><td colspan="' + (keys.length + 3) + '" style="text-align:center; padding:26px; color:var(--text-dim); font-style:italic;">No entries for ' + __msExpFyLabel(fy)
+            + (ui.acct !== 'ALL' || ui.q ? ' with these filters' : '') + '.</td></tr>';
+    }
+    heads.forEach(function (h) {
+        var b = T.by[h.id];
+        html += '<tr><td style="white-space:nowrap; cursor:pointer;' + (ui.head === h.id && !ui.month ? ' font-weight:700; color:var(--accent-cyan);' : '') + '" onclick="__msExpSelect(\'' + h.id + '\', \'\')">' + __msExpEsc(h.label)
+            + ' <span style="color:var(--text-dim); font-size:11px;">' + b.n + '</span></td>'
+            + keys.map(function (ym) { return cell(b.months[ym] || 0, h.id, ym); }).join('')
+            + cell(b.total, h.id, '', true)
+            + '<td style="text-align:right; color:var(--text-dim); font-variant-numeric:tabular-nums;">' + (groupTotal ? Math.round(b.total / groupTotal * 100) + '%' : '') + '</td></tr>';
+    });
+    if (heads.length) {
+        var mt = T.months[ui.group] || {};
+        html += '<tr style="border-top:2px solid var(--glass-border);"><td style="font-weight:700;">Total</td>' + keys.map(function (ym) { return cell(mt[ym] || 0, '', ym, true); }).join('')
+            + cell(groupTotal, '', '', true) + '<td></td></tr>';
+    }
+    return html + '</tbody></table></div></div>';
+}
+function __msExpDrawChart(fy, T) {
+    var cv = document.getElementById('msExpChart');
+    if (__msExp.chart) { try { __msExp.chart.destroy(); } catch (e) {} __msExp.chart = null; }
+    if (!cv || typeof Chart === 'undefined') return;
+    var ui = __msExp.ui;
+    var keys = MS_EXP_MONTHS.map(function (_m, i) { return __msExpMonthKey(fy, i); });
+    var mt = T.months[ui.group] || {};
+    var data = keys.map(function (ym) { return Math.round(mt[ym] || 0); });
+    var css = getComputedStyle(document.body);
+    var accent = (css.getPropertyValue('--accent-cyan') || '').trim() || '#0c5e5b';
+    var grid = (css.getPropertyValue('--chart-grid') || '').trim() || 'rgba(20,20,15,0.06)';
+    var ink = (css.getPropertyValue('--text-dim') || '').trim() || '#74716a';
+    var colors = keys.map(function (ym) { return (!ui.month || ui.month === ym) ? accent : accent + '55'; });
+    try {
+        __msExp.chart = new Chart(cv.getContext('2d'), {
+            type: 'bar',
+            data: { labels: MS_EXP_MONTHS.slice(), datasets: [{ label: 'Total', data: data, backgroundColor: colors, hoverBackgroundColor: accent,
+                    maxBarThickness: 24, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom' }] },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+                onClick: function (_e, els) { if (els && els.length) __msExpSelect('', keys[els[0].index]); },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: {
+                        title: function (items) { return items.length ? __msExpMonthLabel(keys[items[0].dataIndex]) : ''; },
+                        label: function (item) { return __msExpRupees(item.raw); },
+                        afterBody: function (items) {
+                            if (!items.length) return [];
+                            var ym = keys[items[0].dataIndex];
+                            return Object.keys(T.by).filter(function (h) { var hd = __msExpHead(h); return hd && hd.group === ui.group && T.by[h].months[ym]; })
+                                .sort(function (a, b) { return T.by[b].months[ym] - T.by[a].months[ym]; }).slice(0, 3)
+                                .map(function (h) { return __msExpHeadLabel(h) + ': ' + __msExpRupees(T.by[h].months[ym]); });
+                        }
+                    } }
+                },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: grid }, border: { display: false }, ticks: { color: ink, callback: function (v) { return fmtMoneyShort(Number(v)); } } },
+                    x: { grid: { display: false }, ticks: { color: ink } }
+                }
+            }
+        });
+    } catch (e) { __msExpLog('WARN', 'chart not drawn', { error: String((e && e.message) || e) }); }
+}
+function __msExpListHtml(fy, lines) {
+    var ui = __msExp.ui;
+    var rows = lines.filter(function (ln) {
+        if (__msExpGroupOf(ln) !== ui.group) return false;
+        if (ui.head && __msExpEffHead(ln) !== ui.head) return false;
+        if (ui.month && ln.d.slice(0, 7) !== ui.month) return false;
+        return true;
+    });
+    rows.sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : (b.m - a.m); });
+    var total = 0;
+    rows.forEach(function (ln) { total += __msExpSigned(ln); });
+    var what = (ui.head ? __msExpHeadLabel(ui.head) : MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label) + (ui.month ? ', ' + __msExpMonthLabel(ui.month) : ', ' + __msExpFyLabel(fy));
+    var html = '<div class="card" style="margin-bottom:14px;"><div style="display:flex; justify-content:space-between; align-items:baseline; padding:14px 18px 8px; flex-wrap:wrap; gap:8px;">'
+        + '<div><span style="font-size:13px; font-weight:600;">Entries: ' + __msExpEsc(what) + '</span> <span style="font-size:12px; color:var(--text-dim);">' + rows.length + ' · ' + __msExpRupees(total) + '</span></div>'
+        + ((ui.head || ui.month) ? '<a href="#" onclick="__msExpSelect(\'\', \'\'); return false;" style="font-size:12px; color:var(--accent-cyan);">Show all ' + __msExpEsc(MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label.toLowerCase()) + '</a>' : '')
+        + '</div><div class="table-scroll-wrap"><table id="msExpList" style="font-size:12.5px;"><thead><tr>'
+        + '<th>Date</th><th>Paid from</th><th>Bank description</th><th>Your remark</th><th>Head</th><th style="text-align:right;">Amount</th><th style="text-align:right;">GST</th><th>Bill</th><th>Note</th></tr></thead><tbody>';
+    if (!rows.length) html += '<tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-dim); font-style:italic;">No entries here.</td></tr>';
+    rows.slice(0, ui.limit).forEach(function (ln) {
+        var eh = __msExpEffHead(ln);
+        var moved = ln.s !== 'manual' && eh !== ln.h;
+        var remark = ln.r ? __msExpEsc(ln.r) : '<span style="color:var(--text-dim); font-style:italic;">' + (ln.s === 'manual' ? 'added by you' : 'no remark') + '</span>';
+        if (ln.rs === 'claude') remark += ' <span title="Remark written by Claude in the CA pack, not one of yours" style="font-size:10px; padding:1px 5px; border-radius:8px; border:1px solid var(--glass-border); color:var(--text-dim);">Claude</span>';
+        if (ln.x) remark += '<div style="font-size:11px; color:var(--text-dim);" title="The app\'s CA export has this payment">In the app: ' + __msExpEsc(ln.x.party) + (ln.x.invoice ? ' · ' + __msExpEsc(ln.x.invoice) : '') + (ln.x.tds ? ' · TDS ' + __msExpRupees(ln.x.tds) : '') + '</div>';
+        var gst = __msExpGst(ln);
+        var guessed = ' (matched to this payment by amount and date, not read off the bill)';
+        var gstTitle = (ln.b || []).map(function (b) { return (b.vendor || 'Bill') + (b.no ? ' ' + b.no : '') + ': CGST ' + b.cgst + ', SGST ' + b.sgst + ', IGST ' + b.igst + (b.guessed ? guessed : ''); }).join('\n');
+        var bills = (ln.b || []).map(function (b, k) {
+            return '<a href="#" onclick="__msExpOpenBill(\'' + __msExpEsc(ln.i) + '\', ' + k + '); return false;" title="' + __msExpEsc((b.vendor || 'Bill') + (b.no ? ' · ' + b.no : '') + ' · ' + (b.file || b.path || '') + (b.guessed ? guessed : '')) + '" style="color:var(--accent-cyan);"><i class="fas fa-paperclip"></i>' + (b.guessed ? '<span style="font-size:9px; color:var(--text-dim);">?</span>' : '') + '</a>';
+        }).join(' ');
+        html += '<tr data-id="' + __msExpEsc(ln.i) + '">'
+            + '<td style="white-space:nowrap;">' + __msExpEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
+            + '<td style="white-space:nowrap;">' + __msExpEsc(__msExpAcctLabel(ln.a)) + '</td>'
+            + '<td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msExpEsc(ln.t) + '">' + __msExpEsc(ln.t) + '</td>'
+            + '<td style="max-width:240px;">' + remark + '</td>'
+            + '<td class="ms-exp-head" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpPickHead(this)" style="white-space:nowrap; cursor:pointer;" title="Click to change the head">'
+            + __msExpEsc(__msExpHeadLabel(eh)) + (moved ? ' <i class="fas fa-pen" style="font-size:9px; color:var(--text-dim);" title="Moved by you (the CA pack said ' + __msExpEsc(__msExpHeadLabel(ln.h)) + ')"></i>' : '')
+            + ' <i class="fas fa-caret-down" style="font-size:10px; color:var(--text-dim);"></i></td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;' + (ln.dc === 'C' ? ' color:var(--success);' : '') + '">'
+            + (ln.dc === 'C' ? '<span style="font-size:10.5px;">refund </span>' : '') + __msExpEsc(typeof __msInr === 'function' ? __msInr(__msExpSigned(ln)) : String(__msExpSigned(ln))) + '</td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;" title="' + __msExpEsc(gstTitle) + '">' + (gst ? __msExpEsc(__msInr(gst)) : '') + '</td>'
+            + '<td style="white-space:nowrap;">' + bills + '</td>'
+            + '<td class="ms-exp-note" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpEditNote(this)" style="cursor:text; min-width:90px;" title="Click to add or change a note">'
+            + (ln.n ? __msExpEsc(ln.n) : '<span style="color:var(--text-dim); font-size:11px;">+ note</span>')
+            + (ln.s === 'manual' ? ' <a href="#" onclick="event.stopPropagation(); openExpenseForm(\'' + __msExpEsc(ln.i) + '\'); return false;" title="Edit this expense" style="color:var(--accent-cyan); margin-left:4px;"><i class="fas fa-pen"></i></a>' : '')
+            + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    if (rows.length > ui.limit) {
+        html += '<div style="padding:10px 18px; text-align:center;"><button class="btn btn-ghost btn-sm" onclick="__msExpSetUi(\'limit\', ' + (ui.limit + MS_EXP_LIST_STEP * 4) + ')">Show more (' + (rows.length - ui.limit) + ' more)</button></div>';
+    }
+    return html + '</div>';
+}
+function __msExpRulesHtml() {
+    var rules = __msExp.meta.rules, keys = Object.keys(rules).sort();
+    if (!keys.length) return '';
+    var html = '<div class="card" style="padding:12px 18px; margin-bottom:14px;"><a href="#" onclick="__msExpSetUi(\'rulesOpen\', ' + (!__msExp.ui.rulesOpen) + '); return false;" style="font-size:13px; font-weight:600; color:var(--text-main);">'
+        + '<i class="fas fa-chevron-' + (__msExp.ui.rulesOpen ? 'down' : 'right') + '" style="font-size:10px; margin-right:6px;"></i>Your head rules (' + keys.length + ')</a>'
+        + '<span style="font-size:11.5px; color:var(--text-dim); margin-left:8px;">Every entry with the remark goes under the head, in later months too.</span>';
+    if (__msExp.ui.rulesOpen) {
+        html += '<table style="font-size:12.5px; margin-top:8px;"><tbody>' + keys.map(function (k) {
+            return '<tr><td>“' + __msExpEsc(k) + '”</td><td>→ ' + __msExpEsc(__msExpHeadLabel(rules[k])) + '</td>'
+                + '<td><a href="#" data-norm="' + __msExpEsc(k) + '" onclick="__msExpRemoveRule(this.getAttribute(\'data-norm\')); return false;" style="color:var(--danger); font-size:12px;">Remove</a></td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+    return html + '</div>';
+}
+function __msExpSetUi(k, v) {
+    var ui = __msExp.ui;
+    ui[k] = v;
+    if (k === 'fy' || k === 'group') { ui.head = ''; ui.month = ''; ui.limit = MS_EXP_LIST_STEP; }
+    if (k === 'acct' || k === 'q') ui.limit = MS_EXP_LIST_STEP;
+    if (k === 'q') {
+        // keep typing in the box: redraw, then put the caret back
+        renderExpensesPage();
+        var q = document.getElementById('msExpQ');
+        if (q) { q.focus(); try { q.setSelectionRange(q.value.length, q.value.length); } catch (e) {} }
+        return;
+    }
+    renderExpensesPage();
+}
+var __msExpSearchTimer = null;
+function __msExpSearch(v) {
+    clearTimeout(__msExpSearchTimer);
+    __msExpSearchTimer = setTimeout(function () { __msExpSetUi('q', v); }, 180);
+}
+function __msExpSelect(head, ym) {
+    var ui = __msExp.ui;
+    if (ui.head === head && ui.month === ym) { ui.head = ''; ui.month = ''; }
+    else { ui.head = head; ui.month = ym; }
+    ui.limit = MS_EXP_LIST_STEP;
+    renderExpensesPage();
+    var l = document.getElementById('msExpList');
+    if (l && l.scrollIntoView && (head || ym)) { try { l.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+}
+
+// ---- Excel ------------------------------------------------------------------------
+function exportExpensesExcel() {
+    if (typeof XLSX === 'undefined') { if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Excel library not loaded — refresh and retry.', 4000); return; }
+    if (__msExp.state !== 'ready') return;
+    var fy = __msExp.ui.fy === null ? __msExpCurrentFy() : __msExp.ui.fy;
+    var st = __msExp.fys[fy] || { lines: [] };
+    var lines = st.lines.slice().sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
+    var T = __msExpTotals(lines, fy);
+    var keys = MS_EXP_MONTHS.map(function (_m, i) { return __msExpMonthKey(fy, i); });
+    var r2 = function (n) { return Math.round((Number(n) || 0) * 100) / 100; };
+    var aoa = [['Masterstone LLP — Expenses, ' + __msExpFyLabel(fy)], ['From the CA pack (bank and card statements with your remarks), plus entries added by hand. Made ' + new Date().toLocaleString('en-GB') + '.'], []];
+    var bold = [], money = [];
+    MS_EXP_GROUPS.forEach(function (g) {
+        var heads = __msExpHeads().filter(function (h) { return h.group === g.id && T.by[h.id]; });
+        if (!heads.length) return;
+        aoa.push([g.label.toUpperCase() + (g.id === 'exp' ? '' : ' (not in the expense total)')]); bold.push(aoa.length - 1);
+        aoa.push(['Head'].concat(MS_EXP_MONTHS.map(function (m, i) { return m + ' ' + keys[i].slice(2, 4); })).concat([__msExpFyShort(fy)])); bold.push(aoa.length - 1);
+        heads.forEach(function (h) {
+            aoa.push([h.label].concat(keys.map(function (ym) { return r2(T.by[h.id].months[ym] || 0); })).concat([r2(T.by[h.id].total)]));
+            money.push(aoa.length - 1);
+        });
+        var mt = T.months[g.id] || {};
+        aoa.push(['Total'].concat(keys.map(function (ym) { return r2(mt[ym] || 0); })).concat([r2(T.groups[g.id])]));
+        bold.push(aoa.length - 1); money.push(aoa.length - 1);
+        aoa.push([]);
+    });
+    var ws1 = XLSX.utils.aoa_to_sheet(aoa);
+    ws1['!cols'] = [{ wch: 30 }].concat(keys.map(function () { return { wch: 12 }; })).concat([{ wch: 14 }]);
+    money.forEach(function (r) { for (var c = 1; c <= 13; c++) { var cell = ws1[XLSX.utils.encode_cell({ r: r, c: c })]; if (cell && cell.t === 'n') cell.z = '#,##0.00'; } });
+    bold.forEach(function (r) { for (var c = 0; c <= 13; c++) { var cell = ws1[XLSX.utils.encode_cell({ r: r, c: c })]; if (cell) cell.s = { font: { bold: true } }; } });
+    if (ws1.A1) ws1.A1.s = { font: { bold: true, sz: 13 } };
+    var head2 = ['Date', 'Paid from', 'Bank description', 'Your remark', 'Remark by', 'Head', 'Group', 'Amount (₹)', 'Bill from', 'GSTIN', 'Bill no.', 'Taxable', 'CGST', 'SGST', 'IGST', 'Bill total',
+                 'Bill file', 'In the app', 'Note', 'Came from'];
+    var rows = [head2];
+    lines.forEach(function (ln) {
+        var b = (ln.b && ln.b[0]) || null, eh = __msExpEffHead(ln);
+        var sum = function (k) { var s = 0; (ln.b || []).forEach(function (x) { s += Number(x[k]) || 0; }); return r2(s); };
+        rows.push([ln.d, __msExpAcctLabel(ln.a), ln.t || '', ln.r || '', ln.s === 'manual' ? 'you (added by hand)' : (ln.rs === 'claude' ? 'Claude' : (ln.rs === 'rule' ? 'your rule' : (ln.r ? 'you' : ''))),
+            __msExpHeadLabel(eh), MS_EXP_GROUPS.filter(function (g) { return g.id === __msExpGroupOf(ln); })[0].label, r2(__msExpSigned(ln)),
+            b ? b.vendor : '', b ? b.gstin : '', (ln.b || []).map(function (x) { return x.no; }).filter(Boolean).join(', '),
+            b ? sum('taxable') : '', b ? sum('cgst') : '', b ? sum('sgst') : '', b ? sum('igst') : '', b ? sum('total') : '',
+            (ln.b || []).map(function (x) { return x.file || x.path || ''; }).filter(Boolean).join(', '),
+            ln.x ? ln.x.party + (ln.x.invoice ? ' ' + ln.x.invoice : '') : '', ln.n || '',
+            ln.s === 'manual' ? 'added by hand' : (ln.s === 'history' ? 'saved statements (' + ln.f + ')' : 'CA pack ' + ln.f)]);
+    });
+    var ws2 = XLSX.utils.aoa_to_sheet(rows);
+    ws2['!cols'] = [12, 16, 44, 30, 12, 26, 20, 14, 26, 18, 18, 12, 10, 10, 10, 12, 40, 26, 24, 22].map(function (w) { return { wch: w }; });
+    for (var r = 1; r < rows.length; r++) {
+        [7, 11, 12, 13, 14, 15].forEach(function (c) { var cell = ws2[XLSX.utils.encode_cell({ r: r, c: c })]; if (cell && cell.t === 'n') cell.z = '#,##0.00'; });
+    }
+    for (var c = 0; c < head2.length; c++) { var hc = ws2[XLSX.utils.encode_cell({ r: 0, c: c })]; if (hc) hc.s = { font: { bold: true } }; }
+    ws2['!view'] = [{ state: 'frozen', ySplit: 1, xSplit: 0, topLeftCell: 'A2', activePane: 'bottomLeft' }];   // as the CA export does
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, 'By head');
+    XLSX.utils.book_append_sheet(wb, ws2, 'Entries');
+    var fname = 'Masterstone_Expenses_FY' + fy + '-' + String(fy + 1).slice(2) + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Expenses exported — <strong>' + __msExpEsc(fname) + '</strong>', 4000);
+}
+
+// ---- backups (System Controls → Backup) -------------------------------------------------
+// The JSON backup carries what is in browser storage; expenses live in the database,
+// so they ride along here and are put back on restore.
+window.__msExpBackupPayload = function () {
+    if (__msExp.state !== 'ready') return { included: false, reason: __msExp.state };
+    var keys = {};
+    Object.keys(__msExp.fys).forEach(function (fy) { keys[__msExpKeyOfFy(parseInt(fy, 10))] = __msExpValueOf(__msExpKeyOfFy(parseInt(fy, 10))); });
+    keys[MS_EXP_META_KEY] = __msExpValueOf(MS_EXP_META_KEY);
+    return { included: true, lines: __msExpAllLines().length, keys: keys };
+};
+window.__msExpBackupCount = function (p) {
+    if (!p || !p.included || !p.keys) return null;
+    var n = 0;
+    Object.keys(p.keys).forEach(function (k) { if (k.indexOf(MS_EXP_FY_PREFIX) === 0) { try { n += (JSON.parse(p.keys[k]).lines || []).length; } catch (e) {} } });
+    return n;
+};
+// Put the backup's expenses into the database (years not in the backup are emptied).
+// Resolves { ok, error, restoredBack }. Nothing else is touched. While it runs, and
+// after it succeeds (the app restarts straight after), nothing else is saved: what is
+// on screen is the old data. If a record can't be written, the ones already written
+// are put back as they were; restoredBack says whether the database is as it was.
+window.__msExpRestore = async function (p) {
+    var t = __msExpTauri();
+    var untouched = function (err) { return { ok: false, error: err, restoredBack: true }; };   // nothing was written
+    if (!t) return untouched('not in the Mac app');
+    if (!p || !p.included || !p.keys || typeof p.keys !== 'object') return untouched('no expenses in this backup');
+    var want = {}, years = {};
+    try {
+        Object.keys(p.keys).forEach(function (k) {
+            if (k !== MS_EXP_META_KEY && k.indexOf(MS_EXP_FY_PREFIX) !== 0) return;
+            var rec = JSON.parse(p.keys[k]);
+            if (k !== MS_EXP_META_KEY && (!rec || !Array.isArray(rec.lines) || !rec.lines.every(__msExpLineOk))) throw new Error('a year in the backup is damaged');
+            if (k === MS_EXP_META_KEY && (!rec || typeof rec !== 'object')) throw new Error('the list of months in the backup is damaged');
+            want[k] = p.keys[k];
+            if (k !== MS_EXP_META_KEY) years[k] = true;
+        });
+    } catch (e) { return untouched(String((e && e.message) || e)); }
+    if (__msExp.state === 'restoring' || __msExp.state === 'restored') return untouched('a restore is already running');
+    // a save in progress finishes first; from here nothing else is saved (or loaded)
+    for (var w = 0; w < 50 && __msExp.saving; w++) await new Promise(function (res) { setTimeout(res, 100); });
+    if (__msExp.saving) return untouched('a save is still running; try again in a moment');
+    var prevState = __msExp.state;
+    __msExp.state = 'restoring';
+    clearTimeout(__msExp.saveTimer); clearTimeout(__msExp.retryTimer);
+    __msExpRefreshIfOpen();
+    // back to where we were when nothing (or nothing lasting) was written
+    var resume = function () {
+        if (prevState === 'ready') {
+            __msExp.state = 'ready';
+            if (Object.keys(__msExp.dirty).length) __msExpMarkDirty(Object.keys(__msExp.dirty)[0]);   // a save the restore held back
+        } else { __msExp.state = 'idle'; __msExpLoad(); }     // a load was under way or had not happened: read the database afresh
+        __msExpRefreshIfOpen();
+    };
+    // what is in the database now (read after the hold, so it is current): years not in the backup are emptied, so the restore is exact
+    var cur = null, r0 = null;
+    try { r0 = await t.invoke('get_app_settings'); } catch (e) { r0 = { ok: false, error: String((e && e.message) || e) }; }
+    if (r0 && r0.ok && r0.settings) cur = r0.settings;
+    if (!cur) { resume(); return untouched('the database could not be read (' + ((r0 && r0.error) || 'no data') + ')'); }
+    Object.keys(cur).forEach(function (k) {
+        if (k.indexOf(MS_EXP_FY_PREFIX) === 0 && !years[k]) want[k] = JSON.stringify({ v: 1, fy: parseInt(k.slice(MS_EXP_FY_PREFIX.length), 10), lines: [] });
+    });
+    var emptyMeta = JSON.stringify({ v: 1, caPackPath: '', months: {}, rules: {}, extraHeads: [], orphans: {}, lastCheck: '' });
+    if (!want[MS_EXP_META_KEY]) want[MS_EXP_META_KEY] = emptyMeta;
+    var before = function (k) {
+        if (cur[k] !== undefined) return cur[k];
+        return k === MS_EXP_META_KEY ? emptyMeta : JSON.stringify({ v: 1, fy: parseInt(k.slice(MS_EXP_FY_PREFIX.length), 10), lines: [] });
+    };
+    var save = async function (k, v) {
+        var r = null;
+        try { r = await t.invoke('save_app_setting', { key: k, value: v }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+        return (r && r.ok) ? '' : ((r && r.error) || 'not saved');
+    };
+    var order = Object.keys(want).sort(function (a, b) { return (a === MS_EXP_META_KEY) - (b === MS_EXP_META_KEY); });
+    var written = [];
+    for (var i = 0; i < order.length; i++) {
+        var err = await save(order[i], want[order[i]]);
+        if (err) {
+            // put back what was already written (best effort), so the database is as it was
+            var back = true;
+            for (var j = 0; j < written.length; j++) { if (await save(written[j], before(written[j]))) back = false; }
+            __msExpLog('CRITICAL', 'restore from a JSON backup failed', { key: order[i], error: err, restoredBack: back, written: written.length });
+            if (back) resume();
+            else { __msExp.state = 'failed'; __msExp.loadError = 'a restore from a backup stopped midway (' + err + '); restart the app'; __msExpRefreshIfOpen(); }
+            return { ok: false, error: err, restoredBack: back };
+        }
+        written.push(order[i]);
+    }
+    __msExp.dirty = {};
+    __msExp.state = 'restored';
+    __msExpLog('INFO', 'restored from a JSON backup', { records: order.length });
+    __msExpRefreshIfOpen();
+    return { ok: true, restoredBack: false };
+};
+
+// Tighter tables on this page only, and a redraw of the chart when the theme changes.
+(function () {
+    try {
+        var css = document.createElement('style');
+        css.id = 'msExpStyles';
+        css.textContent = '#msExpRoot table th, #msExpRoot table td { padding: 9px 10px; }'
+            + ' #msExpRoot td.ms-exp-head:hover { text-decoration: underline dotted; }'
+            + ' #msExpRoot td.ms-exp-note:hover { background: var(--hover-bg); }';
+        (document.head || document.documentElement).appendChild(css);
+    } catch (e) {}
+    try {
+        var dark = document.body && document.body.classList.contains('dark-mode');
+        var mo = new MutationObserver(function () {
+            var now = document.body.classList.contains('dark-mode');
+            if (now !== dark) { dark = now; __msExpRefreshIfOpen(); }
+        });
+        if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
+})();
+
+// Load a moment after the app opens (in the Mac app); the load schedules the first look in the CA pack.
+(function () {
+    var start = function () {
+        if (!__msExpTauri()) { __msExp.state = 'unavailable'; return; }
+        setTimeout(function () { __msExpLoad(); }, 1200);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();
+// =================== /Phase 8EV — Expenses ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
