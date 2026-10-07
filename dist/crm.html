@@ -9111,6 +9111,18 @@ window.__msRenderMissingOneDriveLinks = function () {
                             </div>
                             <div></div>
                         </div>
+                        <!-- 8ET — TDS kept back from this OEM's bills (Indian OEMs only) -->
+                        <div class="oem-meta-grid-2">
+                            <div>
+                                <label>Default TDS rate (%)</label>
+                                <input type="text" inputmode="decimal" id="oemMeta_tdsRate" placeholder="e.g. 10" onchange="saveActiveOemMetadata()">
+                            </div>
+                            <div>
+                                <label>TDS section <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional)</span></label>
+                                <input type="text" id="oemMeta_tdsSection" placeholder="e.g. 194J" style="text-transform:uppercase;" onchange="saveActiveOemMetadata()">
+                            </div>
+                        </div>
+                        <div style="font-size:10.5px; color:var(--text-dim); margin:-2px 0 10px;">Fills in TDS on this OEM's bills in Manage Cycle, on the amount before GST. Blank = no TDS.</div>
                     </div>
 
                     <!-- ===== FOREIGN tax/legal block ===== -->
@@ -12301,9 +12313,21 @@ window.__msRenderMissingOneDriveLinks = function () {
         <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Auto-calculated at 18% of subtotal — edit if your invoice differs.</div>
       </div>
     </div>
+    <!-- 8ET — TDS kept back from this payment (on the subtotal, before GST) -->
+    <div class="prospect-form-grid-3" style="margin-top:12px;">
+      <div>
+        <label>TDS deducted (₹)</label>
+        <input type="text" inputmode="decimal" class="js-money" id="conPayTdsAmount" placeholder="Not recorded" oninput="onConPayTdsInput()">
+        <div id="conPayTdsHint" style="font-size:10.5px; color:var(--text-dim); margin-top:4px;"></div>
+      </div>
+    </div>
     <div style="margin-top:16px; padding:14px 18px; background:var(--detail-bg); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
-      <div style="font-size:12px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Total Payable</div>
+      <div style="font-size:12px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Invoice Total</div>
       <div id="conPayTotalDisplay" style="font-size:22px; font-weight:650; color:var(--accent-cyan); font-variant-numeric: tabular-nums;">₹0.00</div>
+    </div>
+    <div id="conPayNetRow" style="margin-top:8px; padding:10px 18px; border:1px dashed var(--glass-border); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-size:12px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Amount Paid <span style="text-transform:none; letter-spacing:0; font-weight:500;">(total less TDS)</span></div>
+      <div id="conPayNetDisplay" style="font-size:18px; font-weight:650; color:var(--text-main); font-variant-numeric: tabular-nums;">₹0.00</div>
     </div>
   </div>
 
@@ -12476,6 +12500,18 @@ window.__msRenderMissingOneDriveLinks = function () {
       <div>
         <label>Notes</label>
         <textarea id="conMasterNotes" rows="2" placeholder="Any internal notes about this consultant"></textarea>
+      </div>
+    </div>
+    <!-- 8ET — TDS kept back from this consultant's payments -->
+    <div class="prospect-form-grid-2" style="margin-top:12px;">
+      <div>
+        <label>Default TDS rate (%) <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional)</span></label>
+        <input type="text" inputmode="decimal" id="conMasterTdsRate" placeholder="e.g. 10">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">Fills in TDS on new payments, on the subtotal before GST. Blank = no TDS.</div>
+      </div>
+      <div>
+        <label>TDS section <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">(optional)</span></label>
+        <input type="text" id="conMasterTdsSection" placeholder="e.g. 194J" style="text-transform:uppercase;">
       </div>
     </div>
   </div>
@@ -14687,6 +14723,9 @@ function getOemMetadata(oemName) {
             stateCode: '',
             gstin: '',
             pan: '',
+            // 8ET — TDS kept back from this OEM's bills (Indian OEMs): default rate (%), section
+            tdsRate: '',
+            tdsSection: '',
             // Tax / legal — foreign
             vatNumber: '',
             companyRegNo: '',
@@ -19092,6 +19131,9 @@ function renderOemMetadataPanel(oem) {
     if (stateSel) stateSel.innerHTML = getStateOptionsHTML(meta.stateCode || '');
     setVal('oemMeta_gstin', meta.gstin);
     setVal('oemMeta_pan', meta.pan);
+    // 8ET — TDS defaults (a rate of 0 shows as 0, not blank)
+    setVal('oemMeta_tdsRate', (meta.tdsRate === undefined || meta.tdsRate === null) ? '' : String(meta.tdsRate));
+    setVal('oemMeta_tdsSection', meta.tdsSection);
 
     // Foreign legal/tax
     setVal('oemMeta_country', meta.country);
@@ -19182,6 +19224,12 @@ function saveActiveOemMetadata() {
     meta.stateCode = val('oemMeta_stateCode');
     meta.gstin = val('oemMeta_gstin').toUpperCase();
     meta.pan = val('oemMeta_pan').toUpperCase();
+    // 8ET — TDS defaults for this OEM's bills (kept across origin toggles).
+    // A rate that isn't 0-100 is not saved; the previous one stays.
+    const _tdsRate = __msParseTdsRate(val('oemMeta_tdsRate'));
+    const _tdsBad = (_tdsRate === null);
+    if (!_tdsBad) meta.tdsRate = _tdsRate;
+    meta.tdsSection = val('oemMeta_tdsSection').toUpperCase();
     meta.pincode = val('oemMeta_pincode');
 
     // Foreign legal/tax
@@ -19217,6 +19265,14 @@ function saveActiveOemMetadata() {
     if (hint) {
         hint.innerHTML = '<i class="fas fa-check-circle" style="color:var(--success);"></i> Saved at ' + new Date().toLocaleTimeString();
         hint.style.color = 'var(--success)';
+    }
+    if (_tdsBad) {   // 8ET
+        const _te = document.getElementById('oemMeta_tdsRate');
+        if (_te) _te.value = (meta.tdsRate === undefined || meta.tdsRate === null) ? '' : String(meta.tdsRate);
+        if (hint) {
+            hint.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> TDS rate must be a number between 0 and 100 — the previous rate is kept. Other changes saved.';
+            hint.style.color = 'var(--danger)';
+        }
     }
     // 8BB.1 — Re-render OEM list + detail header so shortName edits surface
     // immediately on the page. Other tabs pick up the new shortName next time
@@ -23397,7 +23453,245 @@ function addArInvoiceRow(invNo='', date='', amount='', paidDate='', link='', loc
     updateModalSums();
 }
 
-function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='', localPath='', apId='', uploadAttId='') {
+// ===== Phase 8ET — GST and TDS on Indian OEM bills ===========================
+// Overseas OEMs: nothing new — their reverse-charge GST is still worked out on
+// the CA export, and their bill rows get no GST/TDS boxes.
+// Indian OEMs: every bill row gets a GST (Rs) and a TDS (Rs) box on a line of
+// its own, with a summary: bill total, TDS, what is paid (or to pay), and how
+// the GST splits (CGST + SGST in your state, else IGST).
+//   - New bills fill both in (GST 18% of the amount before GST; TDS at the
+//     OEM's default rate on that same amount, rounded to the rupee) and follow
+//     the Amount until a figure is typed over them.
+//   - Bills saved before 8ET record nothing until "Fill ..." is tapped or a
+//     figure typed. An empty box means "not recorded" (nothing saved).
+//   - An OEM whose origin isn't set (no country in its details) is not filled
+//     in automatically; the row says so.
+// The bill keeps gstAmount / tdsAmount (Rs). The overseas test is the one the
+// CA export uses (isOemForeign), so a bill is never both RCM and GST/TDS.
+var AP_GST_RATE = 0.18;
+function __msMoneyStr(v) {
+    const n = Number(v);
+    if (v === '' || v === null || v === undefined || !isFinite(n)) return '';
+    const paise = Math.round(Math.abs(n) * 100) % 100 !== 0;
+    return n.toLocaleString('en-IN', { minimumFractionDigits: paise ? 2 : 0, maximumFractionDigits: 2 });
+}
+function __msInr(v) { const n = Number(v) || 0; return (n < 0 ? '−₹' : '₹') + (__msMoneyStr(Math.abs(n)) || '0'); }
+function __msApHasNum(v) { return v !== undefined && v !== null && String(v).trim() !== '' && isFinite(parseFloat(v)); }
+// TDS rate (%): '' when blank, a number 0-100, or null when not a valid rate.
+function __msParseTdsRate(v) {
+    const s = String(v === undefined || v === null ? '' : v).replace(/%/g, '').trim();
+    if (s === '') return '';
+    if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
+    const n = parseFloat(s);
+    if (!isFinite(n) || n < 0 || n > 100) return null;
+    return Math.round(n * 1000) / 1000;
+}
+function __msTdsRateOf(rec) {
+    const r = __msParseTdsRate(rec ? rec.tdsRate : '');
+    return (typeof r === 'number') ? r : 0;
+}
+function __msOemMeta(oemName) {
+    return (oemName && typeof oemMetadata === 'object' && oemMetadata && oemMetadata[oemName]) ? oemMetadata[oemName] : null;
+}
+// 'foreign' | 'indian' | 'unknown' (no OEM, no details, or "Foreign" with no country)
+function __msOemTaxKind(oemName) {
+    if (oemName && typeof isOemForeign === 'function' && isOemForeign(oemName)) return 'foreign';
+    const m = __msOemMeta(oemName);
+    if (!m || m.origin === 'foreign') return 'unknown';
+    const country = String(m.country || '').trim().toLowerCase();
+    if (country === 'india' || String(m.stateCode || '').trim() || String(m.gstin || '').trim()) return 'indian';
+    return 'unknown';
+}
+function __msMyGstState() {
+    try {
+        if (typeof companyProfile === 'object' && companyProfile) {
+            const s = String(companyProfile.stateCode || '').trim();
+            if (s) return s;
+            const m = String(companyProfile.gstin || '').trim().match(/^(\d{2})/);
+            if (m) return m[1];
+        }
+    } catch (e) {}
+    return '';
+}
+function __msOemGstState(oemName) {
+    const m = __msOemMeta(oemName);
+    if (!m) return '';
+    const s = String(m.stateCode || '').trim();
+    if (s) return s;
+    const g = String(m.gstin || '').trim().match(/^(\d{2})/);
+    return g ? g[1] : '';
+}
+// Same rule as consultants (8DZ): other state -> IGST; same state, or either
+// state not known -> CGST + SGST, half each. A credit note (negative GST)
+// splits the same way, keeping its sign.
+function __msOemGstSplit(oemName, gstAmt) {
+    const amt = parseFloat(gstAmt) || 0;
+    if (!amt) return { igst: 0, cgst: 0, sgst: 0, basis: 'none' };
+    const mine = __msMyGstState(), theirs = __msOemGstState(oemName);
+    if (mine && theirs && mine !== theirs) return { igst: amt, cgst: 0, sgst: 0, basis: 'other' };
+    return { igst: 0, cgst: amt / 2, sgst: amt / 2, basis: (mine && theirs) ? 'same' : 'unknown' };
+}
+function __msApAutoGst(base) { return Math.round((parseFloat(base) || 0) * AP_GST_RATE * 100) / 100; }
+function __msApAutoTds(base, rate) { return rate > 0 ? Math.round((parseFloat(base) || 0) * rate / 100) : 0; }
+function __msApRowCtx() {
+    const c = (typeof currentUniCIdx !== 'undefined' && currentUniCIdx > -1 && contracts[currentUniCIdx]) ? contracts[currentUniCIdx] : null;
+    const y = (c && Array.isArray(c.billingYears)) ? c.billingYears[currentUniYIdx] : null;
+    const oem = c ? _caExportEffectiveOem(c) : '';
+    return { c: c, y: y, oem: oem, kind: __msOemTaxKind(oem), rate: __msTdsRateOf(__msOemMeta(oem)) };
+}
+// The cycle FX a USD bill with no FX of its own will be exported at: the same
+// rule Save uses for the cycle's settlement FX (the Settlement FX box if filled,
+// else the weighted average of the bills' FX, else the projected rate), read
+// live from the open modal.
+function __msApModalFx(ctx) {
+    const c = ctx.c;
+    const projected = (c.baseFX || 83.5) * Math.pow(1.05, ((ctx.y && ctx.y.cycle) || (currentUniYIdx + 1)) - 1);
+    const man = document.getElementById('uniSettlementFX');
+    if (man && String(man.value).trim() !== '' && parseFloat(man.value) > 0) return parseFloat(man.value);
+    let sum = 0, wsum = 0;
+    document.querySelectorAll('#apInvoicesContainer .ap-row').forEach(r => {
+        const a = __msNumVal(r.querySelector('.ap-amt')), f = __msNumVal(r.querySelector('.ap-fx'));
+        sum += a; wsum += a * f;
+    });
+    const avg = sum > 0 ? wsum / sum : 0;
+    return avg > 0 ? parseFloat(avg.toFixed(4)) : projected;
+}
+// The bill's amount before GST, in rupees (USD bills at the row's FX, else the cycle's).
+function __msApInrBase(row, ctx) {
+    const amt = __msNumVal(row.querySelector('.ap-amt'));
+    const c = ctx.c;
+    if (!c || (c.costCurrency || 'USD') === 'INR') return amt;
+    let fx = __msNumVal(row.querySelector('.ap-fx'));
+    if (!(fx > 0)) fx = __msApModalFx(ctx);
+    return Math.round(amt * fx * 100) / 100;
+}
+function __msApTaxSet(el, v) { el.value = (v === '' || v === null || v === undefined) ? '' : __msMoneyStr(v); }
+// What a GST/TDS box holds: '' (not recorded), a number, or null (not a number).
+function __msApBoxVal(el) {
+    const s = __msStripCommas(el ? el.value : '').trim();
+    if (s === '') return '';
+    return /^-?(\d+(\.\d*)?|\.\d+)$/.test(s) ? parseFloat(s) : null;
+}
+// rec: the saved bill (null for a new row).
+function __msApTaxInit(row, rec) {
+    const ctx = __msApRowCtx();
+    row.setAttribute('data-taxkind', ctx.kind);
+    // What the saved bill recorded: kept if a box is left holding something
+    // that isn't a number, and carried untouched on overseas bills.
+    if (rec && __msApHasNum(rec.gstAmount)) row.setAttribute('data-orig-gst', String(rec.gstAmount));
+    if (rec && __msApHasNum(rec.tdsAmount)) row.setAttribute('data-orig-tds', String(rec.tdsAmount));
+    if (ctx.kind === 'foreign') return;   // no boxes
+    const main = row.querySelector('.ap-row-main');
+    if (!main) return;
+    const line = document.createElement('div');
+    line.className = 'ap-tax-line';
+    line.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; margin:6px 0 0 2px; font-size:11.5px; color:var(--text-dim);';
+    const box = (cls, label) => '<span style="display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">' + label
+        + ' <input type="text" inputmode="decimal" class="js-money ' + cls + '" placeholder="not recorded" style="width:110px; font-size:12px; padding:6px 8px; text-transform:none;"></span>';
+    line.innerHTML = box('ap-gst', 'GST ₹') + box('ap-tds', 'TDS ₹')
+        + '<span class="ap-tax-sum"></span>'
+        + '<a href="#" class="ap-tax-fill" style="display:none; color:var(--accent-cyan); font-weight:600;" onclick="return __msApTaxFill(this.closest(\'.ap-row\'));"></a>'
+        + '<div class="ap-tax-note" style="flex-basis:100%; display:none; color:var(--warning);"></div>';
+    main.insertAdjacentElement('afterend', line);
+    const g = line.querySelector('.ap-gst'), t = line.querySelector('.ap-tds');
+    if (!rec) {
+        g.dataset.mode = t.dataset.mode = (ctx.kind === 'indian') ? 'auto' : 'none';
+    } else {
+        const base = __msApInrBase(row, ctx);
+        if (__msApHasNum(rec.gstAmount)) {
+            const v = parseFloat(rec.gstAmount); __msApTaxSet(g, v);
+            g.dataset.mode = (ctx.kind === 'indian' && Math.abs(v - __msApAutoGst(base)) < 0.005) ? 'auto' : 'typed';
+        } else g.dataset.mode = 'none';
+        if (__msApHasNum(rec.tdsAmount)) {
+            const v = parseFloat(rec.tdsAmount); __msApTaxSet(t, v);
+            t.dataset.mode = (ctx.kind === 'indian' && ctx.rate > 0 && Math.abs(v - __msApAutoTds(base, ctx.rate)) < 0.005) ? 'auto' : 'typed';
+        } else t.dataset.mode = 'none';
+    }
+    g.addEventListener('input', function () { g.dataset.mode = 'typed'; __msApTaxRefresh(row); });
+    t.addEventListener('input', function () { t.dataset.mode = 'typed'; __msApTaxRefresh(row); });
+    const pd = row.querySelector('.ap-paydate');
+    if (pd) pd.addEventListener('change', function () { __msApTaxRefresh(row); });
+    __msApTaxRefresh(row);
+}
+function __msApTaxRefresh(row) {
+    const line = row && row.querySelector('.ap-tax-line');
+    if (!line) return;
+    const ctx = __msApRowCtx();
+    const kind = row.getAttribute('data-taxkind') || ctx.kind;
+    const g = line.querySelector('.ap-gst'), t = line.querySelector('.ap-tds');
+    const base = __msApInrBase(row, ctx);
+    if (g.dataset.mode === 'auto') __msApTaxSet(g, __msApAutoGst(base));
+    if (t.dataset.mode === 'auto') __msApTaxSet(t, ctx.rate > 0 ? __msApAutoTds(base, ctx.rate) : '');
+    const gv = __msApBoxVal(g), tv = __msApBoxVal(t);
+    const gRec = typeof gv === 'number', tRec = typeof tv === 'number';
+    const gst = gRec ? gv : 0, tds = tRec ? tv : 0;
+    const paid = !!((row.querySelector('.ap-paydate') || {}).value);
+    const parts = [];
+    if (base > 0 || gRec || tRec) {
+        parts.push('Bill total ' + __msInr(base + gst));
+        if (tds) parts.push('TDS ' + __msInr(tds) + ((t.dataset.mode === 'auto' && ctx.rate > 0) ? ' (' + ctx.rate + '%, the OEM\'s default)' : ''));
+        parts.push((paid ? 'Paid ' : 'To pay ') + __msInr(base + gst - tds));
+        if (gst) {
+            const sp = __msOemGstSplit(ctx.oem, gst);
+            parts.push(sp.basis === 'other' ? 'Other state: IGST ' + __msInr(sp.igst)
+                : (sp.basis === 'same' ? 'Same state as you: CGST ' + __msInr(sp.cgst) + ' + SGST ' + __msInr(sp.sgst)
+                : 'CGST ' + __msInr(sp.cgst) + ' + SGST ' + __msInr(sp.sgst) + ' (state not known)'));
+        }
+    }
+    const over = (tds > 0 && tds > base) || gv === null || tv === null;
+    if (tds > 0 && tds > base) parts.push('TDS is more than the bill before GST — check the figure');
+    const og = row.getAttribute('data-orig-gst'), ot = row.getAttribute('data-orig-tds');
+    if (gv === null) parts.push('GST box is not a number — ' + (__msApHasNum(og) ? 'the saved ' + __msInr(og) + ' stays' : 'it won\'t be saved'));
+    if (tv === null) parts.push('TDS box is not a number — ' + (__msApHasNum(ot) ? 'the saved ' + __msInr(ot) + ' stays' : 'it won\'t be saved'));
+    if (kind === 'indian' && !(ctx.rate > 0) && !tRec) parts.push('No TDS rate set for this OEM');
+    const sum = line.querySelector('.ap-tax-sum');
+    sum.textContent = parts.join(' · ');
+    sum.style.color = over ? 'var(--danger)' : '';
+    const fill = line.querySelector('.ap-tax-fill');
+    const fillG = kind === 'indian' && g.dataset.mode === 'none';
+    const fillT = kind === 'indian' && t.dataset.mode === 'none' && ctx.rate > 0;
+    const showFill = fillG || fillT;
+    fill.style.display = showFill ? '' : 'none';
+    fill.textContent = 'Fill ' + [fillG ? 'GST 18%' : '', fillT ? 'TDS ' + ctx.rate + '%' : ''].filter(Boolean).join(' + ');
+    const note = line.querySelector('.ap-tax-note');
+    const meta = __msOemMeta(ctx.oem);
+    const nt = (kind !== 'unknown') ? ''
+        : (!ctx.oem ? 'No OEM on this contract, so GST and TDS aren\'t filled in. Type them here if the bill has them.'
+        : ((meta && meta.origin === 'foreign')
+            ? 'This OEM is marked Foreign but has no country in System Controls → OEM & Product Master, so the CA export treats its bills as Indian (no reverse charge). Add the country there.'
+            : 'This OEM\'s origin (Indian or overseas) isn\'t set in System Controls → OEM & Product Master, so GST and TDS aren\'t filled in. Type them here, or set the origin there.'));
+    note.textContent = nt;
+    note.style.display = nt ? '' : 'none';
+}
+function __msApTaxRefreshAll() {
+    document.querySelectorAll('#apInvoicesContainer .ap-row').forEach(__msApTaxRefresh);
+}
+function __msApTaxFill(row) {
+    const line = row && row.querySelector('.ap-tax-line');
+    if (!line) return false;
+    const ctx = __msApRowCtx();
+    const g = line.querySelector('.ap-gst'), t = line.querySelector('.ap-tds');
+    if (g && g.dataset.mode === 'none') g.dataset.mode = 'auto';
+    if (t && t.dataset.mode === 'none' && ctx.rate > 0) t.dataset.mode = 'auto';
+    __msApTaxRefresh(row);
+    return false;
+}
+// Save: GST / TDS recorded on the row (empty box = not recorded; a box that
+// isn't a number keeps what was saved before). Overseas rows pass on whatever
+// was recorded before, untouched.
+function __msApTaxRead(row, rec) {
+    const g = row.querySelector('.ap-gst'), t = row.querySelector('.ap-tds');
+    const og = row.getAttribute('data-orig-gst'), ot = row.getAttribute('data-orig-tds');
+    const r2 = n => Math.round(n * 100) / 100;
+    const gv = g ? __msApBoxVal(g) : null, tv = t ? __msApBoxVal(t) : null;
+    if (typeof gv === 'number') rec.gstAmount = r2(gv);
+    else if (gv === null && __msApHasNum(og)) rec.gstAmount = parseFloat(og);
+    if (typeof tv === 'number') rec.tdsAmount = r2(tv);
+    else if (tv === null && __msApHasNum(ot)) rec.tdsAmount = parseFloat(ot);
+    return rec;
+}
+
+function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='', currText='', localPath='', apId='', uploadAttId='', taxRec=null) {
     if (!currText) {
         if (currentUniCIdx > -1 && contracts[currentUniCIdx]) {
             currText = contracts[currentUniCIdx].costCurrency === 'INR' ? 'INR' : 'USD';
@@ -23434,6 +23728,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
         </div>
     `;
     container.appendChild(row);
+    try { __msApTaxInit(row, taxRec); } catch (e) { console.error('8ET bill GST/TDS line failed:', e); }
     if (localPath && localPath.trim()) {
         var lp = row.querySelector('.ap-localpath');
         if (lp) window.__msUpdateLocalToggleState(lp);
@@ -23443,6 +23738,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
 }
 
 function updateModalSums() {
+    try { __msApTaxRefreshAll(); } catch (e) { console.error('8ET bill GST/TDS refresh failed:', e); }   // 8ET
     const targetAr = parseFloat(document.getElementById('arSumDisplay').getAttribute('data-target')) || 0;
     let arSum = 0;
     document.querySelectorAll('.ar-amt').forEach(inp => arSum += __msNumVal(inp));
@@ -23561,9 +23857,9 @@ function openUnifiedModal(cIdx, yIdx) {
 
     document.getElementById('apInvoicesContainer').innerHTML = '';
     if (y.apInvoices && y.apInvoices.length > 0) {
-        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || '', inv.apId || '', inv.uploadAttId || ''));
+        y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || '', inv.apId || '', inv.uploadAttId || '', inv));
     } else if (y.oemInvoiceNo || y.oemInvoiceDate) {
-        addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD');
+        addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD', '', '', '', {});   // 8ET — an old saved bill: nothing filled in
     } else {
         addApInvoiceRow('', '', cycleCostUSD, isINR ? '1.00' : '', '', '', isINR ? 'INR' : 'USD');
     }
@@ -23770,7 +24066,7 @@ function submitUnifiedModal() {
         let uploadAttId = row.getAttribute('data-upload-attid') || '';
 
         if (no || dt || amt > 0) {
-            apInvoices.push({ invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp, apId: apId, uploadAttId: uploadAttId });
+            apInvoices.push(__msApTaxRead(row, { invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp, apId: apId, uploadAttId: uploadAttId }));   // 8ET — + GST/TDS
             apSumUSD += amt;
             apWeightedFXSum += (amt * fx);
         }
@@ -44520,6 +44816,10 @@ function consultantBlank() {
         //   (Service Vendor → SERVICE, Content → CONTENT)
         category: 'Consultant',
         businessHead: '',
+        // 8ET — TDS kept back from this consultant's payments: default rate (%)
+        // and section (reference only). '' = none.
+        tdsRate: '',
+        tdsSection: '',
         // 8BD — Structured address (printed on CA Export Payments sheet ADDRESS column)
         addressLine1: '',
         addressLine2: '',
@@ -44549,6 +44849,9 @@ function consultantPaymentBlank() {
         paymentMode: '',
         paymentReference: '',
         status: 'Pending',
+        // 8ET — TDS kept back (Rs, on the pre-GST subtotal). null = not recorded
+        // (every payment saved before 8ET). Amount paid = total - TDS.
+        tdsAmount: null,
         notes: '',
         // 8BD.2 — OneDrive link to the consultant's invoice PDF. When set,
         // the CA Export Payments sheet hyperlinks the INVOICE NO. cell to it
@@ -44854,7 +45157,7 @@ function renderConsultantPayments() {
             <td>${invDate}</td>
             <td style="text-align:right; font-variant-numeric: tabular-nums;">${fmtINR(r.subtotal)}</td>
             <td style="text-align:right; font-variant-numeric: tabular-nums; color:var(--text-dim);">${(r.gstApplicable && r.gstAmount) ? fmtINR(r.gstAmount) : '—'}</td>
-            <td style="text-align:right; font-weight:600; font-variant-numeric: tabular-nums;">${fmtINR(r.totalAmount)}</td>
+            <td style="text-align:right; font-weight:600; font-variant-numeric: tabular-nums;">${fmtINR(r.totalAmount)}${__msConPayTdsNote(r, fmtINR)}</td>
             <td>${statusBadge}</td>
             <td>${paidDate}</td>
             <td style="white-space:nowrap;">${filesCellHtml}</td>
@@ -44943,6 +45246,7 @@ function openConsultantPaymentForm(id, presetConsultantId) {
         document.getElementById('conPayPaidDateWrap').style.display = rec.status === 'Paid' ? '' : 'none';
         val('conPayMode', rec.paymentMode);
         val('conPayReference', rec.paymentReference);
+        __msConPayTdsLoad(rec);   // 8ET
         if (delBtn) delBtn.style.display = '';
         if (dupBtn) dupBtn.style.display = '';
         renderConsultantPaymentAttachZones(rec.id);
@@ -44978,6 +45282,7 @@ function openConsultantPaymentForm(id, presetConsultantId) {
         document.getElementById('conPayPaidDateWrap').style.display = 'none';
         val('conPayMode', '');
         val('conPayReference', '');
+        __msConPayTdsLoad(null);   // 8ET — new payment: TDS follows the subtotal
         if (delBtn) delBtn.style.display = 'none';
         if (dupBtn) dupBtn.style.display = (presetConsultantId && consultantPayments.some(p => p.consultantId === presetConsultantId)) ? '' : 'none';
         // Attach zone shows "save first" placeholder
@@ -44994,6 +45299,7 @@ function onConPayConsultantChange() {
     // record, AND default due date offset from their defaultPaymentTermsDays
     // if invoice date is already filled.
     const consultantId = document.getElementById('conPayConsultantId').value;
+    recomputeConPayTotal();   // 8ET — TDS rate comes from the chosen consultant
     if (!consultantId) return;
     const c = getConsultantById(consultantId);
     if (!c) return;
@@ -45071,6 +45377,83 @@ function recomputeConPayTotal() {
     const total = sub + gst;
     const disp = document.getElementById('conPayTotalDisplay');
     if (disp) disp.innerText = '₹' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // 8ET — TDS (follows the subtotal while automatic) and the amount paid
+    __msConPayTdsSync(sub);
+    const net = document.getElementById('conPayNetDisplay');
+    if (net) net.innerText = '₹' + (total - _conPayNum('conPayTdsAmount')).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ===== Phase 8ET — TDS on consultant payments ================================
+// The TDS box (Rs) works in one of three modes, kept on the input:
+//   'auto'  — rate x subtotal (before GST), rounded to the rupee; follows the
+//             subtotal and the chosen consultant's rate (new payments);
+//   'typed' — a figure typed in (or a saved one that differs from the rate);
+//             left alone;
+//   'none'  — nothing recorded (payments saved before 8ET): stays empty until
+//             "Apply x%" is tapped or a figure is typed.
+// An empty box saves as "not recorded" (tdsAmount null). Money cards unchanged.
+function __msConPayTds(p) {
+    const n = parseFloat(p && p.tdsAmount);
+    return isFinite(n) ? n : 0;
+}
+function __msConPayRate() {
+    const sel = document.getElementById('conPayConsultantId');
+    const c = (sel && sel.value) ? getConsultantById(sel.value) : null;
+    return { rate: __msTdsRateOf(c), section: c ? String(c.tdsSection || '').trim() : '' };
+}
+function __msConPayTdsLoad(rec) {
+    const el = document.getElementById('conPayTdsAmount');
+    if (!el) return;
+    if (!rec) { el.value = ''; el.dataset.mode = 'auto'; return; }
+    if (!__msApHasNum(rec.tdsAmount)) { el.value = ''; el.dataset.mode = 'none'; return; }
+    const v = parseFloat(rec.tdsAmount);
+    el.value = __msMoneyStr(v);
+    const rate = __msTdsRateOf(getConsultantById(rec.consultantId));
+    const auto = rate > 0 ? Math.round((parseFloat(rec.subtotal) || 0) * rate / 100) : null;
+    el.dataset.mode = (auto !== null && Math.abs(auto - v) < 0.005) ? 'auto' : 'typed';
+}
+function onConPayTdsInput() {
+    const el = document.getElementById('conPayTdsAmount');
+    if (el) el.dataset.mode = 'typed';
+    recomputeConPayTotal();
+}
+function applyConPayTds() {
+    const el = document.getElementById('conPayTdsAmount');
+    if (el) el.dataset.mode = 'auto';
+    recomputeConPayTotal();
+    return false;
+}
+function __msConPayTdsSync(sub) {
+    const el = document.getElementById('conPayTdsAmount');
+    if (!el) return;
+    const hint = document.getElementById('conPayTdsHint');
+    const r = __msConPayRate();
+    const auto = r.rate > 0 ? Math.round((parseFloat(sub) || 0) * r.rate / 100) : null;
+    const mode = el.dataset.mode || 'auto';
+    if (mode === 'auto') el.value = (auto === null) ? '' : __msMoneyStr(auto);
+    if (!hint) return;
+    const rateTxt = r.rate > 0 ? (r.rate + '%' + (r.section ? ' (' + pEsc(r.section) + ')' : '')) : '';
+    if (mode === 'none') {
+        hint.innerHTML = r.rate > 0
+            ? 'Not recorded. <a href="#" onclick="return applyConPayTds();" style="color:var(--accent-cyan); font-weight:600;">Apply ' + rateTxt + ' (' + __msInr(auto) + ')</a>'
+            : 'Not recorded. Type the TDS kept back, if any.';
+    } else if (mode === 'auto') {
+        hint.textContent = r.rate > 0
+            ? 'Auto at ' + rateTxt.replace(/&amp;/g, '&') + ' of the subtotal (before GST) — edit if different.'
+            : 'No default TDS rate on this consultant — type the TDS kept back, if any.';
+    } else {
+        hint.innerHTML = (r.rate > 0 && Math.abs(auto - __msNumVal(el)) >= 0.005)
+            ? 'Typed in. <a href="#" onclick="return applyConPayTds();" style="color:var(--accent-cyan); font-weight:600;">Use ' + rateTxt + ' (' + __msInr(auto) + ')</a>'
+            : 'Typed in.';
+    }
+}
+// Register: "TDS Rs.. · paid Rs.." under the total (only when TDS was kept back).
+function __msConPayTdsNote(r, fmtINR) {
+    const tds = __msConPayTds(r);
+    if (!(tds > 0)) return '';
+    const net = (parseFloat(r.totalAmount) || 0) - tds;
+    return '<div class="con-tds-note" style="font-size:10.5px; font-weight:500; color:var(--text-dim); white-space:nowrap;">TDS '
+        + fmtINR(tds) + ' · ' + (r.status === 'Paid' ? 'paid ' : 'to pay ') + fmtINR(net) + '</div>';
 }
 
 function saveConsultantPaymentFromForm() {
@@ -45079,6 +45462,17 @@ function saveConsultantPaymentFromForm() {
     if (!consultantId) { alert('Please select a consultant.'); return; }
     const invoiceDate = document.getElementById('conPayInvoiceDate').value;
     if (!invoiceDate) { alert('Invoice date is required.'); return; }
+    // 8ET — TDS kept back (Rs): checked before anything is changed. Empty = not recorded.
+    const _tdsEl = document.getElementById('conPayTdsAmount');
+    const _tdsRaw = _tdsEl ? __msStripCommas(_tdsEl.value).trim() : '';
+    let _tdsVal = null;
+    if (_tdsRaw !== '') {
+        _tdsVal = parseFloat(_tdsRaw);
+        const _subChk = parseFloat(__msStripCommas(document.getElementById('conPaySubtotal').value)) || 0;
+        if (!/^(\d+(\.\d*)?|\.\d+)$/.test(_tdsRaw) || !isFinite(_tdsVal)) { alert('TDS deducted must be an amount in rupees (0 or more), or left blank.'); return; }
+        if (_tdsVal > _subChk) { alert('TDS deducted (₹' + __msMoneyStr(_tdsVal) + ') is more than the subtotal before GST (₹' + __msMoneyStr(_subChk) + '). Please check the figure.'); return; }
+        _tdsVal = Math.round(_tdsVal * 100) / 100;
+    }
 
     const idVal = document.getElementById('conPayFormId').value;
     const now = new Date().toISOString();
@@ -45103,6 +45497,7 @@ function saveConsultantPaymentFromForm() {
     rec.gstAmount = rec.gstApplicable ? (parseFloat(document.getElementById('conPayGstAmount').value) || 0) : 0;
     const totals = computeConsultantPaymentTotal(rec);
     rec.totalAmount = totals.total;
+    rec.tdsAmount = _tdsVal;   // 8ET — null = not recorded
     rec.status = document.getElementById('conPayStatus').value || 'Pending';
     rec.paidDate = (rec.status === 'Paid') ? (document.getElementById('conPayPaidDate').value || null) : null;
     rec.paymentMode = document.getElementById('conPayMode').value || '';
@@ -45171,6 +45566,9 @@ function duplicateLastConsultantPayment() {
     document.getElementById('conPayPaidDate').value = '';
     document.getElementById('conPayPaidDateWrap').style.display = 'none';
     document.getElementById('conPayReference').value = '';
+    // 8ET — carry the last payment's TDS when it had one; else follow the subtotal
+    if (last.tdsAmount !== null && last.tdsAmount !== undefined && last.tdsAmount !== '') __msConPayTdsLoad(last);
+    else { const _t = document.getElementById('conPayTdsAmount'); if (_t) _t.dataset.mode = 'auto'; }
     recomputeConPayTotal();
     if (typeof showProspectToast === 'function') {
         showProspectToast(`<i class="fas fa-clone"></i> Cloned amounts from <strong>${pEsc(last.paymentNumber)}</strong>. Update period + dates.`, 4500);
@@ -45209,6 +45607,9 @@ function openConsultantForm(id) {
         val('conMasterGstNum', c.gstNumber);
         document.getElementById('conMasterGstNumWrap').style.display = c.gstRegistered ? '' : 'none';
         val('conMasterTerms', c.defaultPaymentTermsDays || 30);
+        // 8ET — TDS defaults
+        val('conMasterTdsRate', (c.tdsRate === undefined || c.tdsRate === null) ? '' : String(c.tdsRate));
+        val('conMasterTdsSection', c.tdsSection || '');
         val('conMasterNotes', c.notes);
         if (archBtn) archBtn.style.display = c.archived ? 'none' : '';
         if (unarchBtn) unarchBtn.style.display = c.archived ? '' : 'none';
@@ -45236,6 +45637,8 @@ function openConsultantForm(id) {
         val('conMasterGstNum', '');
         document.getElementById('conMasterGstNumWrap').style.display = 'none';
         val('conMasterTerms', 30);
+        val('conMasterTdsRate', '');   // 8ET
+        val('conMasterTdsSection', '');
         val('conMasterNotes', '');
         if (archBtn) archBtn.style.display = 'none';
         if (unarchBtn) unarchBtn.style.display = 'none';
@@ -45255,6 +45658,9 @@ function onConMasterGstToggle() {
 function saveConsultantFromForm() {
     const name = (document.getElementById('conMasterName').value || '').trim();
     if (!name) { alert('Name is required.'); return; }
+    // 8ET — default TDS rate: checked before anything is changed
+    const _tdsRate = __msParseTdsRate((document.getElementById('conMasterTdsRate') || {}).value);
+    if (_tdsRate === null) { alert('Default TDS rate must be a number between 0 and 100, or left blank.'); return; }
     const idVal = document.getElementById('conMasterFormId').value;
     const now = new Date().toISOString();
     let c, isNew = false;
@@ -45283,6 +45689,8 @@ function saveConsultantFromForm() {
     c.gstRegistered = document.getElementById('conMasterGstReg').checked;
     c.gstNumber = c.gstRegistered ? (document.getElementById('conMasterGstNum').value || '').trim().toUpperCase() : '';
     c.defaultPaymentTermsDays = parseInt(document.getElementById('conMasterTerms').value) || 30;
+    c.tdsRate = _tdsRate;   // 8ET — '' = none
+    c.tdsSection = ((document.getElementById('conMasterTdsSection') || {}).value || '').trim().toUpperCase();
     c.notes = (document.getElementById('conMasterNotes').value || '').trim();
     c.updatedAt = now;
 
@@ -45585,6 +45993,9 @@ function exportConsultantPayments() {
             'GST Applicable': p.gstApplicable ? 'Yes' : 'No',
             'GST Amount (INR)': p.gstApplicable ? (parseFloat(p.gstAmount) || 0) : 0,
             'Total (INR)': parseFloat(p.totalAmount) || 0,
+            // 8ET — TDS kept back, and the amount actually paid (total less TDS; 0 until paid)
+            'TDS (INR)': __msConPayTds(p),
+            'Amount Paid (INR)': p.paidDate ? ((parseFloat(p.totalAmount) || 0) - __msConPayTds(p)) : 0,
             'Status': p.status || '',
             'Paid Date': p.paidDate || '',
             'Payment Mode': p.paymentMode || '',
@@ -46042,11 +46453,20 @@ function _caExportComputeApAmounts(c, y, yIdx, ap) {
         cgst = 0;
         sgst = 0;
     } else {
-        igst = parseFloat(ap.igst) || 0;
-        cgst = parseFloat(ap.cgst) || 0;
-        sgst = parseFloat(ap.sgst) || 0;
+        // 8ET — GST recorded on the bill (Indian OEMs): CGST + SGST when the OEM
+        // is in your state (or either state isn't known), IGST otherwise.
+        if (__msApHasNum(ap.gstAmount)) {
+            const sp = __msOemGstSplit(effOem, parseFloat(ap.gstAmount));
+            igst = sp.igst; cgst = sp.cgst; sgst = sp.sgst;
+        } else {
+            igst = parseFloat(ap.igst) || 0;
+            cgst = parseFloat(ap.cgst) || 0;
+            sgst = parseFloat(ap.sgst) || 0;
+        }
     }
-    return { usdValue, fxRate, inrValue, igst, cgst, sgst, isUSDcontract, isForeignOem };
+    // 8ET — TDS kept back on the bill (Rs). Overseas OEM bills carry none.
+    const tds = isForeignOem ? 0 : (parseFloat(ap.tdsAmount) || 0);
+    return { usdValue, fxRate, inrValue, igst, cgst, sgst, isUSDcontract, isForeignOem, tds };
 }
 
 // Cross-reference: for a Path B invoice, find the matching Path A arInvoice
@@ -46670,8 +47090,8 @@ async function generateCaExport() {
                             'PAYMENT VALUE': paymentValue,
                             'TERMS (DAYS)': '',
                             'USD:INR PAYMNT DATE RATE': '',
-                            'AMOUNT PAID': ap.payDate ? paymentValue : 0,
-                            'TDS': 0,
+                            'AMOUNT PAID': ap.payDate ? (paymentValue - amt.tds) : 0,   // 8ET — less TDS kept back
+                            'TDS': amt.tds,
                             'RCM GST': amt.isForeignOem ? amt.igst : 0,
                             'DISCREPANCY': 0,
                             'DUE DATE': null,
@@ -46713,8 +47133,8 @@ async function generateCaExport() {
                     'PAYMENT VALUE': subtotal + gstAmt,
                     'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
                     'USD:INR PAYMNT DATE RATE': '',
-                    'AMOUNT PAID': p.paidDate ? (parseFloat(p.totalAmount) || (subtotal + gstAmt)) : 0,
-                    'TDS': 0, 'RCM GST': 0, 'DISCREPANCY': 0,
+                    'AMOUNT PAID': p.paidDate ? ((parseFloat(p.totalAmount) || (subtotal + gstAmt)) - __msConPayTds(p)) : 0,   // 8ET — less TDS
+                    'TDS': __msConPayTds(p), 'RCM GST': 0, 'DISCREPANCY': 0,
                     'DUE DATE': _caExportToDate(p.dueDate),
                     'PAYMENT DATE': _caExportToDate(p.paidDate)
                 });
