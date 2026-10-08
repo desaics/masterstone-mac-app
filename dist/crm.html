@@ -51904,7 +51904,8 @@ async function __msRemitPreview() {
 //    line is kept (lines keep their id between runs).
 //  - Heads come from the remarks (his words); you can move a line, or tell the
 //    app to put every line with a remark under a head (now and in later months).
-//  - Company expenses are the tracker's totals (with the TDS deposited, since 8EW).
+//  - Company expenses are the tracker's totals (with the TDS deposited, since 8EW, and
+//    the interest part of each car loan EMI, split by its schedule in the CA pack, 8EX).
 //    Payments to vendors and consultants (Payables / Consultants hold those) and
 //    money that isn't an expense (own transfers, card bills, GST paid, partners)
 //    are shown apart.
@@ -51912,18 +51913,19 @@ async function __msRemitPreview() {
 var MS_EXP_HEADS = [
     { id: 'salaries', label: 'Salaries & bonus', group: 'exp' },
     { id: 'partner_salary', label: "Partners' salary", group: 'exp' },
-    { id: 'rent_office', label: 'Rent & office', group: 'exp' },
+    { id: 'rent', label: 'Rent', group: 'exp' },                                  // 8EX: was 'rent_office'
     { id: 'software', label: 'Software & subscriptions', group: 'exp' },
     { id: 'utilities', label: 'Phone, internet & electricity', group: 'exp' },
     { id: 'local_travel', label: 'Local travel', group: 'exp' },
     { id: 'travel', label: 'Travel (outstation)', group: 'exp' },
     { id: 'car', label: 'Car', group: 'exp' },
+    { id: 'car_interest', label: 'Car loan interest', group: 'exp' },             // 8EX: the interest part of each car loan EMI
     { id: 'food_client', label: 'Food - Client', group: 'exp' },
     { id: 'food_partner', label: 'Food - Partner', group: 'exp' },
     { id: 'promotion', label: 'Gifts & promotion', group: 'exp' },
     { id: 'professional', label: 'Professional fees', group: 'exp' },
     { id: 'bank', label: 'Bank charges & OD interest', group: 'exp' },
-    { id: 'repairs', label: 'Repairs & maintenance', group: 'exp' },
+    { id: 'office', label: 'Office, repairs & maintenance', group: 'exp' },       // 8EX: was 'repairs' (+ the office items)
     { id: 'admin', label: 'Courier & admin', group: 'exp' },
     { id: 'govt', label: 'Govt fees & professional tax', group: 'exp' },
     { id: 'tds', label: 'TDS paid', group: 'exp' },            // 8EW: the TDS he deposits is a company expense
@@ -51937,14 +51939,14 @@ var MS_EXP_HEADS = [
     { id: 'partners', label: 'Money to partners', group: 'other' },
     { id: 'partner_tax', label: "Partners' tax", group: 'other' },
     { id: 'gst', label: 'GST paid', group: 'other' },
-    { id: 'loan', label: 'Car loan EMI', group: 'other' },
+    { id: 'loan', label: 'Car loan principal', group: 'other' },                  // 8EX: the EMI's principal
     { id: 'assets', label: 'Assets, deposits & FDs', group: 'other' },
     { id: 'client_refund', label: 'Refunds to clients', group: 'other' }
 ];
 var MS_EXP_GROUPS = [
     { id: 'exp', label: 'Company expenses', hint: 'The tracker\'s totals' },
     { id: 'vendor', label: 'Vendors & consultants', hint: 'Payables and Consultants hold these; shown here so nothing is missed' },
-    { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST paid, partners, loans, deposits' }
+    { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST paid, partners, car loan principal, deposits' }
 ];
 var MS_EXP_ACCTS = [
     { id: 'HDFC_BANK', label: 'HDFC Bank' }, { id: 'ICICI_BANK', label: 'ICICI Bank' },
@@ -51958,8 +51960,10 @@ var MS_EXP_CAPACK_UNDER_HOME = '/Library/CloudStorage/OneDrive-Masterstone/Maste
 var MS_EXP_APP_DIR = '/_engine/app_expenses';
 var MS_EXP_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 var MS_EXP_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-var MS_EXP_NO_BILL_FROM = 5000;      // the CA pack's own "bigger payments with no bill" line
-var MS_EXP_NO_BILL_SKIP = ['salaries', 'partner_salary', 'bank', 'petty_cash', 'tds'];   // heads that never have a bill in the Expenses folder
+var MS_EXP_READ_FMT = 2;             // 8EX: months taken in by an older build are read once more (split car loan EMIs carry their part)
+var MS_EXP_LEGACY_HEADS = ['gst_tds', 'rent_office', 'repairs'];   // head ids of earlier builds, mapped by __msExpLegacyHead
+var MS_EXP_OFFICE_RE = /cabinet|office (cleaning|drawers)|work table|carpentry|office tables|study table|tv installation|ac purchase/;
+var MS_EXP_RENT_RE = /\brent\b|wework|regus|hunch|executive cent|\btec\b/;
 var MS_EXP_LIST_STEP = 250;
 var MS_EXP_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;   // a line's id (the CA pack's content hash, or man_… for one added by hand)
 var MS_EXP_ORPHANS_MAX = 1000;       // heads/notes kept aside for lines that left a month (in case they come back)
@@ -51998,18 +52002,21 @@ function __msExpHeads() {
     return list;
 }
 function __msExpHead(id) { var hs = __msExpHeads(); for (var i = 0; i < hs.length; i++) if (hs[i].id === id) return hs[i]; return null; }
-// 8EW: the head "GST & TDS paid" (8EV) was split into "TDS paid" (a company expense) and "GST paid".
-// A line or rule still carrying the old id goes by its remark.
+// Heads that were split in later builds. A line or rule still carrying an old id goes by its remark:
+//  8EW: "GST & TDS paid" -> "TDS paid" (a company expense) or "GST paid";
+//  8EX: "Rent & office" -> "Rent" or "Office, repairs & maintenance"; "Repairs & maintenance" -> the latter.
 function __msExpLegacyHead(id, remark) {
-    if (id !== 'gst_tds') return id;
-    return /^tds|employee tds|\btds (payment|paid|on|for)\b/.test(__msExpNormRemark(remark)) ? 'tds' : 'gst';
+    if (id === 'gst_tds') return /^tds|employee tds|\btds (payment|paid|on|for)\b/.test(__msExpNormRemark(remark)) ? 'tds' : 'gst';
+    if (id === 'rent_office') { var r = __msExpNormRemark(remark); return (MS_EXP_OFFICE_RE.test(r) || !MS_EXP_RENT_RE.test(r)) ? 'office' : 'rent'; }
+    if (id === 'repairs') return 'office';
+    return id;
 }
 function __msExpHeadLabel(id) { var h = __msExpHead(id); return h ? h.label : 'Other'; }
 function __msExpAcctLabel(id) { for (var i = 0; i < MS_EXP_ACCTS.length; i++) if (MS_EXP_ACCTS[i].id === id) return MS_EXP_ACCTS[i].label; return String(id || ''); }
 // The head a line counts under: yours (moved), else your rule for its remark, else the CA pack's.
 function __msExpEffHead(ln) {
     if (ln.o && __msExpHead(ln.o)) return ln.o;
-    if (ln.s !== 'manual' && ln.r) { var rh = __msExp.meta.rules[__msExpNormRemark(ln.r)]; if (rh && __msExpHead(rh)) return rh; }
+    if (ln.s !== 'manual' && !ln.p && ln.r) { var rh = __msExp.meta.rules[__msExpNormRemark(ln.r)]; if (rh && __msExpHead(rh)) return rh; }
     return __msExpHead(ln.h) ? ln.h : 'other';
 }
 function __msExpGroupOf(ln) { var h = __msExpHead(__msExpEffHead(ln)); return h ? h.group : 'exp'; }
@@ -52018,6 +52025,11 @@ function __msExpGst(ln) {
     var g = 0;
     (ln.b || []).forEach(function (b) { g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });
     return Math.round(g * 100) / 100;
+}
+// 8EX: "Interest — EMI 42 of 84 (₹41,175)" for a part of a split loan EMI; '' otherwise.
+function __msExpPartText(ln) {
+    if (!ln || !ln.p) return '';
+    return (ln.p.k === 'i' ? 'Interest' : 'Principal') + ' — EMI ' + ln.p.n + (ln.p.of ? ' of ' + ln.p.of : '') + (ln.p.emi ? ' (' + __msExpRupees(ln.p.emi) + ')' : '');
 }
 function __msExpRupees(n) {
     var v = Math.round(Number(n) || 0);
@@ -52067,8 +52079,9 @@ async function __msExpLoad() {
                 if (!rec || !Array.isArray(rec.lines) || !(fy > 2000)) throw new Error('not an expenses record');
                 var moved = false;
                 fys[fy] = { v: 1, fy: fy, lines: rec.lines.filter(__msExpLineOk).map(function (l) {
-                    if (l.h === 'gst_tds') { l.h = __msExpLegacyHead(l.h, l.r); moved = true; }
-                    if (l.o === 'gst_tds') { l.o = __msExpLegacyHead(l.o, l.r); moved = true; }
+                    var says = l.r || l.t;      // the remark, else the bank text (or, added by hand, "What for")
+                    if (MS_EXP_LEGACY_HEADS.indexOf(l.h) !== -1) { l.h = __msExpLegacyHead(l.h, says); moved = true; }
+                    if (MS_EXP_LEGACY_HEADS.indexOf(l.o) !== -1) { l.o = __msExpLegacyHead(l.o, says); moved = true; }
                     return l;
                 }) };
                 if (moved) migrated.push(k);
@@ -52088,17 +52101,17 @@ async function __msExpLoad() {
         __msExp.meta = {
             v: 1, caPackPath: String(meta.caPackPath || ''), months: (meta.months && typeof meta.months === 'object') ? meta.months : {},
             rules: (meta.rules && typeof meta.rules === 'object') ? meta.rules : {},
-            extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads.filter(function (h) { return !(h && h.id === 'gst_tds'); }) : [],
+            extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads.filter(function (h) { return !(h && (MS_EXP_LEGACY_HEADS.indexOf(h.id) !== -1 || MS_EXP_HEADS.some(function (x) { return x.id === h.id; }))); }) : [],
             orphans: (meta.orphans && typeof meta.orphans === 'object') ? meta.orphans : {}, lastCheck: String(meta.lastCheck || '')
         };
         var rk = Object.keys(__msExp.meta.rules), rulesMoved = false;
-        rk.forEach(function (k) { if (__msExp.meta.rules[k] === 'gst_tds') { __msExp.meta.rules[k] = __msExpLegacyHead('gst_tds', k); rulesMoved = true; } });
-        Object.keys(__msExp.meta.orphans).forEach(function (id) { var o = __msExp.meta.orphans[id]; if (o && o.o === 'gst_tds') { delete o.o; if (!o.n) delete __msExp.meta.orphans[id]; rulesMoved = true; } });
+        rk.forEach(function (k) { var v = __msExp.meta.rules[k]; if (MS_EXP_LEGACY_HEADS.indexOf(v) !== -1) { __msExp.meta.rules[k] = __msExpLegacyHead(v, k); rulesMoved = true; } });
+        Object.keys(__msExp.meta.orphans).forEach(function (id) { var o = __msExp.meta.orphans[id]; if (o && MS_EXP_LEGACY_HEADS.indexOf(o.o) !== -1) { delete o.o; if (!o.n) delete __msExp.meta.orphans[id]; rulesMoved = true; } });
         if (rulesMoved || (Array.isArray(meta.extraHeads) && meta.extraHeads.length !== __msExp.meta.extraHeads.length)) migrated.push(MS_EXP_META_KEY);
     }
     __msExp.state = 'ready';
-    if (migrated.length) {      // 8EW: the old "GST & TDS paid" head, split and saved back
-        __msExpLog('INFO', 'the GST & TDS head was split into TDS paid and GST paid', { records: migrated });
+    if (migrated.length) {      // 8EW/8EX: heads that were split, moved and saved back
+        __msExpLog('INFO', 'heads of an earlier build moved to their new heads (GST & TDS; Rent & office; Repairs)', { records: migrated });
         migrated.forEach(function (k) { __msExpMarkDirty(k); });
     }
     __msExpLog('INFO', 'loaded', { lines: __msExpAllLines().length, months: Object.keys(__msExp.meta.months).length, years: Object.keys(fys).length });
@@ -52204,7 +52217,7 @@ function __msExpFromFile(ym, source, l) {
     if (!l || typeof l !== 'object') return null;
     var d = String(l.date || ''), m = Number(l.amount);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !(m > 0) || !isFinite(m) || (l.dc !== 'D' && l.dc !== 'C') || !MS_EXP_ID_RE.test(String(l.id || ''))) return null;
-    var hid = __msExpLegacyHead(String(l.head || ''), l.remark);
+    var hid = __msExpLegacyHead(String(l.head || ''), l.remark || l.text);
     var head = __msExpHead(hid) ? hid : 'other';
     var out = { i: String(l.id), f: ym, s: source === 'history' ? 'history' : 'pack', d: d, a: String(l.acct || '').slice(0, 20),
                 dc: l.dc, m: Math.round(m * 100) / 100, t: String(l.text || '').slice(0, 160), r: String(l.remark || '').slice(0, 160),
@@ -52221,6 +52234,10 @@ function __msExpFromFile(ym, source, l) {
         });
     }
     if (l.app && typeof l.app === 'object') out.x = { party: String(l.app.party || '').slice(0, 80), invoice: String(l.app.invoice || '').slice(0, 60), tds: Number(l.app.tds) || 0 };
+    // 8EX: one part of a loan EMI split by the saved repayment schedule
+    if (l.part && typeof l.part === 'object' && (l.part.kind === 'interest' || l.part.kind === 'principal')) {
+        out.p = { k: l.part.kind === 'interest' ? 'i' : 'p', n: Math.max(0, parseInt(l.part.n, 10) || 0), of: Math.max(0, parseInt(l.part.of, 10) || 0), emi: Number(l.part.emi) || 0 };
+    }
     return out;
 }
 // Replace month `ym` with `lines`, keeping what you changed on a line (head, note) by its id.
@@ -52242,16 +52259,23 @@ function __msExpMergeMonth(ym, lines) {
         st.lines = keep;
     });
     if (!__msExp.meta.orphans || typeof __msExp.meta.orphans !== 'object') __msExp.meta.orphans = {};
-    var orph = __msExp.meta.orphans, orphChanged = false;
+    var orph = __msExp.meta.orphans, orphChanged = false, wholeUsed = {};
     lines.forEach(function (ln) {
         var k = kept[ln.i] || orph[ln.i];
         if (k) { if (k.o) ln.o = k.o; if (k.n) ln.n = k.n; }
+        else if (ln.p) {
+            // 8EX: an EMI kept whole by an older build is now two parts: its note goes onto both (a head moved by hand does not)
+            var base = ln.i.replace(/-(int|pri)$/, ''), w = kept[base] || orph[base];
+            if (w && w.n) ln.n = w.n;
+            if (w) wholeUsed[base] = true;
+        }
         if (orph[ln.i]) { delete orph[ln.i]; orphChanged = true; }
         delete kept[ln.i];
         var fy = __msExpFyOf(ln.d);
         __msExpStore(fy).lines.push(ln);
         touched[fy] = true;
     });
+    Object.keys(wholeUsed).forEach(function (id) { delete kept[id]; if (orph[id]) { delete orph[id]; orphChanged = true; } });
     Object.keys(kept).forEach(function (id) { orph[id] = kept[id]; orphChanged = true; });
     var ids = Object.keys(orph);
     for (var i = 0; i < ids.length - MS_EXP_ORPHANS_MAX; i++) delete orph[ids[i]];
@@ -52288,7 +52312,7 @@ async function __msExpCheck(opts) {
         }
         if (Array.isArray(idx.heads)) {
             var extra = idx.heads.filter(function (h) {
-                return h && typeof h.id === 'string' && /^[a-z0-9_]{1,40}$/.test(h.id) && h.id !== 'gst_tds' && typeof h.label === 'string' && /^(exp|vendor|other)$/.test(h.group)
+                return h && typeof h.id === 'string' && /^[a-z0-9_]{1,40}$/.test(h.id) && MS_EXP_LEGACY_HEADS.indexOf(h.id) === -1 && typeof h.label === 'string' && /^(exp|vendor|other)$/.test(h.group)
                     && !MS_EXP_HEADS.some(function (x) { return x.id === h.id; });
             }).map(function (h) { return { id: h.id, label: h.label.slice(0, 60), group: h.group }; });
             if (JSON.stringify(extra) !== JSON.stringify(__msExp.meta.extraHeads || [])) { __msExp.meta.extraHeads = extra; __msExpMarkDirty(MS_EXP_META_KEY); }
@@ -52298,7 +52322,7 @@ async function __msExpCheck(opts) {
         for (var i = 0; i < months.length; i++) {
             var ym = months[i], e = idx.months[ym] || {};
             var had = __msExp.meta.months[ym];
-            if (had && had.sig && had.sig === e.sig) continue;
+            if (had && had.sig && had.sig === e.sig && had.fmt === MS_EXP_READ_FMT) continue;
             if (!/^\d{4}-\d{2}\.json$/.test(String(e.file || ''))) { result.bad.push(ym); continue; }
             var mf = await __msExpReadJson(root + MS_EXP_APP_DIR + '/' + e.file);
             if (__msExp.state !== 'ready') return result;
@@ -52313,7 +52337,7 @@ async function __msExpCheck(opts) {
             var exp = 0;
             lines.forEach(function (ln) { if (__msExpGroupOf(ln) === 'exp') exp += __msExpSigned(ln); });
             (had ? result.updated : result.added).push({ ym: ym, n: lines.length, exp: exp, source: doc.source });
-            taken[ym] = { sig: e.sig, source: doc.source === 'history' ? 'history' : 'pack', made: String(doc.made || ''), lines: lines.length };
+            taken[ym] = { sig: e.sig, fmt: MS_EXP_READ_FMT, source: doc.source === 'history' ? 'history' : 'pack', made: String(doc.made || ''), lines: lines.length };
         }
         // A month counts as taken in only once its lines are in the database (the years
         // are saved before the list of months; a year that fails stops the save).
@@ -52399,7 +52423,7 @@ function __msExpSetHead(id, head) {
     var f = __msExpFind(id);
     if (!f || !__msExpHead(head)) return;
     var ln = f.ln;
-    var auto = (ln.s !== 'manual' && ln.r && __msExp.meta.rules[__msExpNormRemark(ln.r)]) || ln.h;
+    var auto = (ln.s !== 'manual' && !ln.p && ln.r && __msExp.meta.rules[__msExpNormRemark(ln.r)]) || ln.h;
     if (ln.s === 'manual') { ln.h = head; delete ln.o; }
     else if (head === auto) delete ln.o;
     else ln.o = head;
@@ -52407,8 +52431,8 @@ function __msExpSetHead(id, head) {
     renderExpensesPage();
     // Offer the same for every line with this remark (now and in later months).
     var norm = __msExpNormRemark(ln.r);
-    if (ln.s === 'manual' || !norm || typeof showProspectToast !== 'function') return;
-    var others = __msExpAllLines().filter(function (x) { return x.i !== ln.i && x.s !== 'manual' && __msExpNormRemark(x.r) === norm && __msExpEffHead(x) !== head; }).length;
+    if (ln.s === 'manual' || ln.p || !norm || typeof showProspectToast !== 'function') return;
+    var others = __msExpAllLines().filter(function (x) { return x.i !== ln.i && x.s !== 'manual' && !x.p && __msExpNormRemark(x.r) === norm && __msExpEffHead(x) !== head; }).length;
     if (__msExp.meta.rules[norm] === head) return;
     showProspectToast('<i class="fas fa-tag" style="color:var(--accent-cyan);"></i> Moved to <strong>' + __msExpEsc(__msExpHeadLabel(head)) + '</strong>. '
         + '<a href="#" id="msExpRuleOffer" data-norm="' + __msExpEsc(norm) + '" data-head="' + __msExpEsc(head) + '" onclick="return __msExpRuleFromToast(this);" style="color:var(--accent-cyan); font-weight:600;">'
@@ -52427,12 +52451,12 @@ function __msExpSetRule(norm, head) {
     // a line moved by hand to the same head no longer needs its own setting
     Object.keys(__msExp.fys).forEach(function (k) {
         var ch = false;
-        __msExp.fys[k].lines.forEach(function (ln) { if (ln.o === head && __msExpNormRemark(ln.r) === norm) { delete ln.o; ch = true; } });
+        __msExp.fys[k].lines.forEach(function (ln) { if (ln.o === head && !ln.p && ln.s !== 'manual' && __msExpNormRemark(ln.r) === norm) { delete ln.o; ch = true; } });
         if (ch) __msExpMarkDirty(__msExpKeyOfFy(parseInt(k, 10)));
     });
     __msExpMarkDirty(MS_EXP_META_KEY);
     renderExpensesPage();
-    var n = __msExpAllLines().filter(function (x) { return x.s !== 'manual' && __msExpNormRemark(x.r) === norm; }).length;
+    var n = __msExpAllLines().filter(function (x) { return x.s !== 'manual' && !x.p && __msExpNormRemark(x.r) === norm; }).length;
     if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> “' + __msExpEsc(norm) + '” now goes under <strong>'
         + __msExpEsc(__msExpHeadLabel(head)) + '</strong>: ' + n + ' entr' + (n === 1 ? 'y' : 'ies') + ', and later months.', 5000);
 }
@@ -52658,8 +52682,9 @@ function __msExpRefreshIfOpen() {
     // not while you are typing a note or picking a head: that finishes with a redraw of its own
     var a = document.activeElement, root = document.getElementById('msExpRoot');
     if (a && root && root.contains(a) && a.id !== 'msExpQ' && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) return;
-    var hadQ = !!(a && a.id === 'msExpQ');
+    var hadQ = !!(a && a.id === 'msExpQ'), hadCard = !!(a && /^msExpCard_/.test(a.id || ''));
     renderExpensesPage();
+    if (hadCard) { var c = document.getElementById('msExpCard_' + __msExp.ui.group); if (c) c.focus(); }
     if (hadQ) { var q = document.getElementById('msExpQ'); if (q) { q.focus(); try { q.setSelectionRange(q.value.length, q.value.length); } catch (e) {} } }
 }
 function __msExpStateText() {
@@ -52679,7 +52704,7 @@ function __msExpLines(fy) {
         if (ui.acct !== 'ALL' && ln.a !== ui.acct) return false;
         if (!q) return true;
         if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
-        var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), (ln.b || []).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : ''].join(' ').toLowerCase();
+        var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), (ln.b || []).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : '', __msExpPartText(ln)].join(' ').toLowerCase();
         return hay.indexOf(q) !== -1;
     });
 }
@@ -52730,12 +52755,7 @@ function renderExpensesPage() {
         + '<select id="msExpAcct" onchange="__msExpSetUi(\'acct\', this.value)" style="width:180px;" aria-label="Paid from"><option value="ALL">All accounts and cards</option>'
         + MS_EXP_ACCTS.map(function (a) { return '<option value="' + a.id + '"' + (ui.acct === a.id ? ' selected' : '') + '>' + __msExpEsc(a.label) + '</option>'; }).join('') + '</select>'
         + '<input type="text" id="msExpQ" value="' + __msExpEsc(ui.q) + '" placeholder="Search remark, description, amount…" style="flex:1; min-width:200px; max-width:340px;" oninput="__msExpSearch(this.value)">'
-        + '<div role="tablist" style="display:flex; gap:6px; margin-left:auto; flex-wrap:wrap;">'
-        + MS_EXP_GROUPS.map(function (g) {
-            var on = ui.group === g.id;
-            return '<button type="button" role="tab" aria-selected="' + on + '" class="btn btn-sm ' + (on ? 'btn-primary' : 'btn-ghost') + '" data-group="' + g.id + '" title="' + __msExpEsc(g.hint) + '" onclick="__msExpSetUi(\'group\', \'' + g.id + '\')">'
-                + __msExpEsc(g.label) + ' · ' + __msExpEsc(fmtMoneyShort(Math.round(T.groups[g.id] || 0))) + '</button>';
-        }).join('') + '</div></div></div>';
+        + '</div></div>';
     html += __msExpCardsHtml(fy, lines, T);
     html += __msExpTableHtml(fy, T);
     html += '<div class="card" style="padding:14px 18px 10px; margin-bottom:14px;">'
@@ -52787,31 +52807,39 @@ function __msExpAgo(iso) {
     if (s < 86400) return Math.round(s / 3600) + ' h ago';
     return new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
+// 8EX: three cards, one per group, each a button that shows that group below (the
+// table, the chart and the entries). Not expenses is set apart in its own colour.
 function __msExpCardsHtml(fy, lines, T) {
-    var exp = lines.filter(function (ln) { return __msExpGroupOf(ln) === 'exp'; });
-    var total = 0, byMonth = {};
-    exp.forEach(function (ln) { var v = __msExpSigned(ln), ym = ln.d.slice(0, 7); total += v; byMonth[ym] = (byMonth[ym] || 0) + v; });
-    var ms = Object.keys(byMonth).sort();
-    var latest = ms.length ? ms[ms.length - 1] : '';
-    var avg = ms.length ? total / ms.length : 0;
-    var gst = 0, bills = 0;
-    exp.forEach(function (ln) { if (ln.b && ln.b.length) { gst += __msExpGst(ln); bills += ln.b.length; } });
-    var fromPack = exp.filter(function (ln) { return ln.s === 'pack'; });
-    var noBill = fromPack.filter(function (ln) { return ln.dc === 'D' && ln.m >= MS_EXP_NO_BILL_FROM && !(ln.b && ln.b.length) && MS_EXP_NO_BILL_SKIP.indexOf(__msExpEffHead(ln)) === -1; });
-    var noBillAmt = 0;
-    noBill.forEach(function (ln) { noBillAmt += ln.m; });
-    var card = function (icon, label, val, sub, color, id) {
-        return '<div class="proposal-kpi-card"' + (id ? ' id="' + id + '"' : '') + '><div class="proposal-kpi-lbl"><i class="fas ' + icon + '"></i> ' + label + '</div>'
-            + '<div class="proposal-kpi-val" style="color:' + color + ';">' + val + '</div><div class="proposal-kpi-sub">' + sub + '</div></div>';
-    };
-    return '<div class="proposal-kpi-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom:14px;">'
-        + card('fa-wallet', 'Company expenses', fmtMoneyShort(total), exp.length + ' entr' + (exp.length === 1 ? 'y' : 'ies') + ' · ' + __msExpFyShort(fy), 'var(--accent-cyan)', 'msExpCardTotal')
-        + card('fa-calendar', 'Latest month', latest ? fmtMoneyShort(byMonth[latest]) : '—', latest ? __msExpEsc(__msExpMonthLabel(latest)) : 'No entries yet', 'var(--text-main)', 'msExpCardLatest')
-        + card('fa-chart-simple', 'Monthly average', ms.length ? fmtMoneyShort(avg) : '—', ms.length ? 'over ' + ms.length + ' month' + (ms.length === 1 ? '' : 's') : '—', 'var(--text-main)', 'msExpCardAvg')
-        + card('fa-receipt', 'GST on bills', bills ? fmtMoneyShort(gst) : '—', bills ? 'on ' + bills + ' bill' + (bills === 1 ? '' : 's') + ' read by the CA pack' : 'Bills are read from the CA pack', 'var(--success)', 'msExpCardGst')
-        + card('fa-file-circle-question', 'No bill (₹' + MS_EXP_NO_BILL_FROM.toLocaleString('en-IN') + '+)', fromPack.length ? String(noBill.length) : '—',
-               fromPack.length ? (noBill.length ? fmtMoneyShort(noBillAmt) + ' · put the bills in the Expenses folder' : 'every one has its bill') : 'From the months the CA pack builds', noBill.length ? 'var(--warning)' : 'var(--text-main)', 'msExpCardNoBill')
-        + '</div>';
+    var ui = __msExp.ui;
+    var n = { exp: 0, vendor: 0, other: 0 };
+    lines.forEach(function (ln) { var g = __msExpGroupOf(ln); n[g] = (n[g] || 0) + 1; });
+    var icon = { exp: 'fa-wallet', vendor: 'fa-handshake', other: 'fa-right-left' };
+    return '<div class="proposal-kpi-grid ms-exp-cards" role="tablist" aria-label="Show" style="grid-template-columns: repeat(3, 1fr); margin-bottom:14px;">'
+        + MS_EXP_GROUPS.map(function (g) {
+            var on = ui.group === g.id;
+            var go = '__msExpSetUi(\'group\', \'' + g.id + '\')';
+            return '<div class="proposal-kpi-card ms-exp-card ms-exp-card-' + g.id + (on ? ' on' : '') + '" id="msExpCard_' + g.id + '" data-group="' + g.id + '"'
+                + ' role="tab" tabindex="' + (on ? '0' : '-1') + '" aria-selected="' + on + '" title="' + __msExpEsc(g.hint) + '"'
+                + ' onclick="' + go + '" onkeydown="__msExpCardKey(event, \'' + g.id + '\')">'
+                + '<div class="proposal-kpi-lbl"><i class="fas ' + icon[g.id] + '"></i> ' + __msExpEsc(g.label) + '</div>'
+                + '<div class="proposal-kpi-val">' + __msExpEsc(fmtMoneyShort(Math.round(T.groups[g.id] || 0))) + '</div>'
+                + '<div class="proposal-kpi-sub">' + (n[g.id] || 0) + ' entr' + (n[g.id] === 1 ? 'y' : 'ies') + ' · ' + __msExpFyShort(fy) + '</div></div>';
+        }).join('') + '</div>';
+}
+// The cards by keyboard (as tabs): Enter / Space shows the group; the arrows move to the next one and show it.
+function __msExpCardKey(e, id) {
+    var ids = MS_EXP_GROUPS.map(function (g) { return g.id; });
+    var to = null;
+    if (e.key === 'Enter' || e.key === ' ') to = id;
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') to = ids[(ids.indexOf(id) + 1) % ids.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') to = ids[(ids.indexOf(id) + ids.length - 1) % ids.length];
+    else if (e.key === 'Home') to = ids[0];
+    else if (e.key === 'End') to = ids[ids.length - 1];
+    if (!to) return;
+    e.preventDefault();
+    __msExpSetUi('group', to);
+    var c = document.getElementById('msExpCard_' + to);       // the page was drawn again: keep the keyboard on the card
+    if (c) c.focus();
 }
 // The months a year's table shows: all twelve, or in the current year April to this
 // month (or to the latest month with an entry, so every row still adds up).
@@ -52867,7 +52895,7 @@ function __msExpDrawChart(fy, T) {
     var mt = T.months[ui.group] || {};
     var data = keys.map(function (ym) { return Math.round(mt[ym] || 0); });
     var css = getComputedStyle(document.body);
-    var accent = (css.getPropertyValue('--accent-cyan') || '').trim() || '#0c5e5b';
+    var accent = ui.group === 'other' ? ((css.getPropertyValue('--purple') || '').trim() || '#614b8a') : ((css.getPropertyValue('--accent-cyan') || '').trim() || '#0c5e5b');
     var grid = (css.getPropertyValue('--chart-grid') || '').trim() || 'rgba(20,20,15,0.06)';
     var ink = (css.getPropertyValue('--text-dim') || '').trim() || '#74716a';
     var colors = keys.map(function (ym) { return (!ui.month || ui.month === ym) ? accent : accent + '55'; });
@@ -52924,6 +52952,7 @@ function __msExpListHtml(fy, lines) {
         var moved = ln.s !== 'manual' && eh !== ln.h;
         var remark = ln.r ? __msExpEsc(ln.r) : '<span style="color:var(--text-dim); font-style:italic;">' + (ln.s === 'manual' ? 'added by you' : 'no remark') + '</span>';
         if (ln.rs === 'claude') remark += ' <span title="Remark written by Claude in the CA pack, not one of yours" style="font-size:10px; padding:1px 5px; border-radius:8px; border:1px solid var(--glass-border); color:var(--text-dim);">Claude</span>';
+        if (ln.p) remark += '<div style="font-size:11px; color:var(--text-dim);" title="Split by the loan\'s repayment schedule">' + __msExpEsc(__msExpPartText(ln)) + '</div>';
         if (ln.x) remark += '<div style="font-size:11px; color:var(--text-dim);" title="The app\'s CA export has this payment">In the app: ' + __msExpEsc(ln.x.party) + (ln.x.invoice ? ' · ' + __msExpEsc(ln.x.invoice) : '') + (ln.x.tds ? ' · TDS ' + __msExpRupees(ln.x.tds) : '') + '</div>';
         var gst = __msExpGst(ln);
         var guessed = ' (matched to this payment by amount and date, not read off the bill)';
@@ -53034,7 +53063,7 @@ function exportExpensesExcel() {
     lines.forEach(function (ln) {
         var b = (ln.b && ln.b[0]) || null, eh = __msExpEffHead(ln);
         var sum = function (k) { var s = 0; (ln.b || []).forEach(function (x) { s += Number(x[k]) || 0; }); return r2(s); };
-        rows.push([ln.d, __msExpAcctLabel(ln.a), ln.t || '', ln.r || '', ln.s === 'manual' ? 'you (added by hand)' : (ln.rs === 'claude' ? 'Claude' : (ln.rs === 'rule' ? 'your rule' : (ln.r ? 'you' : ''))),
+        rows.push([ln.d, __msExpAcctLabel(ln.a), ln.t || '', (ln.r || '') + (ln.p ? ' — ' + __msExpPartText(ln) : ''), ln.s === 'manual' ? 'you (added by hand)' : (ln.rs === 'claude' ? 'Claude' : (ln.rs === 'rule' ? 'your rule' : (ln.r ? 'you' : ''))),
             __msExpHeadLabel(eh), MS_EXP_GROUPS.filter(function (g) { return g.id === __msExpGroupOf(ln); })[0].label, r2(__msExpSigned(ln)),
             b ? b.vendor : '', b ? b.gstin : '', (ln.b || []).map(function (x) { return x.no; }).filter(Boolean).join(', '),
             b ? sum('taxable') : '', b ? sum('cgst') : '', b ? sum('sgst') : '', b ? sum('igst') : '', b ? sum('total') : '',
@@ -53158,7 +53187,19 @@ window.__msExpRestore = async function (p) {
         css.id = 'msExpStyles';
         css.textContent = '#msExpRoot table th, #msExpRoot table td { padding: 9px 10px; }'
             + ' #msExpRoot td.ms-exp-head:hover { text-decoration: underline dotted; }'
-            + ' #msExpRoot td.ms-exp-note:hover { background: var(--hover-bg); }';
+            + ' #msExpRoot td.ms-exp-note:hover { background: var(--hover-bg); }'
+            // 8EX: the group cards (buttons); Not expenses in its own colour
+            + ' #msExpRoot .ms-exp-card { cursor: pointer; user-select: none; }'
+            + ' #msExpRoot .ms-exp-card .proposal-kpi-val { color: var(--accent-cyan); }'
+            + ' #msExpRoot .ms-exp-card.on { border-color: var(--accent-cyan); box-shadow: inset 0 0 0 1.5px var(--accent-cyan), var(--shadow-sm); }'
+            + ' #msExpRoot .ms-exp-card:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }'
+            + ' #msExpRoot .ms-exp-card-other { border-color: var(--purple); border-style: dashed; }'
+            + ' @supports (background: color-mix(in srgb, red 50%, blue)) { #msExpRoot .ms-exp-card-other { border-style: solid;'
+            + ' background: color-mix(in srgb, var(--purple) 8%, var(--glass-panel)); border-color: color-mix(in srgb, var(--purple) 30%, var(--glass-border)); } }'
+            + ' #msExpRoot .ms-exp-card-other .proposal-kpi-val, #msExpRoot .ms-exp-card-other .proposal-kpi-lbl { color: var(--purple); }'
+            + ' #msExpRoot .ms-exp-card-other.on { border-color: var(--purple); box-shadow: inset 0 0 0 1.5px var(--purple), var(--shadow-sm); }'
+            + ' #msExpRoot .ms-exp-card-other:focus-visible { outline-color: var(--purple); }'
+            + ' @media (max-width: 760px) { #msExpRoot .ms-exp-cards { grid-template-columns: 1fr !important; } }';
         (document.head || document.documentElement).appendChild(css);
     } catch (e) {}
     try {
@@ -53179,7 +53220,7 @@ window.__msExpRestore = async function (p) {
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
-// =================== /Phase 8EV — Expenses (8EW: TDS paid is a company expense) ===================
+// =================== /Phase 8EV — Expenses (8EW: TDS paid is a company expense; 8EX: group cards, Rent / Office, car loan split) ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
