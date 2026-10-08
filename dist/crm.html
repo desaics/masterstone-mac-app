@@ -51904,9 +51904,10 @@ async function __msRemitPreview() {
 //    line is kept (lines keep their id between runs).
 //  - Heads come from the remarks (his words); you can move a line, or tell the
 //    app to put every line with a remark under a head (now and in later months).
-//  - Company expenses are the tracker's totals. Payments to vendors and
-//    consultants (Payables / Consultants hold those) and money that isn't an
-//    expense (own transfers, card bills, GST/TDS paid, partners) are shown apart.
+//  - Company expenses are the tracker's totals (with the TDS deposited, since 8EW).
+//    Payments to vendors and consultants (Payables / Consultants hold those) and
+//    money that isn't an expense (own transfers, card bills, GST paid, partners)
+//    are shown apart.
 //  - Nothing is written to the CA pack's folder from here.
 var MS_EXP_HEADS = [
     { id: 'salaries', label: 'Salaries & bonus', group: 'exp' },
@@ -51925,6 +51926,7 @@ var MS_EXP_HEADS = [
     { id: 'repairs', label: 'Repairs & maintenance', group: 'exp' },
     { id: 'admin', label: 'Courier & admin', group: 'exp' },
     { id: 'govt', label: 'Govt fees & professional tax', group: 'exp' },
+    { id: 'tds', label: 'TDS paid', group: 'exp' },            // 8EW: the TDS he deposits is a company expense
     { id: 'petty_cash', label: 'Petty cash', group: 'exp' },
     { id: 'other', label: 'Other', group: 'exp' },
     { id: 'oem', label: 'OEM purchases', group: 'vendor' },
@@ -51934,7 +51936,7 @@ var MS_EXP_HEADS = [
     { id: 'transfers', label: 'Own transfers & card bills', group: 'other' },
     { id: 'partners', label: 'Money to partners', group: 'other' },
     { id: 'partner_tax', label: "Partners' tax", group: 'other' },
-    { id: 'gst_tds', label: 'GST & TDS paid', group: 'other' },
+    { id: 'gst', label: 'GST paid', group: 'other' },
     { id: 'loan', label: 'Car loan EMI', group: 'other' },
     { id: 'assets', label: 'Assets, deposits & FDs', group: 'other' },
     { id: 'client_refund', label: 'Refunds to clients', group: 'other' }
@@ -51942,7 +51944,7 @@ var MS_EXP_HEADS = [
 var MS_EXP_GROUPS = [
     { id: 'exp', label: 'Company expenses', hint: 'The tracker\'s totals' },
     { id: 'vendor', label: 'Vendors & consultants', hint: 'Payables and Consultants hold these; shown here so nothing is missed' },
-    { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST/TDS paid, partners, loans, deposits' }
+    { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST paid, partners, loans, deposits' }
 ];
 var MS_EXP_ACCTS = [
     { id: 'HDFC_BANK', label: 'HDFC Bank' }, { id: 'ICICI_BANK', label: 'ICICI Bank' },
@@ -51957,6 +51959,7 @@ var MS_EXP_APP_DIR = '/_engine/app_expenses';
 var MS_EXP_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 var MS_EXP_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 var MS_EXP_NO_BILL_FROM = 5000;      // the CA pack's own "bigger payments with no bill" line
+var MS_EXP_NO_BILL_SKIP = ['salaries', 'partner_salary', 'bank', 'petty_cash', 'tds'];   // heads that never have a bill in the Expenses folder
 var MS_EXP_LIST_STEP = 250;
 var MS_EXP_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;   // a line's id (the CA pack's content hash, or man_… for one added by hand)
 var MS_EXP_ORPHANS_MAX = 1000;       // heads/notes kept aside for lines that left a month (in case they come back)
@@ -51995,6 +51998,12 @@ function __msExpHeads() {
     return list;
 }
 function __msExpHead(id) { var hs = __msExpHeads(); for (var i = 0; i < hs.length; i++) if (hs[i].id === id) return hs[i]; return null; }
+// 8EW: the head "GST & TDS paid" (8EV) was split into "TDS paid" (a company expense) and "GST paid".
+// A line or rule still carrying the old id goes by its remark.
+function __msExpLegacyHead(id, remark) {
+    if (id !== 'gst_tds') return id;
+    return /^tds|employee tds|\btds (payment|paid|on|for)\b/.test(__msExpNormRemark(remark)) ? 'tds' : 'gst';
+}
 function __msExpHeadLabel(id) { var h = __msExpHead(id); return h ? h.label : 'Other'; }
 function __msExpAcctLabel(id) { for (var i = 0; i < MS_EXP_ACCTS.length; i++) if (MS_EXP_ACCTS[i].id === id) return MS_EXP_ACCTS[i].label; return String(id || ''); }
 // The head a line counts under: yours (moved), else your rule for its remark, else the CA pack's.
@@ -52047,7 +52056,7 @@ async function __msExpLoad() {
         __msExpRefreshIfOpen();
         return;
     }
-    var fys = {}, meta = null, bad = [];
+    var fys = {}, meta = null, bad = [], migrated = [];
     Object.keys(settings).forEach(function (k) {
         if (k === MS_EXP_META_KEY) {
             try { meta = JSON.parse(settings[k]); } catch (e) { bad.push(k); }
@@ -52056,7 +52065,13 @@ async function __msExpLoad() {
             try {
                 var rec = JSON.parse(settings[k]);
                 if (!rec || !Array.isArray(rec.lines) || !(fy > 2000)) throw new Error('not an expenses record');
-                fys[fy] = { v: 1, fy: fy, lines: rec.lines.filter(__msExpLineOk) };
+                var moved = false;
+                fys[fy] = { v: 1, fy: fy, lines: rec.lines.filter(__msExpLineOk).map(function (l) {
+                    if (l.h === 'gst_tds') { l.h = __msExpLegacyHead(l.h, l.r); moved = true; }
+                    if (l.o === 'gst_tds') { l.o = __msExpLegacyHead(l.o, l.r); moved = true; }
+                    return l;
+                }) };
+                if (moved) migrated.push(k);
             } catch (e) { bad.push(k); }
         }
     });
@@ -52073,11 +52088,19 @@ async function __msExpLoad() {
         __msExp.meta = {
             v: 1, caPackPath: String(meta.caPackPath || ''), months: (meta.months && typeof meta.months === 'object') ? meta.months : {},
             rules: (meta.rules && typeof meta.rules === 'object') ? meta.rules : {},
-            extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads : [],
+            extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads.filter(function (h) { return !(h && h.id === 'gst_tds'); }) : [],
             orphans: (meta.orphans && typeof meta.orphans === 'object') ? meta.orphans : {}, lastCheck: String(meta.lastCheck || '')
         };
+        var rk = Object.keys(__msExp.meta.rules), rulesMoved = false;
+        rk.forEach(function (k) { if (__msExp.meta.rules[k] === 'gst_tds') { __msExp.meta.rules[k] = __msExpLegacyHead('gst_tds', k); rulesMoved = true; } });
+        Object.keys(__msExp.meta.orphans).forEach(function (id) { var o = __msExp.meta.orphans[id]; if (o && o.o === 'gst_tds') { delete o.o; if (!o.n) delete __msExp.meta.orphans[id]; rulesMoved = true; } });
+        if (rulesMoved || (Array.isArray(meta.extraHeads) && meta.extraHeads.length !== __msExp.meta.extraHeads.length)) migrated.push(MS_EXP_META_KEY);
     }
     __msExp.state = 'ready';
+    if (migrated.length) {      // 8EW: the old "GST & TDS paid" head, split and saved back
+        __msExpLog('INFO', 'the GST & TDS head was split into TDS paid and GST paid', { records: migrated });
+        migrated.forEach(function (k) { __msExpMarkDirty(k); });
+    }
     __msExpLog('INFO', 'loaded', { lines: __msExpAllLines().length, months: Object.keys(__msExp.meta.months).length, years: Object.keys(fys).length });
     __msExpRefreshIfOpen();
     // The first look in the CA pack, a moment after the first load (whichever path loaded: start-up or the page opening first).
@@ -52181,7 +52204,8 @@ function __msExpFromFile(ym, source, l) {
     if (!l || typeof l !== 'object') return null;
     var d = String(l.date || ''), m = Number(l.amount);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !(m > 0) || !isFinite(m) || (l.dc !== 'D' && l.dc !== 'C') || !MS_EXP_ID_RE.test(String(l.id || ''))) return null;
-    var head = __msExpHead(String(l.head || '')) ? String(l.head) : 'other';
+    var hid = __msExpLegacyHead(String(l.head || ''), l.remark);
+    var head = __msExpHead(hid) ? hid : 'other';
     var out = { i: String(l.id), f: ym, s: source === 'history' ? 'history' : 'pack', d: d, a: String(l.acct || '').slice(0, 20),
                 dc: l.dc, m: Math.round(m * 100) / 100, t: String(l.text || '').slice(0, 160), r: String(l.remark || '').slice(0, 160),
                 rs: String(l.rsrc || '').slice(0, 10), h: head, hw: String(l.how || '').slice(0, 12) };
@@ -52264,7 +52288,7 @@ async function __msExpCheck(opts) {
         }
         if (Array.isArray(idx.heads)) {
             var extra = idx.heads.filter(function (h) {
-                return h && typeof h.id === 'string' && /^[a-z0-9_]{1,40}$/.test(h.id) && typeof h.label === 'string' && /^(exp|vendor|other)$/.test(h.group)
+                return h && typeof h.id === 'string' && /^[a-z0-9_]{1,40}$/.test(h.id) && h.id !== 'gst_tds' && typeof h.label === 'string' && /^(exp|vendor|other)$/.test(h.group)
                     && !MS_EXP_HEADS.some(function (x) { return x.id === h.id; });
             }).map(function (h) { return { id: h.id, label: h.label.slice(0, 60), group: h.group }; });
             if (JSON.stringify(extra) !== JSON.stringify(__msExp.meta.extraHeads || [])) { __msExp.meta.extraHeads = extra; __msExpMarkDirty(MS_EXP_META_KEY); }
@@ -52773,7 +52797,7 @@ function __msExpCardsHtml(fy, lines, T) {
     var gst = 0, bills = 0;
     exp.forEach(function (ln) { if (ln.b && ln.b.length) { gst += __msExpGst(ln); bills += ln.b.length; } });
     var fromPack = exp.filter(function (ln) { return ln.s === 'pack'; });
-    var noBill = fromPack.filter(function (ln) { return ln.dc === 'D' && ln.m >= MS_EXP_NO_BILL_FROM && !(ln.b && ln.b.length) && __msExpEffHead(ln) !== 'salaries' && __msExpEffHead(ln) !== 'partner_salary' && __msExpEffHead(ln) !== 'bank' && __msExpEffHead(ln) !== 'petty_cash'; });
+    var noBill = fromPack.filter(function (ln) { return ln.dc === 'D' && ln.m >= MS_EXP_NO_BILL_FROM && !(ln.b && ln.b.length) && MS_EXP_NO_BILL_SKIP.indexOf(__msExpEffHead(ln)) === -1; });
     var noBillAmt = 0;
     noBill.forEach(function (ln) { noBillAmt += ln.m; });
     var card = function (icon, label, val, sub, color, id) {
@@ -53155,7 +53179,7 @@ window.__msExpRestore = async function (p) {
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
-// =================== /Phase 8EV — Expenses ===================
+// =================== /Phase 8EV — Expenses (8EW: TDS paid is a company expense) ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
