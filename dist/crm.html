@@ -48749,12 +48749,13 @@ var __msExp = {
     loadError: '',
     booted: false,                   // the first look in the CA pack has been scheduled
     fys: {},                         // start year -> { v, fy, lines: [...] }
-    meta: { v: 1, caPackPath: '', months: {}, rules: {}, extraHeads: [], orphans: {}, lastCheck: '' },
+    meta: { v: 1, caPackPath: '', months: {}, rules: {}, extraHeads: [], orphans: {}, lastCheck: '', bills: {} },   // 8FB: bills — your placements
+    bills: { idx: null, at: 0, error: '' }, billsRev: 0, linesRev: 0, picker: null,   // 8FB: the engine's list of bills (not saved); counters for your placements and the lines; the open picker
     dirty: {},                       // setting key -> true
     saving: false, saveError: '', saveTimer: null, retryTimer: null,
     check: { running: false, status: '', detail: '', at: 0, path: '' },
     missing: {}, probing: false, probeAgain: false,   // 8EZ: bill key (line id:index) -> the path looked at, for bills not on the Mac; not saved
-    ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false },
+    ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false, billsOpen: false, billsTab: 'check', billsLimit: 40 },
     chart: null, editing: null
 };
 
@@ -48800,7 +48801,7 @@ function __msExpGroupOf(ln) { var h = __msExpHead(__msExpEffHead(ln)); return h 
 function __msExpSigned(ln) { return ln.dc === 'C' ? -ln.m : ln.m; }
 function __msExpGst(ln) {
     var g = 0;
-    (ln.b || []).forEach(function (b) { g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });
+    __msExpBills(ln).forEach(function (b) { g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });   // 8FB
     return Math.round(g * 100) / 100;
 }
 // 8EX: "Interest — EMI 42 of 84 (₹41,175)" for a part of a split loan EMI; '' otherwise.
@@ -48879,8 +48880,10 @@ async function __msExpLoad() {
             v: 1, caPackPath: String(meta.caPackPath || ''), months: (meta.months && typeof meta.months === 'object') ? meta.months : {},
             rules: (meta.rules && typeof meta.rules === 'object') ? meta.rules : {},
             extraHeads: Array.isArray(meta.extraHeads) ? meta.extraHeads.filter(function (h) { return !(h && (MS_EXP_LEGACY_HEADS.indexOf(h.id) !== -1 || MS_EXP_HEADS.some(function (x) { return x.id === h.id; }))); }) : [],
-            orphans: (meta.orphans && typeof meta.orphans === 'object') ? meta.orphans : {}, lastCheck: String(meta.lastCheck || '')
+            orphans: (meta.orphans && typeof meta.orphans === 'object') ? meta.orphans : {}, lastCheck: String(meta.lastCheck || ''),
+            bills: __msExpBillsMetaOk(meta.bills)                                                   // 8FB
         };
+        __msExp.billsRev = (__msExp.billsRev || 0) + 1;                                             // 8FB: your placements were replaced
         var rk = Object.keys(__msExp.meta.rules), rulesMoved = false;
         rk.forEach(function (k) { var v = __msExp.meta.rules[k]; if (MS_EXP_LEGACY_HEADS.indexOf(v) !== -1) { __msExp.meta.rules[k] = __msExpLegacyHead(v, k); rulesMoved = true; } });
         Object.keys(__msExp.meta.orphans).forEach(function (id) { var o = __msExp.meta.orphans[id]; if (o && MS_EXP_LEGACY_HEADS.indexOf(o.o) !== -1) { delete o.o; if (!o.n) delete __msExp.meta.orphans[id]; rulesMoved = true; } });
@@ -48891,6 +48894,7 @@ async function __msExpLoad() {
         __msExpLog('INFO', 'heads of an earlier build moved to their new heads (GST & TDS; Rent & office; Repairs)', { records: migrated });
         migrated.forEach(function (k) { __msExpMarkDirty(k); });
     }
+    __msExp.linesRev = (__msExp.linesRev || 0) + 1;                                                 // 8FB
     __msExpLog('INFO', 'loaded', { lines: __msExpAllLines().length, months: Object.keys(__msExp.meta.months).length, years: Object.keys(fys).length });
     __msExpRefreshIfOpen();
     // The first look in the CA pack, a moment after the first load (whichever path loaded: start-up or the page opening first).
@@ -49036,6 +49040,7 @@ function __msExpFromFile(ym, source, l) {
                       date: String(b.date || '').slice(0, 10), taxable: Number(b.taxable) || 0, cgst: Number(b.cgst) || 0, sgst: Number(b.sgst) || 0,
                       igst: Number(b.igst) || 0, total: Number(b.total) || 0 };
             if (b.guessed) o.guessed = true;
+            if (MS_EXP_BILLS_CONF.indexOf(b.conf) !== -1) { o.c = b.conf; o.w = String(b.how || '').slice(0, 40); }   // 8FB: placed by app_bills.py
             return o;
         });
     }
@@ -49087,6 +49092,7 @@ function __msExpMergeMonth(ym, lines) {
     for (var i = 0; i < ids.length - MS_EXP_ORPHANS_MAX; i++) delete orph[ids[i]];
     if (orphChanged) __msExpMarkDirty(MS_EXP_META_KEY);
     Object.keys(touched).forEach(function (fy) { __msExpMarkDirty(__msExpKeyOfFy(parseInt(fy, 10))); });
+    __msExp.linesRev = (__msExp.linesRev || 0) + 1;                                                 // 8FB: the lines changed
 }
 
 // Look in the CA pack for months that are new or changed, and take them in.
@@ -49171,6 +49177,7 @@ async function __msExpCheck(opts) {
             __msExpLog('INFO', 'months taken in from the CA pack', { added: result.added.map(function (x) { return x.ym; }), updated: result.updated.map(function (x) { return x.ym; }),
                 waiting: result.waiting, bad: result.bad, saved: !pending || savedLines });
         }
+        try { await __msExpReadBillsIndex(root); } catch (e) {}   // 8FB: the engine's list of bills (not placed, to check)
         __msExpToastResult(result, !!opts.manual, !pending || savedLines);
         __msExpProbeBills();                               // 8EZ: in the background — are the bills on the Mac?
         return result;
@@ -49370,7 +49377,7 @@ function __msExpBillAdvice(ln) {
 }
 async function __msExpOpenBill(id, k) {
     var f = __msExpFind(id);
-    var b = f && f.ln.b && f.ln.b[k];
+    var b = f && __msExpBills(f.ln)[k];                      // 8FB: the bills as shown (yours included)
     if (!b) return;
     var cands = __msExpBillCandidates(b, __msExp.check.path || await __msExpCaPackPath());
     if (!cands.length) { if (typeof showProspectToast === 'function') showProspectToast('No file is recorded for this bill.', 3500); return; }
@@ -49407,11 +49414,11 @@ async function __msExpProbeBills() {
     __msExp.probing = true;
     try {
         var root = __msExp.check.path || await __msExpCaPackPath();
-        var lines = __msExpAllLines().filter(function (ln) { return ln.b && ln.b.length; });
+        var lines = __msExpAllLines().filter(function (ln) { return __msExpBills(ln).length; });   // 8FB: as shown
         lines.sort(function (a, b) { return a.d < b.d ? 1 : (a.d > b.d ? -1 : 0); });   // newest first
         var missing = {}, visited = {}, ids = {}, n = 0;
         for (var i = 0; i < lines.length && n < MS_EXP_PROBE_MAX; i++) {
-            var ln = lines[i], bs = ln.b || [];
+            var ln = lines[i], bs = __msExpBills(ln);
             ids[ln.i] = true;
             for (var k = 0; k < bs.length && n < MS_EXP_PROBE_MAX; k++) {
                 var cands = __msExpBillCandidates(bs[k], root);
@@ -49533,6 +49540,7 @@ function saveExpenseForm() {
     else delete ln.b;
     var fy = __msExpFyOf(d);
     __msExpStore(fy).lines.push(ln);
+    __msExp.linesRev = (__msExp.linesRev || 0) + 1;                                                 // 8FB
     __msExpMarkDirty(__msExpKeyOfFy(fy));
     __msExpLog('INFO', __msExp.editing ? 'an expense added by hand was changed' : 'an expense was added by hand', { date: d, amount: ln.m, head: head });
     closeExpenseForm();
@@ -49548,6 +49556,7 @@ async function deleteExpense(id) {
     var g = __msExpFind(id);
     if (!g) return;
     __msExp.fys[g.fy].lines.splice(g.idx, 1);
+    __msExp.linesRev = (__msExp.linesRev || 0) + 1;                                                 // 8FB
     __msExpMarkDirty(__msExpKeyOfFy(g.fy));
     __msExpLog('INFO', 'an expense added by hand was deleted', { date: g.ln.d, amount: g.ln.m });
     closeExpenseForm();
@@ -49611,7 +49620,7 @@ function __msExpLines(fy) {
         if (ui.acct !== 'ALL' && ln.a !== ui.acct) return false;
         if (!q) return true;
         if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
-        var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), (ln.b || []).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : '', __msExpPartText(ln)].join(' ').toLowerCase();
+        var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), __msExpBills(ln).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : '', __msExpPartText(ln)].join(' ').toLowerCase();
         return hay.indexOf(q) !== -1;
     });
 }
@@ -49669,6 +49678,7 @@ function renderExpensesPage() {
         + '<div style="font-size:13px; font-weight:600; margin-bottom:2px;">' + __msExpEsc(MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label) + ' by month, ' + __msExpFyLabel(fy) + '</div>'
         + '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Click a month to see its entries. The table above has every figure.</div>'
         + '<div id="msExpChartBox" style="position:relative; height:210px;"><canvas id="msExpChart" aria-label="Monthly totals" role="img"></canvas></div></div>';
+    html += __msExpBillsHtml(fy);                          // 8FB: to check / not placed / placed by you
     html += __msExpListHtml(fy, lines);
     html += __msExpRulesHtml();
     root.innerHTML = html;
@@ -49686,6 +49696,8 @@ function __msExpStatusHtml() {
     } else parts.push('Nothing from the CA pack yet');
     var nMiss = Object.keys(S.missing || {}).length;   // 8EZ
     if (nMiss) parts.push('<span id="msExpMissing" style="color:var(--warning);" title="Grey paperclips: the bill is not on the Mac where it was recorded. Put it back; for a bill the CA pack read, rebuild that month\'s pack, and for an expense you added, edit it and Browse to the bill.">' + nMiss + ' bill' + (nMiss === 1 ? '' : 's') + ' not on the Mac</span>');
+    var toCheck = __msExpBillsStatusHtml(S.ui.fy === null ? __msExpCurrentFy() : S.ui.fy);   // 8FB
+    if (toCheck) parts.push(toCheck);
     if (C.running) parts.push('<i class="fas fa-spinner fa-spin"></i> checking…');
     else if (S.meta.lastCheck) parts.push('checked ' + __msExpEsc(__msExpAgo(S.meta.lastCheck)));
     var note = '';
@@ -49865,10 +49877,12 @@ function __msExpListHtml(fy, lines) {
         if (ln.x) remark += '<div style="font-size:11px; color:var(--text-dim);" title="The app\'s CA export has this payment">In the app: ' + __msExpEsc(ln.x.party) + (ln.x.invoice ? ' · ' + __msExpEsc(ln.x.invoice) : '') + (ln.x.tds ? ' · TDS ' + __msExpRupees(ln.x.tds) : '') + '</div>';
         var gst = __msExpGst(ln);
         var guessed = ' (matched to this payment by amount and date, not read off the bill)';
-        var gstTitle = (ln.b || []).map(function (b) { return (b.vendor || 'Bill') + (b.no ? ' ' + b.no : '') + ': CGST ' + b.cgst + ', SGST ' + b.sgst + ', IGST ' + b.igst + (b.guessed ? guessed : ''); }).join('\n');
-        var bills = (ln.b || []).map(function (b, k) {
+        var lnBills = __msExpBills(ln);                        // 8FB: the engine's bills unless you moved them, plus yours
+        var gstTitle = lnBills.map(function (b) { return (b.vendor || 'Bill') + (b.no ? ' ' + b.no : '') + ': CGST ' + b.cgst + ', SGST ' + b.sgst + ', IGST ' + b.igst + (b.guessed && !b.c ? guessed : ''); }).join('\n');
+        var bills = lnBills.map(function (b, k) {
             var miss = __msExp.missing[__msExpBillKey(ln.i, k)];   // 8EZ: not on the Mac where the CA pack recorded it
-            return '<a href="#" onclick="__msExpOpenBill(\'' + __msExpEsc(ln.i) + '\', ' + k + '); return false;" title="' + __msExpEsc((miss ? 'Not on the Mac at ' + miss + ' \u2014 moved or renamed? ' + __msExpBillAdvice(ln) + '\n' : '') + (b.vendor || 'Bill') + (b.no ? ' · ' + b.no : '') + ' · ' + (b.file || b.path || '') + (b.guessed ? guessed : '')) + '" style="color:' + (miss ? 'var(--text-dim)' : 'var(--accent-cyan)') + ';"' + (miss ? ' data-missing="1"' : '') + '><i class="fas fa-paperclip"></i>' + (miss ? '<i class="fas fa-exclamation" style="font-size:8px; color:var(--warning); margin-left:1px;"></i>' : '') + (b.guessed ? '<span style="font-size:9px; color:var(--text-dim);">?</span>' : '') + '</a>';
+            var conf = __msExpBillConfText(b);                   // 8FB: who placed it, how sure
+            return '<a href="#" onclick="__msExpOpenBill(\'' + __msExpEsc(ln.i) + '\', ' + k + '); return false;" title="' + __msExpEsc((miss ? 'Not on the Mac at ' + miss + ' \u2014 moved or renamed? ' + __msExpBillAdvice(ln) + '\n' : '') + (b.vendor || 'Bill') + (b.no ? ' · ' + b.no : '') + ' · ' + (b.file || b.path || '') + (conf ? '\n' + conf : '')) + '" style="color:' + (miss ? 'var(--text-dim)' : (b.c === 'check' ? 'var(--warning)' : 'var(--accent-cyan)')) + ';"' + (miss ? ' data-missing="1"' : '') + (b.c ? ' data-conf="' + __msExpEsc(b.c) + '"' : '') + (b.y ? ' data-yours="1"' : '') + '><i class="fas fa-paperclip"></i>' + (miss ? '<i class="fas fa-exclamation" style="font-size:8px; color:var(--warning); margin-left:1px;"></i>' : '') + __msExpBillMark(b) + '</a>';
         }).join(' ');
         html += '<tr data-id="' + __msExpEsc(ln.i) + '">'
             + '<td style="white-space:nowrap;">' + __msExpEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
@@ -49912,6 +49926,7 @@ function __msExpSetUi(k, v) {
     ui[k] = v;
     if (k === 'fy' || k === 'group') { ui.head = ''; ui.month = ''; ui.limit = MS_EXP_LIST_STEP; }
     if (k === 'acct' || k === 'q') ui.limit = MS_EXP_LIST_STEP;
+    if (k === 'billsTab' || k === 'fy' || k === 'group') ui.billsLimit = MS_EXP_BILLS_STEP;   // 8FB
     if (k === 'q') {
         // keep typing in the box: redraw, then put the caret back
         renderExpensesPage();
@@ -49931,6 +49946,7 @@ function __msExpSelect(head, ym) {
     if (ui.head === head && ui.month === ym) { ui.head = ''; ui.month = ''; }
     else { ui.head = head; ui.month = ym; }
     ui.limit = MS_EXP_LIST_STEP;
+    ui.billsLimit = MS_EXP_BILLS_STEP;                                                              // 8FB
     renderExpensesPage();
     var l = document.getElementById('msExpList');
     if (l && l.scrollIntoView && (head || ym)) { try { l.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
@@ -49971,13 +49987,13 @@ function exportExpensesExcel() {
                  'Bill file', 'In the app', 'Note', 'Came from'];
     var rows = [head2];
     lines.forEach(function (ln) {
-        var b = (ln.b && ln.b[0]) || null, eh = __msExpEffHead(ln);
-        var sum = function (k) { var s = 0; (ln.b || []).forEach(function (x) { s += Number(x[k]) || 0; }); return r2(s); };
+        var lb = __msExpBills(ln), b = lb[0] || null, eh = __msExpEffHead(ln);   // 8FB
+        var sum = function (k) { var s = 0; lb.forEach(function (x) { s += Number(x[k]) || 0; }); return r2(s); };
         rows.push([ln.d, __msExpAcctLabel(ln.a), ln.t || '', (ln.r || '') + (ln.p ? ' — ' + __msExpPartText(ln) : ''), ln.s === 'manual' ? 'you (added by hand)' : (ln.rs === 'claude' ? 'Claude' : (ln.rs === 'rule' ? 'your rule' : (ln.r ? 'you' : ''))),
             __msExpHeadLabel(eh), MS_EXP_GROUPS.filter(function (g) { return g.id === __msExpGroupOf(ln); })[0].label, r2(__msExpSigned(ln)),
-            b ? b.vendor : '', b ? b.gstin : '', (ln.b || []).map(function (x) { return x.no; }).filter(Boolean).join(', '),
+            b ? b.vendor : '', b ? b.gstin : '', lb.map(function (x) { return x.no; }).filter(Boolean).join(', '),
             b ? sum('taxable') : '', b ? sum('cgst') : '', b ? sum('sgst') : '', b ? sum('igst') : '', b ? sum('total') : '',
-            (ln.b || []).map(function (x) { return x.file || x.path || ''; }).filter(Boolean).join(', '),
+            lb.map(function (x) { return x.file || x.path || ''; }).filter(Boolean).join(', ') + (lb.some(function (x) { return x.y; }) ? ' (placed by you)' : (lb.some(function (x) { return x.c === 'check'; }) ? ' (to check)' : '')),
             ln.x ? ln.x.party + (ln.x.invoice ? ' ' + ln.x.invoice : '') : '', ln.n || '',
             ln.s === 'manual' ? 'added by hand' : (ln.s === 'history' ? 'saved statements (' + ln.f + ')' : 'CA pack ' + ln.f)]);
     });
@@ -50641,6 +50657,467 @@ function exportBankStatementsExcel() {
     } catch (e) {}
 })();
 // =================== /Phase 8FA — Bank Statements ===================
+
+// =================== Phase 8FB — Expense bills on their statement lines (9 Oct 2026) ===================
+// The CA pack engine (app_bills.py) places every bill in Files/Expenses on the statement line it
+// was paid with. Each placed bill reaches its Expenses line with a confidence — sure, likely or
+// check — and how it was matched (amount, invoice number, name, date). What you decide — keep,
+// not this one, place on another line, unpin — lives in the app's own record
+// (meta.bills: bill path -> { l: line id, or '' with n: the line it is not; b: the bill's record })
+// and always wins over the engine. Nothing here writes into the CA pack. Mac app only (the bills
+// are on the Mac); the page reads as before without it.
+var MS_EXP_BILLS_DIR = '/_engine/app_bills';
+var MS_EXP_BILLS_MAX = 3000;          // your placements kept (one per bill)
+var MS_EXP_BILLS_STEP = 40;           // rows shown per section of the Bills panel before "Show more"
+var MS_EXP_BILLS_CONF = ['sure', 'likely', 'check'];
+
+// ---- the records ---------------------------------------------------------------------
+function __msExpBillPath(b) { return String((b && (b.file || b.path)) || ''); }
+function __msExpBillPathOk(p) { p = String(p || ''); return !!(p && p.length <= 500 && p.charAt(0) !== '/' && !/(^|\/)\.\.(\/|$)/.test(p)); }
+function __msExpBillName(p) { p = String(p || ''); return p.slice(p.lastIndexOf('/') + 1); }
+// "Expenses/FY 2024-25/2024-07 July/x.pdf" -> 2024 (the FY the bill is filed under), else the FY of a date, else null
+function __msExpBillFy(path, date) {
+    var m = /(^|\/)FY (\d{4})-\d{2}\//.exec(String(path || ''));
+    if (m) return parseInt(m[2], 10);
+    return /^\d{4}-\d{2}/.test(String(date || '')) ? __msExpFyOf(date) : null;
+}
+// "Expenses/FY 2024-25/2024-07 July/x.pdf" -> "2024-07" (the folder month), else the month of a date, else ''
+function __msExpBillMonth(path, date) {
+    var m = /(^|\/)(\d{4}-\d{2}) [A-Za-z]+\//.exec(String(path || ''));
+    if (m) return m[2];
+    return /^\d{4}-\d{2}/.test(String(date || '')) ? String(date).slice(0, 7) : '';
+}
+// A bill record in the app's shape (as __msExpFromFile makes them), or null.
+function __msExpBillRecOk(b, path) {
+    if (!b || typeof b !== 'object') return null;
+    var f = path || String(b.file || '');
+    if (!__msExpBillPathOk(f)) return null;
+    var n = function (v) { v = Number(v); return isFinite(v) ? Math.round(v * 100) / 100 : 0; };
+    return { file: f, vendor: String(b.vendor || '').slice(0, 80), gstin: String(b.gstin || '').slice(0, 20), no: String(b.no || '').slice(0, 60),
+             date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || '')) ? String(b.date) : '', taxable: n(b.taxable), cgst: n(b.cgst), sgst: n(b.sgst), igst: n(b.igst), total: n(b.total) };
+}
+// Your placements, as stored: path -> { l, b, at }; anything odd is left out.
+function __msExpBillsMetaOk(x) {
+    var out = {};
+    if (!x || typeof x !== 'object') return out;
+    var keys = Object.keys(x), n = 0;
+    for (var i = 0; i < keys.length && n < MS_EXP_BILLS_MAX; i++) {
+        var p = keys[i], v = x[p];
+        if (!__msExpBillPathOk(p) || !v || typeof v !== 'object') continue;
+        var l = String(v.l || ''), nl = String(v.n || '');
+        if ((l && !MS_EXP_ID_RE.test(l)) || (nl && !MS_EXP_ID_RE.test(nl))) continue;
+        var b = __msExpBillRecOk(v.b || {}, p);
+        if (!b) continue;
+        out[p] = { l: l, b: b, at: String(v.at || '').slice(0, 30) };
+        if (!l && nl) out[p].n = nl;
+        n++;
+    }
+    return out;
+}
+function __msExpOwn() {
+    if (!__msExp.meta.bills || typeof __msExp.meta.bills !== 'object') __msExp.meta.bills = {};
+    return __msExp.meta.bills;
+}
+// line id -> [paths you put on it], and the placements whose line is not on the page any more
+// (a month re-read gave the line a new id, a statement was taken out): those count as the
+// engine's again until you unpin them. Built once per change of your placements or of the lines
+// (__msExp.billsRev, __msExp.linesRev).
+var __msExpOwnIdx = { rev: '', byLine: {}, gone: {} };
+function __msExpOwnIndex() {
+    var rev = (__msExp.billsRev || 0) + ':' + (__msExp.linesRev || 0);
+    if (__msExpOwnIdx.rev === rev) return __msExpOwnIdx;
+    var own = __msExpOwn(), by = {}, want = {}, gone = {};
+    Object.keys(own).forEach(function (p) { var l = own[p].l; if (l) { (by[l] = by[l] || []).push(p); want[l] = true; } });
+    if (Object.keys(want).length) {
+        var all = __msExpAllLines();
+        for (var i = 0; i < all.length; i++) if (want[all[i].i]) delete want[all[i].i];
+        Object.keys(want).forEach(function (l) { (by[l] || []).forEach(function (p) { gone[p] = true; }); delete by[l]; });
+    }
+    __msExpOwnIdx = { rev: rev, byLine: by, gone: gone };
+    return __msExpOwnIdx;
+}
+// The bills that count on a line: the engine's (or the pack's) unless you moved or rejected
+// them, plus the ones you placed here. Yours carry y: 1 (and no conf). A placement whose line
+// is gone does not hide the engine's record; one you rejected hides it on that line only.
+function __msExpBills(ln) {
+    if (!ln) return [];
+    var own = __msExpOwn(), ix = __msExpOwnIndex(), out = [], seen = {};
+    (ln.b || []).forEach(function (b) {
+        var p = __msExpBillPath(b), mine = p ? own[p] : null;
+        if (mine && mine.l && ix.gone[p]) mine = null;      // your line left the page: the engine's word again
+        if (mine && !mine.l && mine.n && mine.n !== ln.i) mine = null;   // "not this one" was about another line
+        if (mine && mine.l !== ln.i) return;                // you put it on another line, or said it is not this one
+        if (mine) { var c = __msExpBillRecOk(b, p) || __msExpBillRecOk(mine.b, p); if (!c) return; c.y = 1; out.push(c); }   // the engine's figures, as read now
+        else out.push(b);
+        if (p) seen[p] = true;
+    });
+    var here = ix.byLine[ln.i] || [];
+    for (var i = 0; i < here.length; i++) {
+        if (seen[here[i]]) continue;
+        var r = __msExpBillRecOk(own[here[i]].b, here[i]);
+        if (r) { r.y = 1; out.push(r); seen[here[i]] = true; }
+    }
+    return out;
+}
+// "amount+name+date" -> "the amount, the name, the date" (the engine's reasons, in words)
+function __msExpBillHow(w) {
+    var words = { amount: 'the amount', amount_gst: 'the amount with GST added', 'amount-tds': 'the amount net of TDS', 'amount in $': 'the dollar amount at that day\'s rate',
+                  number: 'the invoice number in the bank text', name: 'the name', date: 'the date' };
+    return String(w || '').replace('amount+gst', 'amount_gst').split('+').map(function (k) { return words[k] || k; }).filter(Boolean).join(', ') || 'nothing in particular';
+}
+// A path inside an onclick="…('…')": JavaScript-escaped, then HTML-escaped (K'Charcoal_18_02_2026.pdf is a real bill).
+function __msExpJsArg(s) { return __msExpEsc(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
+function __msExpBillConfText(b) {
+    if (!b) return '';
+    if (b.y) return 'Placed by you';
+    if (b.c === 'sure') return 'Placed by the CA pack engine — sure (by ' + __msExpBillHow(b.w) + ')';
+    if (b.c === 'likely') return 'Placed by the CA pack engine — likely (by ' + __msExpBillHow(b.w) + '). Keep or move it under Bills below.';
+    if (b.c === 'check') return 'Placed by the CA pack engine — TO CHECK (by ' + __msExpBillHow(b.w) + '). Keep or move it under Bills below.';
+    if (b.guessed) return 'Matched to this payment by amount and date, not read off the bill';
+    return '';
+}
+function __msExpBillMark(b) {
+    if (!b) return '';
+    if (b.y) return '<i class="fas fa-check" style="font-size:8px; color:var(--success); margin-left:1px;"></i>';
+    if (b.c === 'check') return '<span style="font-size:9px; color:var(--warning); font-weight:700;">?</span>';
+    if (b.c === 'likely' || (b.guessed && !b.c)) return '<span style="font-size:9px; color:var(--text-dim);">?</span>';
+    return '';
+}
+
+// ---- the engine's list (app_bills/index.json): what was not placed, and why ---------------
+function __msExpBillsIndexOk(idx) {
+    if (!idx || idx.kind !== 'masterstone-bills-index') return null;
+    var near = function (xs) {
+        return (Array.isArray(xs) ? xs : []).slice(0, 3).map(function (x) {
+            return x && typeof x === 'object' ? { line: MS_EXP_ID_RE.test(String(x.line || '')) ? String(x.line) : '', d: String(x.d || '').slice(0, 10), m: Number(x.m) || 0, t: String(x.t || '').slice(0, 80) } : null;
+        }).filter(Boolean);
+    };
+    var out = { bills: Number(idx.bills) || 0, placed: Number(idx.placed) || 0, byPack: Number(idx.by_pack) || 0, made: String(idx.made || '').slice(0, 30), byFy: {}, unplaced: [], check: {} };
+    Object.keys(idx.by_fy && typeof idx.by_fy === 'object' ? idx.by_fy : {}).forEach(function (fy) {
+        var m = /^FY (\d{4})-\d{2}$/.exec(fy), c = idx.by_fy[fy];
+        if (m && c && typeof c === 'object') out.byFy[parseInt(m[1], 10)] = { sure: Number(c.sure) || 0, likely: Number(c.likely) || 0, check: Number(c.check) || 0, unplaced: Number(c.unplaced) || 0, pack: Number(c.pack) || 0 };
+    });
+    (Array.isArray(idx.unplaced) ? idx.unplaced : []).slice(0, 4000).forEach(function (u) {
+        if (!u || typeof u !== 'object' || !__msExpBillPathOk(u.file)) return;
+        out.unplaced.push({ file: String(u.file), fy: __msExpBillFy(u.file, u.date), ym: /^\d{4}-\d{2}$/.test(String(u.ym || '')) ? String(u.ym) : __msExpBillMonth(u.file, u.date),
+                            vendor: String(u.vendor || '').slice(0, 80), total: Number(u.total) || 0, date: String(u.date || '').slice(0, 10), why: String(u.why || '').slice(0, 200), near: near(u.near) });
+    });
+    (Array.isArray(idx.check) ? idx.check : []).slice(0, 4000).forEach(function (c) {
+        if (!c || typeof c !== 'object' || !__msExpBillPathOk(c.file)) return;
+        out.check[String(c.file)] = { line: MS_EXP_ID_RE.test(String(c.line || '')) ? String(c.line) : '', near: near(c.near) };
+    });
+    return out;
+}
+// Read the engine's list; nothing is saved. Called after each look in the CA pack.
+async function __msExpReadBillsIndex(root) {
+    var B = __msExp.bills;
+    try {
+        var r = await __msExpReadJson(root + MS_EXP_BILLS_DIR + '/index.json');
+        if (!r.ok) { B.idx = null; B.error = r.missing ? '' : ('The engine\'s list of bills ' + r.error + '.'); B.at = Date.now(); return; }
+        var idx = __msExpBillsIndexOk(r.data);
+        if (!idx) { B.idx = null; B.error = 'The engine\'s list of bills is not in the expected shape.'; B.at = Date.now(); return; }
+        B.idx = idx; B.error = ''; B.at = Date.now();
+    } catch (e) {
+        B.idx = null; B.error = String((e && e.message) || e); B.at = Date.now();
+        __msExpLog('WARN', 'the engine\'s list of bills could not be read', { error: B.error });
+    }
+}
+// The engine's record of a bill, wherever it is: on a line, in your record, in the engine's list.
+function __msExpBillRecFor(path) {
+    var own = __msExpOwn();
+    if (own[path]) return __msExpBillRecOk(own[path].b, path);
+    var lines = __msExpAllLines();
+    for (var i = 0; i < lines.length; i++) {
+        var bs = lines[i].b || [];
+        for (var k = 0; k < bs.length; k++) if (__msExpBillPath(bs[k]) === path) return __msExpBillRecOk(bs[k], path);
+    }
+    var idx = __msExp.bills.idx;
+    if (idx) for (var u = 0; u < idx.unplaced.length; u++) if (idx.unplaced[u].file === path) {
+        var x = idx.unplaced[u];
+        return __msExpBillRecOk({ file: path, vendor: x.vendor, date: x.date, total: x.total }, path);
+    }
+    return __msExpBillRecOk({ file: path }, path);
+}
+
+// ---- what you decide ------------------------------------------------------------------
+function __msExpBillDecide(path, lineId, what) {
+    if (!__msExpCanEdit()) return false;
+    if (!__msExpBillPathOk(path)) return false;
+    var own = __msExpOwn(), rec = __msExpBillRecFor(path);
+    if (!rec) return false;
+    if (what === 'unpin') {
+        if (!own[path]) return false;
+        delete own[path];
+    } else {
+        if (lineId && !__msExpFind(lineId)) { if (typeof showProspectToast === 'function') showProspectToast('That entry is not on the page any more.', 3500); return false; }
+        if (Object.keys(own).length >= MS_EXP_BILLS_MAX && !own[path]) { if (typeof showProspectToast === 'function') showProspectToast('Too many placements are kept; unpin some first.', 4000); return false; }
+        own[path] = { l: what === 'reject' ? '' : (lineId || ''), b: rec, at: new Date().toISOString() };
+        if (what === 'reject' && lineId) own[path].n = lineId;   // not THAT line; the engine may still put it elsewhere later
+    }
+    __msExp.billsRev = (__msExp.billsRev || 0) + 1;
+    __msExpMarkDirty(MS_EXP_META_KEY);
+    __msExpLog('INFO', 'a bill\'s place was ' + (what === 'unpin' ? 'unpinned' : (lineId ? 'set' : 'rejected')), { bill: path, line: lineId || '' });
+    return true;
+}
+function __msExpKeepBill(path, lineId) {
+    if (__msExpBillDecide(path, lineId, 'keep')) { __msExpRefreshKeepingSearch(); if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Kept: <strong>' + __msExpEsc(__msExpBillName(path)) + '</strong> stays on that payment.', 3000); }
+}
+function __msExpRejectBill(path, lineId) {
+    if (__msExpBillDecide(path, lineId || '', 'reject')) { __msExpRefreshKeepingSearch(); if (typeof showProspectToast === 'function') showProspectToast('<strong>' + __msExpEsc(__msExpBillName(path)) + '</strong> is off that payment — it is under “Not placed” now; use Place on… when you find its payment.', 5000); }
+}
+function __msExpUnpinBill(path) {
+    if (__msExpBillDecide(path, '', 'unpin')) { __msExpRefreshKeepingSearch(); if (typeof showProspectToast === 'function') showProspectToast('Unpinned: <strong>' + __msExpEsc(__msExpBillName(path)) + '</strong> is back to what the engine said.', 3500); }
+}
+function __msExpPlaceBill(path, lineId) {
+    if (__msExpBillDecide(path, lineId, 'place')) {
+        __msExpClosePicker();
+        __msExpRefreshKeepingSearch();
+        var f = __msExpFind(lineId);
+        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> <strong>' + __msExpEsc(__msExpBillName(path)) + '</strong> placed on ' + __msExpEsc(f ? (typeof formatDateReadable === 'function' ? formatDateReadable(f.ln.d) : f.ln.d) + ' · ' + __msExpRupees(f.ln.m) : 'the entry') + '.', 3500);
+    }
+}
+
+// ---- opening a bill by its path under Files ---------------------------------------------
+async function __msExpOpenBillFile(path) {
+    if (!__msExpBillPathOk(path)) return;
+    var root = __msExp.check.path || await __msExpCaPackPath();
+    var cands = __msExpBillCandidates({ file: path }, root);
+    if (!cands.length) { if (typeof showProspectToast === 'function') showProspectToast('The app could not work out where the Files folder is.', 3500); return; }
+    var t = __msExpTauri(), hit = cands[0];
+    if (t) {
+        hit = '';
+        for (var i = 0; i < cands.length && !hit; i++) {
+            var ex = null;
+            try { ex = await t.invoke('check_file_exists', { path: cands[i] }); } catch (e) {}
+            if (!ex || !ex.ok || ex.exists) hit = cands[i];
+        }
+        if (!hit) { if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The bill isn\'t on the Mac at ' + __msExpEsc(cands[0]) + '. Moved or renamed?', 6000); return; }
+    }
+    if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(hit);
+}
+
+// ---- the Bills panel on the Expenses page --------------------------------------------------
+// The rows for the year shown (and the month, when one is picked): to check (bills the engine
+// placed with doubt, by the line's year), not placed (the engine's list, by the bill's folder
+// year, plus the ones you took off a line), placed by you.
+var __msExpBillsRowsMemo = { key: '', rows: null };
+function __msExpBillsRows(fy) {
+    var own = __msExpOwn(), ui = __msExp.ui, month = ui.month || '', ix = __msExpOwnIndex();
+    var key = fy + '|' + month + '|' + ix.rev + '|' + ((__msExp.bills.idx && __msExp.bills.idx.made) || '') + '|' + (__msExp.bills.at || 0);
+    if (__msExpBillsRowsMemo.key === key && __msExpBillsRowsMemo.rows) return __msExpBillsRowsMemo.rows;   // the status line and the panel share one pass
+    var check = [], engine = [], yours = [], unplaced = [], shownOn = {}, byId = {};
+    __msExpAllLines().forEach(function (ln) {
+        byId[ln.i] = ln;
+        if (ln.s === 'manual' || !(ln.b && ln.b.length)) return;
+        var shown = __msExpBills(ln);
+        shown.forEach(function (x) { if (x.file && !x.y) shownOn[x.file] = ln.i; });   // where the engine's record shows (after your changes)
+        if (__msExpFyOf(ln.d) !== fy || (month && ln.d.slice(0, 7) !== month)) return;
+        shown.forEach(function (x) {
+            if (!x.file || x.y || !x.c) return;
+            (x.c === 'check' ? check : engine).push({ path: x.file, rec: x, ln: ln });
+        });
+    });
+    Object.keys(own).forEach(function (p) {
+        var v = own[p];
+        if (!v.l) return;
+        var ln = byId[v.l];
+        if (ix.gone[p]) { if (!month) yours.push({ path: p, rec: v.b, ln: null, at: v.at, gone: true }); return; }   // its line left the page: shown on every year, to unpin
+        if (!ln || __msExpFyOf(ln.d) !== fy || (month && ln.d.slice(0, 7) !== month)) return;
+        yours.push({ path: p, rec: v.b, ln: ln, at: v.at });
+    });
+    var idx = __msExp.bills.idx, listed = {};
+    if (idx) idx.unplaced.forEach(function (u) {
+        listed[u.file] = true;
+        if (own[u.file] && own[u.file].l) return;               // you placed it since
+        if (shownOn[u.file]) return;                              // the engine placed it since the list was written
+        if (u.fy !== fy || (month && u.ym !== month)) return;
+        var rej = own[u.file] && own[u.file].l === '';
+        unplaced.push({ path: u.file, rec: __msExpBillRecOk({ file: u.file, vendor: u.vendor, date: u.date, total: u.total }, u.file), why: rej ? 'you said it is not that payment' : u.why, near: u.near, ym: u.ym, rejected: rej });
+    });
+    Object.keys(own).forEach(function (p) {                       // taken off a line by you, and not in the engine's list
+        var v = own[p];
+        if (v.l || listed[p] || shownOn[p]) return;               // (shown: the engine has it on another line now)
+        if (__msExpBillFy(p, v.b.date) !== fy || (month && __msExpBillMonth(p, v.b.date) !== month)) return;
+        var was = v.n ? byId[v.n] : null;
+        unplaced.push({ path: p, rec: v.b, why: 'you said it is not that payment' + (was ? ' (' + (typeof formatDateReadable === 'function' ? formatDateReadable(was.d) : was.d) + ' · ' + __msExpRupees(was.m) + ')' : ''), near: [], ym: __msExpBillMonth(p, v.b.date), rejected: true });
+    });
+    var byName = function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; };
+    var byLine = function (a, b) { var ad = a.ln ? a.ln.d : '', bd = b.ln ? b.ln.d : ''; return ad < bd ? 1 : ad > bd ? -1 : byName(a, b); };
+    check.sort(byLine); engine.sort(byLine); yours.sort(byLine);
+    unplaced.sort(function (a, b) { return a.ym < b.ym ? 1 : a.ym > b.ym ? -1 : byName(a, b); });
+    var rows = { check: check, engine: engine, unplaced: unplaced, yours: yours };
+    __msExpBillsRowsMemo = { key: key, rows: rows };
+    return rows;
+}
+function __msExpBillLineText(ln) {
+    return __msExpEsc((typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + ' · ' + __msExpAcctLabel(ln.a) + ' · ' + __msExpRupees(ln.m))
+        + '<div style="font-size:11px; color:var(--text-dim); max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msExpEsc(ln.t + (ln.r ? ' — ' + ln.r : '')) + '">' + __msExpEsc(ln.t) + (ln.r ? ' <span style="color:var(--text-main);">— ' + __msExpEsc(ln.r) + '</span>' : '') + '</div>';
+}
+function __msExpBillCellHtml(path, rec) {
+    var bits = [];
+    if (rec && rec.vendor) bits.push(rec.vendor);
+    if (rec && rec.total) bits.push(__msExpRupees(rec.total));
+    if (rec && rec.date) bits.push(typeof formatDateReadable === 'function' ? formatDateReadable(rec.date) : rec.date);
+    return '<a href="#" onclick="__msExpOpenBillFile(\'' + __msExpJsArg(path) + '\'); return false;" style="color:var(--accent-cyan);" title="Open the bill: ' + __msExpEsc(path) + '"><i class="fas fa-paperclip"></i> ' + __msExpEsc(__msExpBillName(path)) + '</a>'
+        + (bits.length ? '<div style="font-size:11px; color:var(--text-dim);">' + __msExpEsc(bits.join(' · ')) + '</div>' : '');
+}
+function __msExpBillsHtml(fy) {
+    var S = __msExp, ui = S.ui, idx = S.bills.idx;
+    if (S.state !== 'ready') return '';
+    var R = __msExpBillsRows(fy);
+    var counts = (idx && idx.byFy[fy]) || null;
+    var any = R.check.length || R.unplaced.length || R.yours.length || counts;
+    if (!any && !S.bills.error) return '';
+    var tab = ui.billsTab || 'check';
+    if (tab === 'check' && !R.check.length) tab = R.unplaced.length ? 'unplaced' : (R.yours.length ? 'yours' : 'check');
+    var summary = [];
+    if (counts) summary.push('placed by the engine: ' + (counts.sure + counts.likely + counts.check) + ' (sure ' + counts.sure + ' · likely ' + counts.likely + ' · to check ' + counts.check + ')' + (counts.pack ? ' · by the pack ' + counts.pack : '') + ' · not placed ' + counts.unplaced + ' (the engine\'s count for the year, before your changes)');
+    if (R.yours.length) summary.push('placed by you ' + R.yours.length);
+    var html = '<div class="card" id="msExpBills" style="padding:12px 18px; margin-bottom:14px;">'
+        + '<a href="#" onclick="__msExpSetUi(\'billsOpen\', ' + (!ui.billsOpen) + '); return false;" style="font-size:13px; font-weight:600; color:var(--text-main);">'
+        + '<i class="fas fa-chevron-' + (ui.billsOpen ? 'down' : 'right') + '" style="font-size:10px; margin-right:6px;"></i>Bills, ' + __msExpEsc(__msExpFyLabel(fy)) + (ui.month ? ' — ' + __msExpEsc(__msExpMonthLabel(ui.month)) : '')
+        + (R.check.length ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; background:var(--warning); color:#000; margin-left:6px;">' + R.check.length + ' to check</span>' : '')
+        + (R.unplaced.length ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--glass-border); color:var(--text-dim); margin-left:4px;">' + R.unplaced.length + ' not placed</span>' : '')
+        + '</a>'
+        + '<span style="font-size:11.5px; color:var(--text-dim); margin-left:8px;">' + __msExpEsc(summary.join(' · ') || 'The CA pack engine pins each bill in Files/Expenses to the payment it was paid with.') + '</span>';
+    if (S.bills.error) html += '<div style="margin-top:6px; font-size:12px; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msExpEsc(S.bills.error) + '</div>';
+    if (!ui.billsOpen) return html + '</div>';
+    var tabBtn = function (id, label, n) {
+        return '<button class="btn btn-ghost btn-sm" onclick="__msExpSetUi(\'billsTab\', \'' + id + '\')" style="' + (tab === id ? 'border-color:var(--accent-cyan); color:var(--accent-cyan);' : '') + '">' + label + ' (' + n + ')</button>';
+    };
+    html += '<div style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 8px;">' + tabBtn('check', 'To check', R.check.length) + tabBtn('unplaced', 'Not placed', R.unplaced.length) + tabBtn('yours', 'Placed by you', R.yours.length) + tabBtn('engine', 'By the engine', R.engine.length) + '</div>';
+    var note = { check: 'The engine put each of these on a payment but is not sure. Open the bill, then Keep it there, say it is Not this one, or Place it on another entry.',
+                 unplaced: 'The engine found no payment for these (the reason is given). Open the bill and Place it on its entry — or leave it: a bill paid in cash or personally has no entry here.',
+                 yours: 'Payments you set yourself. Unpin one to go back to what the engine said.',
+                 engine: 'The bills the engine placed with confidence (sure or likely). If one is wrong: Not this one, or Place it on another entry.' }[tab];
+    html += '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">' + note + '</div>';
+    var rows = R[tab], limit = ui.billsLimit || MS_EXP_BILLS_STEP;
+    if (!rows.length) html += '<div style="padding:14px; text-align:center; color:var(--text-dim); font-style:italic;">Nothing here' + (ui.month ? ' for ' + __msExpEsc(__msExpMonthLabel(ui.month)) : '') + '.</div>';
+    else {
+        html += '<div class="table-scroll-wrap"><table id="msExpBillsList" style="font-size:12.5px;"><thead><tr><th>Bill</th><th>' + (tab === 'unplaced' ? 'Why not placed · nearest entries' : 'On the payment') + '</th><th></th></tr></thead><tbody>';
+        var near = {};
+        rows.slice(0, limit).forEach(function (r) { (r.near || []).forEach(function (n) { if (n.line) near[n.line] = true; }); });
+        var nearLines = {};
+        if (Object.keys(near).length) __msExpAllLines().forEach(function (ln) { if (near[ln.i]) nearLines[ln.i] = ln; });
+        rows.slice(0, limit).forEach(function (r) {
+            var p = __msExpJsArg(r.path);
+            var act = '';
+            if (tab === 'check') {
+                act = '<button class="btn btn-ghost btn-sm" onclick="__msExpKeepBill(\'' + p + '\', \'' + __msExpEsc(r.ln.i) + '\')" title="It is this payment"><i class="fas fa-check"></i> Keep</button> '
+                    + '<button class="btn btn-ghost btn-sm" onclick="__msExpRejectBill(\'' + p + '\', \'' + __msExpEsc(r.ln.i) + '\')" title="Take it off this payment">Not this one</button> '
+                    + '<button class="btn btn-ghost btn-sm" onclick="__msExpPlacePicker(\'' + p + '\')" title="Pick the payment it belongs to">Place on…</button>';
+            } else if (tab === 'engine') {
+                act = '<button class="btn btn-ghost btn-sm" onclick="__msExpRejectBill(\'' + p + '\', \'' + __msExpEsc(r.ln.i) + '\')" title="Take it off this payment">Not this one</button> '
+                    + '<button class="btn btn-ghost btn-sm" onclick="__msExpPlacePicker(\'' + p + '\')" title="Pick the payment it belongs to">Place on…</button>';
+            } else if (tab === 'unplaced') {
+                act = (r.rejected ? '<button class="btn btn-ghost btn-sm" onclick="__msExpUnpinBill(\'' + p + '\')" title="Back to what the engine said">Unpin</button> ' : '')
+                    + '<button class="btn btn-ghost btn-sm" onclick="__msExpPlacePicker(\'' + p + '\')" title="Pick the payment it belongs to">Place on…</button>';
+            } else {
+                act = '<button class="btn btn-ghost btn-sm" onclick="__msExpUnpinBill(\'' + p + '\')" title="Back to what the engine said">Unpin</button>';
+            }
+            var mid;
+            if (tab === 'unplaced') {
+                mid = '<div>' + __msExpEsc(r.why) + '</div>' + (r.near || []).map(function (n) {
+                    var nl = n.line ? nearLines[n.line] : null;
+                    return '<div style="font-size:11px; color:var(--text-dim); margin-top:2px;">' + __msExpEsc((typeof formatDateReadable === 'function' ? formatDateReadable(n.d) : n.d) + ' · ' + __msExpRupees(n.m) + ' · ' + n.t)
+                        + (nl ? ' <a href="#" onclick="__msExpPlaceBill(\'' + p + '\', \'' + __msExpEsc(nl.i) + '\'); return false;" style="color:var(--accent-cyan);">Place here</a>' : '') + '</div>';
+                }).join('');
+            } else if (r.gone) {
+                mid = '<div style="color:var(--warning);">The entry you placed it on is not on the page any more (a month was read again or a statement taken out). The engine\'s word stands until you unpin.</div>';
+            } else {
+                mid = __msExpBillLineText(r.ln) + (tab === 'check' ? '<div style="font-size:11px; color:var(--warning);">matched by ' + __msExpEsc(__msExpBillHow(r.rec.w)) + '</div>'
+                                                : (tab === 'engine' ? '<div style="font-size:11px; color:var(--text-dim);">' + __msExpEsc(r.rec.c + ', by ' + __msExpBillHow(r.rec.w)) + '</div>' : ''));
+            }
+            html += '<tr><td style="white-space:nowrap; max-width:280px; overflow:hidden; text-overflow:ellipsis;">' + __msExpBillCellHtml(r.path, r.rec) + '</td><td>' + mid + '</td><td style="white-space:nowrap; text-align:right;">' + act + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        if (rows.length > limit) html += '<div style="padding:8px; text-align:center;"><button class="btn btn-ghost btn-sm" onclick="__msExpSetUi(\'billsLimit\', ' + (limit + MS_EXP_BILLS_STEP * 2) + ')">Show more (' + (rows.length - limit) + ' more)</button></div>';
+    }
+    return html + '</div>';
+}
+
+// The status line's "N bills to check" (for the year shown), a link to the panel.
+function __msExpBillsStatusHtml(fy) {
+    if (__msExp.state !== 'ready') return '';
+    var n = __msExpBillsRows(fy).check.length;
+    if (!n) return '';
+    return '<a href="#" id="msExpBillsToCheck" onclick="__msExp.ui.billsOpen = true; __msExp.ui.billsTab = \'check\'; renderExpensesPage(); var el = document.getElementById(\'msExpBills\'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: \'smooth\', block: \'start\' }); return false;" style="color:var(--warning);" title="Bills the CA pack engine placed with doubt: keep, move or take them off under Bills">'
+        + n + ' bill' + (n === 1 ? '' : 's') + ' to check</a>';
+}
+
+// ---- the picker: which payment is this bill? ---------------------------------------------
+// The debit entries of the bill's folder month and the months either side (its date's month
+// when it sits in no month folder), newest first, with a search box.
+function __msExpPlacePicker(path) {
+    if (!__msExpCanEdit() || !__msExpBillPathOk(path)) return;
+    __msExpClosePicker();
+    var rec = __msExpBillRecFor(path) || { file: path };
+    __msExp.picker = { path: path, rec: rec, q: '', ym: __msExpBillMonth(path, rec.date), all: false };
+    var ov = document.createElement('div');
+    ov.id = 'msExpPickModal';
+    ov.className = 'modal';
+    ov.style.display = 'flex';
+    ov.innerHTML = '<div class="modal-content" style="max-width:960px; width:94vw;" role="dialog" aria-modal="true" aria-labelledby="msExpPickTitle">'
+        + '<h3 id="msExpPickTitle" style="margin:0 0 4px;"><i class="fas fa-paperclip" style="color:var(--accent-cyan); margin-right:8px;"></i>Which payment is this bill?</h3>'
+        + '<div style="font-size:12.5px; color:var(--text-dim); margin-bottom:10px;">' + __msExpBillCellHtml(path, rec) + '</div>'
+        + '<div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">'
+        + '<input type="text" id="msExpPickQ" placeholder="Search the bank text, remark or amount…" style="flex:1; min-width:200px; padding:7px 9px;" oninput="__msExpPickerSearch(this.value)">'
+        + '<label style="font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:4px;"><input type="checkbox" id="msExpPickAll" onchange="__msExpPickerAll(this.checked)"> every month</label>'
+        + '</div>'
+        + '<div id="msExpPickList" class="table-scroll-wrap" style="max-height:52vh; overflow:auto;"></div>'
+        + '<div style="display:flex; gap:10px; justify-content:flex-end; margin-top:10px;"><button type="button" class="btn btn-ghost" onclick="__msExpClosePicker()">Cancel</button></div></div>';
+    document.body.appendChild(ov);
+    document.addEventListener('keydown', __msExpPickerKey);
+    __msExpPickerDraw();
+    var q = document.getElementById('msExpPickQ');
+    if (q) q.focus();
+}
+function __msExpClosePicker() {
+    var ov = document.getElementById('msExpPickModal');
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    document.removeEventListener('keydown', __msExpPickerKey);
+    __msExp.picker = null;
+}
+function __msExpPickerKey(e) {
+    if (e.key !== 'Escape' || document.querySelector('.ms-ask-overlay')) return;
+    __msExpClosePicker();
+}
+function __msExpPickerSearch(v) { if (__msExp.picker) { __msExp.picker.q = String(v || ''); __msExpPickerDraw(); } }
+function __msExpPickerAll(on) { if (__msExp.picker) { __msExp.picker.all = !!on; __msExpPickerDraw(); } }
+function __msExpPickerMonths(ym) {
+    if (!/^\d{4}-\d{2}$/.test(ym)) return null;
+    var y = parseInt(ym.slice(0, 4), 10), m = parseInt(ym.slice(5, 7), 10), out = [];
+    for (var d = -1; d <= 1; d++) { var mm = m + d, yy = y; if (mm < 1) { mm += 12; yy--; } if (mm > 12) { mm -= 12; yy++; } out.push(yy + '-' + (mm < 10 ? '0' : '') + mm); }
+    return out;
+}
+function __msExpPickerDraw() {
+    var P = __msExp.picker, box = document.getElementById('msExpPickList');
+    if (!P || !box) return;
+    var months = P.all ? null : __msExpPickerMonths(P.ym), q = P.q.trim().toLowerCase(), qn = q.replace(/[,₹\s]/g, '');
+    var rows = __msExpAllLines().filter(function (ln) {
+        if (ln.s === 'manual' || ln.dc !== 'D') return false;
+        if (months && months.indexOf(ln.d.slice(0, 7)) === -1 && months.indexOf(ln.f || '') === -1) return false;
+        if (!q) return true;
+        if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
+        return (ln.t + ' ' + (ln.r || '') + ' ' + __msExpAcctLabel(ln.a)).toLowerCase().indexOf(q) !== -1;
+    });
+    rows.sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : (b.m - a.m); });
+    var p = __msExpJsArg(P.path);
+    if (!rows.length) { box.innerHTML = '<div style="padding:18px; text-align:center; color:var(--text-dim); font-style:italic;">No entries ' + (months ? 'in ' + __msExpEsc(months.map(__msExpShortMonth).join(', ')) + ' — tick “every month” or search' : 'match') + '.</div>'; return; }
+    var html = '<table style="font-size:12.5px; width:100%;"><thead><tr><th>Date</th><th>Paid from</th><th>Bank description</th><th>Your remark</th><th style="text-align:right;">Amount</th><th></th></tr></thead><tbody>';
+    rows.slice(0, 300).forEach(function (ln) {
+        var n = __msExpBills(ln).length;
+        html += '<tr><td style="white-space:nowrap;">' + __msExpEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
+            + '<td style="white-space:nowrap;">' + __msExpEsc(__msExpAcctLabel(ln.a)) + '</td>'
+            + '<td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msExpEsc(ln.t) + '">' + __msExpEsc(ln.t) + '</td>'
+            + '<td style="max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msExpEsc(ln.r || '') + '">' + __msExpEsc(ln.r || '') + '</td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">' + __msExpEsc(typeof __msInr === 'function' ? __msInr(ln.m) : String(ln.m)) + (n ? ' <i class="fas fa-paperclip" style="font-size:9px; color:var(--text-dim);" title="' + n + ' bill' + (n === 1 ? '' : 's') + ' already here"></i>' : '') + '</td>'
+            + '<td style="white-space:nowrap;"><button class="btn btn-primary btn-sm" onclick="__msExpPlaceBill(\'' + p + '\', \'' + __msExpEsc(ln.i) + '\')">Place here</button></td></tr>';
+    });
+    html += '</tbody></table>' + (rows.length > 300 ? '<div style="padding:8px; text-align:center; font-size:11.5px; color:var(--text-dim);">First 300 of ' + rows.length + ' — search to narrow down.</div>' : '');
+    box.innerHTML = html;
+}
+// =================== /Phase 8FB — Expense bills on their statement lines ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
