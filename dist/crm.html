@@ -7274,6 +7274,8 @@ window.__msRenderMissingOneDriveLinks = function () {
   <div class="nav-item" title="Consultants" onclick="showTab('consultantsTab')"><i class="fas fa-user-tie"></i> Consultants</div>
   <!-- 8EV — Expenses: the bank and card lines from the CA pack, under heads -->
   <div class="nav-item" title="Expenses" onclick="showTab('expensesTab')"><i class="fas fa-wallet"></i> Expenses</div>
+  <!-- 8FA — Bank Statements: every statement in Files/Bank Statements, with its lines, from the CA pack -->
+  <div class="nav-item" title="Bank Statements" onclick="showTab('bankStatementsTab')"><i class="fas fa-building-columns"></i> Bank Statements</div>
   <!-- Bug fix #27 — Cleanup: removed hidden arApTab nav fallback. Original removal in #13 Batch 3B; transitional stub no longer needed. -->
 
   <!-- Phase 8BK — Tools section: utilities that aren't tied to CRM data flow.
@@ -11342,6 +11344,11 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div id="expensesTab" class="hidden">
   <div id="msExpRoot"></div>
 </div><!-- end #expensesTab -->
+
+<!-- 8FA — Bank Statements (drawn by renderBankStatementsPage) -->
+<div id="bankStatementsTab" class="hidden">
+  <div id="msBsRoot"></div>
+</div><!-- end #bankStatementsTab -->
 
 <!-- ============================================================================
      8YZ — CONSULTANT PAYMENT FORM (full-page tab, mirrors Invoice form pattern)
@@ -20118,7 +20125,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -20311,6 +20318,16 @@ function showTab(tab) {
             if (typeof renderExpensesPage === 'function') renderExpensesPage();
             if (typeof __msExpCheck === 'function' && __msExp.state === 'ready' && !__msExp.check.running && Date.now() - (__msExp.check.at || 0) > 120000) __msExpCheck();
         } catch (e) { console.warn('Expenses tab error:', e); }
+    }
+
+    // Phase 8FA — Bank Statements: draw the page; read the list (again after two minutes),
+    // and the months not read yet.
+    if (tab === 'bankStatementsTab') {
+        try {
+            if (typeof renderBankStatementsPage === 'function') renderBankStatementsPage();
+            if (__msBs.state === 'idle' || __msBs.state === 'failed' || (__msBs.state === 'ready' && Date.now() - (__msBs.at || 0) > 120000)) __msBsLoad();
+            else if (__msBs.state === 'ready') __msBsLoadMonths();
+        } catch (e) { console.warn('Bank statements tab error:', e); }
     }
 
     // Phase 8EH — show/hide the "invoice draft in progress" pill.
@@ -49837,7 +49854,7 @@ function __msExpListHtml(fy, lines) {
         + '<div><span style="font-size:13px; font-weight:600;">Entries: ' + __msExpEsc(what) + '</span> <span style="font-size:12px; color:var(--text-dim);">' + rows.length + ' · ' + __msExpRupees(total) + '</span></div>'
         + ((ui.head || ui.month) ? '<a href="#" onclick="__msExpSelect(\'\', \'\'); return false;" style="font-size:12px; color:var(--accent-cyan);">Show all ' + __msExpEsc(MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label.toLowerCase()) + '</a>' : '')
         + '</div><div class="table-scroll-wrap"><table id="msExpList" style="font-size:12.5px;"><thead><tr>'
-        + '<th>Date</th><th>Paid from</th><th>Bank description</th><th>Your remark</th><th>Head</th><th style="text-align:right;">Amount</th><th style="text-align:right;">GST</th><th>Bill</th><th>Note</th></tr></thead><tbody>';
+        + '<th>Date</th><th>Paid from</th><th>Bank description</th><th>Your remark</th><th>Head</th><th style="text-align:right;">Amount</th><th style="text-align:right;">GST</th><th>Bill · Statement</th><th>Note</th></tr></thead><tbody>';
     if (!rows.length) html += '<tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-dim); font-style:italic;">No entries here.</td></tr>';
     rows.slice(0, ui.limit).forEach(function (ln) {
         var eh = __msExpEffHead(ln);
@@ -49864,7 +49881,7 @@ function __msExpListHtml(fy, lines) {
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;' + (ln.dc === 'C' ? ' color:var(--success);' : '') + '">'
             + (ln.dc === 'C' ? '<span style="font-size:10.5px;">refund </span>' : '') + __msExpEsc(typeof __msInr === 'function' ? __msInr(__msExpSigned(ln)) : String(__msExpSigned(ln))) + '</td>'
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;" title="' + __msExpEsc(gstTitle) + '">' + (gst ? __msExpEsc(__msInr(gst)) : '') + '</td>'
-            + '<td style="white-space:nowrap;">' + bills + '</td>'
+            + '<td style="white-space:nowrap;">' + bills + (typeof __msBsPinForExpense === 'function' ? __msBsPinForExpense(ln) : '') + '</td>'   // 8FA: and the statement it came from
             + '<td class="ms-exp-note" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpEditNote(this)" style="cursor:text; min-width:90px;" title="Click to add or change a note">'
             + (ln.n ? __msExpEsc(ln.n) : '<span style="color:var(--text-dim); font-size:11px;">+ note</span>')
             + (ln.s === 'manual' ? ' <a href="#" onclick="event.stopPropagation(); openExpenseForm(\'' + __msExpEsc(ln.i) + '\'); return false;" title="Edit this expense" style="color:var(--accent-cyan); margin-left:4px;"><i class="fas fa-pen"></i></a>' : '')
@@ -50114,6 +50131,516 @@ window.__msExpRestore = async function (p) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 // =================== /Phase 8EV — Expenses (8EW: TDS paid is a company expense; 8EX: group cards, Rent / Office, car loan split) ===================
+
+// =================== Phase 8FA — Bank Statements (9 Oct 2026) ===================
+// Every statement file in Files/Bank Statements, and every line of them, read from the CA
+// pack engine's _engine/app_statements/ (index.json and one <yyyy-mm>.json per month) when
+// the page opens. Nothing is saved to the database: what you see is what is in the folder.
+// Mac app only (the files are on the Mac).
+var MS_BS_APP_DIR = '/_engine/app_statements';
+var MS_BS_ACCTS = [
+    { id: 'HDFC_BANK', label: 'HDFC Current', kind: 'bank' }, { id: 'HDFC_OD', label: 'HDFC OD', kind: 'bank' },
+    { id: 'ICICI_BANK', label: 'ICICI', kind: 'bank' }, { id: 'YES_CURRENT', label: 'YES Current', kind: 'bank' },
+    { id: 'YES_OD', label: 'YES OD', kind: 'bank' }, { id: 'AMEX_CARD', label: 'Amex Card', kind: 'card' },
+    { id: 'HDFC_CARD', label: 'HDFC Card', kind: 'card' }, { id: 'FASTAG', label: 'FASTag', kind: 'other' }
+];
+var MS_BS_LIST_STEP = 250;
+var MS_BS_PROBE_MAX = 600;           // statement files checked on the Mac after each read (newest first)
+
+var __msBs = {
+    state: 'idle',                   // idle | loading | ready | failed | unavailable
+    error: '',
+    root: '',                        // the CA Pack folder the index was read from
+    filesRoot: '',                   // the folder above it (Files): statement paths are relative to it
+    index: null,                     // index.json as read
+    fileMap: {},                     // file id -> its entry in the index
+    months: {},                      // ym -> the month's document (lines)
+    reading: false,                  // the index is being read (again); the first read shows as state 'loading'
+    loadAgain: null,                 // a read asked for while one was running: done once this one is through
+    monthsLoading: false, monthsLoaded: 0, monthsWanted: 0,
+    missing: {},                     // file id -> path, for files not on the Mac (not saved)
+    probing: false, probeAgain: false,
+    ui: { fy: null, acct: 'ALL', dc: 'ALL', q: '', all: false, limit: MS_BS_LIST_STEP },
+    chart: null, at: 0, loadedAt: ''
+};
+
+// ---- small helpers ------------------------------------------------------------
+function __msBsTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
+function __msBsEsc(s) { return (typeof pEsc === 'function') ? pEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function __msBsLog(level, msg, data) { try { if (typeof diag === 'function') diag(level, 'Bank statements: ' + msg, data || {}); } catch (e) {} }
+function __msBsToast(html, ms) { if (typeof showProspectToast === 'function') showProspectToast(html, ms || 4000); }
+function __msBsAcct(id) { for (var i = 0; i < MS_BS_ACCTS.length; i++) if (MS_BS_ACCTS[i].id === id) return MS_BS_ACCTS[i]; return null; }
+function __msBsAcctLabel(id) { var a = __msBsAcct(id); return a ? a.label : String(id || ''); }
+function __msBsAcctOrder(id) { for (var i = 0; i < MS_BS_ACCTS.length; i++) if (MS_BS_ACCTS[i].id === id) return i; return 99; }
+function __msBsFyOf(ym) { var y = parseInt(String(ym).slice(0, 4), 10), m = parseInt(String(ym).slice(5, 7), 10); return m >= 4 ? y : y - 1; }
+function __msBsFyLabel(fy) { return 'FY ' + fy + '-' + String(fy + 1).slice(2); }
+function __msBsMonthKey(fy, i) { var m = i + 4, y = fy; if (m > 12) { m -= 12; y += 1; } return y + '-' + (m < 10 ? '0' : '') + m; }
+function __msBsMonthLabel(ym) { var m = parseInt(String(ym).slice(5, 7), 10); return (MS_EXP_MONTH_NAMES[m - 1] || '') + ' ' + String(ym).slice(0, 4); }
+function __msBsShortMonth(ym) { var m = parseInt(String(ym).slice(5, 7), 10); return (MS_EXP_MONTH_NAMES[m - 1] || '').slice(0, 3) + ' ' + String(ym).slice(2, 4); }
+function __msBsCurrentFy() { var d = new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; }
+function __msBsMoney(n) { return (typeof __msInr === 'function') ? __msInr(n) : String(n); }
+function __msBsFile(id) { return (__msBs.fileMap && __msBs.fileMap[id]) || null; }
+function __msBsFilePath(f) { return (__msBs.filesRoot && f && f.path) ? __msBs.filesRoot + '/' + f.path : ''; }
+function __msBsMonthKeys() { return Object.keys((__msBs.index && __msBs.index.months) || {}).filter(function (ym) { return /^\d{4}-\d{2}$/.test(ym); }).sort(); }
+function __msBsFys() {
+    var fys = {};
+    __msBsMonthKeys().forEach(function (ym) { fys[__msBsFyOf(ym)] = true; });
+    var list = Object.keys(fys).map(Number);
+    if (list.indexOf(__msBsCurrentFy()) === -1) list.push(__msBsCurrentFy());
+    return list.sort(function (a, b) { return b - a; });
+}
+
+// ---- reading the engine's files ------------------------------------------------------
+async function __msBsRootPath() {
+    if (__msExp.check && __msExp.check.path) return __msExp.check.path;
+    return (typeof __msExpCaPackPath === 'function') ? await __msExpCaPackPath() : '';
+}
+// Read index.json (and then the months not read yet, in the background). A read asked for
+// while one is running is done once more afterwards. After the first read the page stays up
+// while the list is read again; a failed re-read keeps what was read before and says so.
+async function __msBsLoad(opts) {
+    opts = opts || {};
+    var t = __msBsTauri();
+    if (!t) { __msBs.state = 'unavailable'; __msBsRefreshIfOpen(); return; }
+    if (__msBs.reading || __msBs.monthsLoading) { __msBs.loadAgain = opts; return; }
+    var first = !__msBs.index;
+    __msBs.reading = true;
+    if (first) __msBs.state = 'loading';
+    __msBsRefreshIfOpen();
+    try {
+        var root = await __msBsRootPath();
+        if (!root) { __msBsLoadFailed(first, 'The app could not work out where your CA Pack folder is.'); return; }
+        var r = await __msExpReadJson(root + MS_BS_APP_DIR + '/index.json');
+        if (!r.ok) {
+            __msBsLoadFailed(first, r.missing ? 'The CA pack has not listed the statements for the app yet (' + root + MS_BS_APP_DIR + '). They appear after the next CA pack run.' : 'The list of statements ' + r.error + '.',
+                { path: root + MS_BS_APP_DIR + '/index.json' });
+            return;
+        }
+        var idx = r.data;
+        if (!idx || idx.kind !== 'masterstone-statements-index' || !idx.months || typeof idx.months !== 'object' || !Array.isArray(idx.files)) {
+            __msBsLoadFailed(first, 'The list of statements is not in the expected shape.'); return;
+        }
+        // keep the months already read whose signature has not changed
+        var kept = {};
+        Object.keys(idx.months).forEach(function (ym) {
+            var e = idx.months[ym], have = __msBs.months[ym];
+            if (have && e && have.sig === e.sig) kept[ym] = have;
+        });
+        __msBs.root = root;
+        __msBs.filesRoot = String(root).replace(/\/+$/, '').replace(/\/[^\/]+$/, '');
+        __msBs.index = idx;
+        __msBs.fileMap = {};
+        idx.files.forEach(function (f) { if (f && typeof f.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(f.id) && typeof f.path === 'string' && !/(^|\/)\.\.(\/|$)/.test(f.path) && f.path.charAt(0) !== '/') __msBs.fileMap[f.id] = f; });
+        __msBs.months = kept;
+        __msBs.state = 'ready';
+        __msBs.error = '';
+        __msBs.at = Date.now();
+        __msBs.loadedAt = new Date().toISOString();
+        if (__msBs.ui.fy === null) __msBs.ui.fy = __msBsCurrentFy();
+        __msBsLog('INFO', first ? 'statements listed' : 'statements listed again', { files: idx.files.length, months: Object.keys(idx.months).length, lines: __msBsIndexLines(idx) });
+        __msBs.reading = false;
+        __msBsRefreshIfOpen();
+        if (first && typeof __msExpRefreshIfOpen === 'function') __msExpRefreshIfOpen();   // the Expenses page gets its statement pins
+        if (!opts.indexOnly || __msBsTabOpen()) await __msBsLoadMonths();
+        __msBsProbeFiles();
+    } catch (e) {
+        __msBsLoadFailed(first, String((e && e.message) || e));
+    } finally {
+        __msBs.reading = false;
+        __msBs.at = __msBs.at || Date.now();
+        __msBsRefreshIfOpen();
+        __msBsLoadQueued();
+    }
+}
+// A read that failed: before the first success the page shows the reason; after it, what was
+// read stays and the status line says the list could not be read again.
+function __msBsLoadFailed(first, why, data) {
+    if (first) { __msBs.state = 'failed'; __msBs.error = why; }
+    else __msBs.error = 'The list could not be read again (' + why + '). Showing what was read before.';
+    __msBs.at = Date.now();
+    __msBsLog(first ? 'WARN' : 'ERROR', first ? 'the list could not be read' : 'the list could not be read again', Object.assign({ error: why }, data || {}));
+}
+function __msBsLoadQueued() {
+    if (__msBs.loadAgain && !__msBs.reading && !__msBs.monthsLoading) { var o = __msBs.loadAgain; __msBs.loadAgain = null; __msBsLoad(o); }
+}
+function __msBsTabOpen() { var tab = document.getElementById('bankStatementsTab'); return !!(tab && !tab.classList.contains('hidden')); }
+function __msBsIndexLines(idx) { var n = 0; Object.keys(idx.months || {}).forEach(function (ym) { n += Number((idx.months[ym] || {}).lines) || 0; }); return n; }
+// Read the month files not read yet, newest first (the search covers every month read so far).
+async function __msBsLoadMonths() {
+    if (__msBs.state !== 'ready' || __msBs.monthsLoading) return;
+    var idx = __msBs.index, want = __msBsMonthKeys().filter(function (ym) { return !__msBs.months[ym]; }).reverse();
+    __msBs.monthsLoading = true; __msBs.monthsWanted = want.length; __msBs.monthsLoaded = 0;
+    if (want.length) __msBsRefreshIfOpen();                            // the status line says the months are being read
+    var bad = [];
+    try {
+        for (var i = 0; i < want.length; i++) {
+            var ym = want[i], e = idx.months[ym] || {};
+            if (__msBs.index !== idx) return;                       // read again meanwhile: that read takes over (see finally)
+            var fname = /^\d{4}-\d{2}\.json$/.test(String(e.file || '')) ? e.file : ym + '.json';
+            var r = await __msExpReadJson(__msBs.root + MS_BS_APP_DIR + '/' + fname);
+            if (__msBs.index !== idx) return;
+            var doc = r.ok ? r.data : null;
+            if (!doc || doc.kind !== 'masterstone-statements-month' || doc.month !== ym || !Array.isArray(doc.lines)) { bad.push(ym); continue; }
+            doc.lines = doc.lines.filter(function (l) { return l && /^\d{4}-\d{2}-\d{2}$/.test(String(l.d || '')) && (l.dc === 'D' || l.dc === 'C') && Number(l.m) > 0; })
+                .map(function (l) { l.t = String(l.t || ''); l.r = String(l.r || ''); l.ref = String(l.ref || ''); l.acct = String(l.acct || ''); l.sm = /^\d{4}-\d{2}$/.test(String(l.sm || '')) ? l.sm : ym; if (typeof l.f !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(l.f)) l.f = null; return l; });
+            __msBs.months[ym] = doc;
+            __msBs.monthsLoaded = i + 1;
+            if ((i + 1) % 12 === 0 || i === want.length - 1) __msBsRefreshIfOpen();
+        }
+        if (bad.length) __msBsLog('WARN', 'months not readable', { months: bad });
+    } finally {
+        __msBs.monthsLoading = false; __msBs.monthsWanted = 0;
+        __msBsRefreshIfOpen();
+        if (__msBs.loadAgain) __msBsLoadQueued();
+        else if (__msBs.state === 'ready' && __msBs.index !== idx && __msBsMonthKeys().some(function (ym) { return !__msBs.months[ym]; })) __msBsLoadMonths();   // the list changed under us: read the rest
+    }
+}
+// Are the statement files where the index says? In the background; marks the ones not on the Mac.
+async function __msBsProbeFiles() {
+    var t = __msBsTauri();
+    if (!t || __msBs.state !== 'ready') return;
+    if (__msBs.probing) { __msBs.probeAgain = true; return; }
+    __msBs.probing = true;
+    try {
+        var files = (__msBs.index.files || []).slice().sort(function (a, b) { var x = (a.months || [''])[0], y = (b.months || [''])[0]; return x < y ? 1 : (x > y ? -1 : 0); });
+        var missing = {}, n = 0;
+        for (var i = 0; i < files.length && n < MS_BS_PROBE_MAX; i++) {
+            var p = __msBsFilePath(files[i]);
+            if (!p) continue;
+            n++;
+            var ex = null;
+            try { ex = await t.invoke('check_file_exists', { path: p }); } catch (e) {}
+            if (__msBs.state !== 'ready') return;
+            if (ex && ex.ok && !ex.exists) missing[files[i].id] = p;
+        }
+        var before = JSON.stringify(__msBs.missing);
+        __msBs.missing = missing;
+        if (JSON.stringify(missing) !== before) {
+            var m = Object.keys(missing).length;
+            if (m) __msBsLog('WARN', 'statement files not on the Mac where the index lists them', { files: m, first: missing[Object.keys(missing)[0]] });
+            __msBsRefreshIfOpen();
+        }
+    } catch (e) {
+        __msBsLog('WARN', 'could not check the statement files on the Mac', { error: String((e && e.message) || e) });
+    } finally {
+        __msBs.probing = false;
+        if (__msBs.probeAgain) { __msBs.probeAgain = false; __msBsProbeFiles(); }
+    }
+}
+// Open a statement file in its usual app.
+async function __msBsOpen(fid) {
+    var f = __msBsFile(fid);
+    var path = __msBsFilePath(f);
+    if (!path) { __msBsToast('No file is listed for this statement.', 3500); return; }
+    var t = __msBsTauri(), ex = null;
+    try { ex = t ? await t.invoke('check_file_exists', { path: path }) : null; } catch (e) {}
+    if (ex && ex.ok && !ex.exists) {
+        var was = !!__msBs.missing[fid];
+        __msBs.missing[fid] = path;
+        if (!was) __msBsRefreshIfOpen();
+        __msBsToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The statement isn\'t on the Mac at ' + __msBsEsc(path) + '. Moved or renamed? Put it back in Files › Bank Statements, or run the CA pack so the list is made again.', 8000);
+        return;
+    }
+    if (__msBs.missing[fid]) { delete __msBs.missing[fid]; __msBsRefreshIfOpen(); }
+    if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(path);
+}
+// For the Expenses page: the statement a line came from (its account and pack month).
+function __msBsFilesFor(acct, ym) {
+    var e = __msBs.index && __msBs.index.months && __msBs.index.months[ym];
+    var a = e && e.accts && e.accts[acct];
+    return (a && Array.isArray(a.files)) ? a.files.filter(function (id) { return !!__msBsFile(id); }) : [];
+}
+function __msBsPinHtml(fid, extra) {
+    var f = __msBsFile(fid);
+    if (!f) return '';
+    var miss = __msBs.missing[fid];
+    var name = f.path.split('/').pop();
+    return '<a href="#" class="ms-bs-pin' + (miss ? ' missing' : '') + '" onclick="__msBsOpen(\'' + __msBsEsc(fid) + '\'); return false;" title="' + __msBsEsc((miss ? 'Not on the Mac at ' + miss + ' — moved or renamed?\n' : 'Open ') + name + (extra ? '\n' + extra : '')) + '"' + (miss ? ' data-missing="1"' : '') + '>'
+        + '<i class="fas ' + (f.ext === 'pdf' ? 'fa-file-pdf' : 'fa-file-excel') + '"></i>' + (miss ? '<i class="fas fa-exclamation" style="font-size:8px; color:var(--warning); margin-left:1px;"></i>' : '') + '</a>';
+}
+function __msBsPinForExpense(ln) {
+    if (!ln || !ln.a || !ln.f || ln.s === 'manual') return '';
+    if (__msBs.state === 'idle' || (__msBs.state === 'failed' && Date.now() - (__msBs.at || 0) > 120000)) { __msBsLoad({ indexOnly: true }); return ''; }
+    if (__msBs.state !== 'ready') return '';
+    var ids = __msBsFilesFor(ln.a, ln.f);
+    if (!ids.length) return '';
+    return ' ' + __msBsPinHtml(ids[0], 'The ' + __msBsAcctLabel(ln.a) + ' statement for ' + __msBsMonthLabel(ln.f));
+}
+
+// ---- the lines ------------------------------------------------------------------------
+function __msBsAllLines() {
+    var out = [];
+    Object.keys(__msBs.months).sort().forEach(function (ym) { out = out.concat(__msBs.months[ym].lines || []); });
+    return out;
+}
+function __msBsMatches(ln, q) {
+    if (!q) return true;
+    var s = q.toLowerCase();
+    if ((ln.t || '').toLowerCase().indexOf(s) !== -1 || (ln.r || '').toLowerCase().indexOf(s) !== -1 || (ln.ref || '').toLowerCase().indexOf(s) !== -1) return true;
+    var digits = s.replace(/[₹,\s]/g, '');
+    if (/^\d+(\.\d+)?$/.test(digits)) {
+        var num = parseFloat(digits);
+        if (Math.abs(Number(ln.m) - num) < 0.005) return true;                         // the exact amount
+        if (digits.length >= 3 && Number(ln.m).toFixed(2).indexOf(digits) === 0) return true;   // or its first digits
+    }
+    return false;
+}
+function __msBsFiltered() {
+    var ui = __msBs.ui, fy = ui.fy, q = (ui.q || '').trim();
+    var rows = __msBsAllLines().filter(function (ln) {
+        if (!ui.all && __msBsFyOf(ln.sm || ln.d) !== fy) return false;
+        if (ui.acct !== 'ALL' && ln.acct !== ui.acct) return false;
+        if (ui.dc !== 'ALL' && ln.dc !== ui.dc) return false;
+        return __msBsMatches(ln, q);
+    });
+    rows.sort(function (a, b) { return a.d < b.d ? 1 : (a.d > b.d ? -1 : (__msBsAcctOrder(a.acct) - __msBsAcctOrder(b.acct))); });
+    return rows;
+}
+
+// ---- the page ------------------------------------------------------------------------
+function __msBsRefreshIfOpen() {
+    var tab = document.getElementById('bankStatementsTab');
+    if (!tab || tab.classList.contains('hidden')) return;
+    var a = document.activeElement, root = document.getElementById('msBsRoot');
+    var focusId = (a && root && root.contains(a) && a.id) ? a.id : '';
+    if (focusId === 'msBsQ' && a.value !== __msBs.ui.q) { clearTimeout(__msBsSearchTimer); __msBs.ui.q = a.value; __msBs.ui.limit = MS_BS_LIST_STEP; }
+    renderBankStatementsPage();
+    if (focusId) { var el = document.getElementById(focusId); if (el) { el.focus(); if (focusId === 'msBsQ') { try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} } } }
+}
+function renderBankStatementsPage() {
+    var root = document.getElementById('msBsRoot');
+    if (!root) return;
+    var S = __msBs, ui = S.ui;
+    var head = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:12px;">'
+        + '<h2 style="margin:0;"><i class="fas fa-building-columns" style="color:var(--accent-cyan); margin-right:8px;"></i> Bank Statements</h2>'
+        + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + '<button class="btn btn-ghost" id="msBsRefreshBtn" onclick="__msBsLoad({ manual: true })"' + (S.state === 'loading' || S.state === 'unavailable' ? ' disabled' : '') + ' title="Read the list of statements again (after a CA pack run)"><i class="fas fa-rotate' + (S.reading || S.state === 'loading' ? ' fa-spin' : '') + '"></i> Refresh</button>'
+        + '<button class="btn btn-ghost" id="msBsExportBtn" onclick="exportBankStatementsExcel()"' + (S.state !== 'ready' || S.monthsLoading ? ' disabled' : '') + ' title="' + (S.monthsLoading ? 'Once every month has been read' : 'The entries shown below, to Excel') + '"><i class="fas fa-file-excel"></i> Export</button>'
+        + '</div></div>';
+    if (S.state !== 'ready') {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">'
+            + (S.state === 'failed' ? '<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Bank statements can\'t be shown: ' + __msBsEsc(S.error)
+                : (S.state === 'unavailable' ? '<i class="fas fa-circle-info"></i> Bank statements live on the Mac; open them in the Masterstone app.'
+                : '<i class="fas fa-spinner fa-spin"></i> Reading the list of statements…')) + '</div>';
+        return;
+    }
+    if (ui.fy === null) ui.fy = __msBsCurrentFy();
+    var fys = __msBsFys();
+    if (fys.indexOf(ui.fy) === -1) { fys.push(ui.fy); fys.sort(function (a, b) { return b - a; }); }
+    var html = head + __msBsStatusHtml();
+    html += '<div class="card" style="padding:12px 16px; margin:12px 0 14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
+        + '<select id="msBsFy" onchange="__msBsSetUi(\'fy\', parseInt(this.value, 10))" style="width:140px;" aria-label="Financial year">'
+        + fys.map(function (y) { return '<option value="' + y + '"' + (y === ui.fy ? ' selected' : '') + '>' + __msBsFyLabel(y) + '</option>'; }).join('') + '</select>'
+        + '<select id="msBsAcct" onchange="__msBsSetUi(\'acct\', this.value)" style="width:170px;" aria-label="Account"><option value="ALL">All accounts</option>'
+        + MS_BS_ACCTS.filter(function (a) { return a.kind !== 'other'; }).map(function (a) { return '<option value="' + a.id + '"' + (ui.acct === a.id ? ' selected' : '') + '>' + __msBsEsc(a.label) + '</option>'; }).join('') + '</select>'
+        + '<select id="msBsDc" onchange="__msBsSetUi(\'dc\', this.value)" style="width:150px;" aria-label="Debits or credits"><option value="ALL">Debits and credits</option><option value="D"' + (ui.dc === 'D' ? ' selected' : '') + '>Debits only</option><option value="C"' + (ui.dc === 'C' ? ' selected' : '') + '>Credits only</option></select>'
+        + '<input type="text" id="msBsQ" value="' + __msBsEsc(ui.q) + '" placeholder="Search description, remark, reference or amount…" style="flex:1; min-width:220px; max-width:380px;" oninput="__msBsSearch(this.value)">'
+        + '<label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim); cursor:pointer;" title="Search every year, not just the one chosen"><input type="checkbox" id="msBsAll"' + (ui.all ? ' checked' : '') + ' onchange="__msBsSetUi(\'all\', this.checked)"> All years</label>'
+        + '</div></div>';
+    html += __msBsGridHtml(ui.fy);
+    html += __msBsBalancesHtml(ui.fy);
+    html += __msBsListHtml();
+    root.innerHTML = html;
+    __msBsDrawChart(ui.fy);
+}
+function __msBsStatusHtml() {
+    var S = __msBs, idx = S.index, keys = __msBsMonthKeys();
+    var parts = [];
+    if (keys.length) parts.push((idx.files || []).length + ' statement file' + (idx.files.length === 1 ? '' : 's') + ' · ' + __msBsEsc(__msBsShortMonth(keys[0])) + ' – ' + __msBsEsc(__msBsShortMonth(keys[keys.length - 1])) + ' · ' + __msBsIndexLines(idx).toLocaleString('en-IN') + ' entries');
+    else parts.push('No statements listed yet');
+    if (idx.made) parts.push('listed by the CA pack ' + __msBsEsc(__msExpAgo(idx.made)));
+    if (S.error) parts.push('<span style="color:var(--danger);" title="' + __msBsEsc(S.error) + '"><i class="fas fa-exclamation-triangle"></i> ' + __msBsEsc(S.error) + '</span>');
+    if (S.monthsLoading) parts.push('<i class="fas fa-spinner fa-spin"></i> reading the months (' + S.monthsLoaded + ' of ' + S.monthsWanted + ')');
+    var nMiss = Object.keys(S.missing || {}).length;
+    if (nMiss) parts.push('<span id="msBsMissing" style="color:var(--warning);" title="A file the list names is not on the Mac. Put it back in Files › Bank Statements, or run the CA pack so the list is made again.">' + nMiss + ' file' + (nMiss === 1 ? '' : 's') + ' not on the Mac</span>');
+    var unread = (Array.isArray(idx.unread) ? idx.unread : []).filter(function (u) { return u && !/FASTag/.test(String(u.why || '')); });
+    if (unread.length) parts.push('<span title="' + __msBsEsc(unread.map(function (u) { return String(u.path || '').split('/').pop() + ' — ' + String(u.why || ''); }).join('\n')) + '">' + unread.length + ' file' + (unread.length === 1 ? '' : 's') + ' with no entries (paperclip only)</span>');
+    return '<div id="msBsStatus" style="font-size:12.5px; color:var(--text-dim);">' + parts.join(' · ') + '</div>';
+}
+// The grid: the year's months down, the accounts across; a paperclip per statement.
+function __msBsGridHtml(fy) {
+    var idx = __msBs.index;
+    var keys = MS_EXP_MONTHS.map(function (_m, i) { return __msBsMonthKey(fy, i); });
+    var html = '<div class="card" style="padding:14px 18px 10px; margin-bottom:14px;">'
+        + '<div style="font-size:13px; font-weight:600; margin-bottom:2px;">Statements, ' + __msBsFyLabel(fy) + '</div>'
+        + '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Click a paperclip to open the statement. Banks show the month\'s closing balance, cards the month\'s spend. An empty cell means no statement in the folder for that month.</div>'
+        + '<div class="table-scroll-wrap"><table id="msBsGrid" class="ms-bs-grid" style="font-size:12px;"><thead><tr><th>Month</th>'
+        + MS_BS_ACCTS.map(function (a) { return '<th style="text-align:center;">' + __msBsEsc(a.label) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    var present = 0;
+    keys.forEach(function (ym) {
+        var e = (idx.months || {})[ym] || {}, accts = e.accts || {};
+        html += '<tr data-ym="' + ym + '"><td style="white-space:nowrap; font-weight:600;">' + __msBsEsc(__msBsShortMonth(ym)) + '</td>';
+        MS_BS_ACCTS.forEach(function (a) {
+            var s = accts[a.id];
+            var ids = (s && Array.isArray(s.files)) ? s.files.filter(function (id) { return !!__msBsFile(id); }) : [];
+            if (!s || (!ids.length && !s.rows)) { html += '<td class="ms-bs-cell none" style="text-align:center; color:var(--text-dim);" data-acct="' + a.id + '">' + (ym > __msBsTodayYm() ? '' : '—') + '</td>'; return; }
+            present++;
+            var figure = '';
+            if (a.kind === 'bank' && s.closing !== null && s.closing !== undefined) figure = '<div class="ms-bs-fig" title="Closing balance">' + __msBsEsc(__msBsMoney(s.closing)) + '</div>';
+            else if (a.kind === 'card' && s.rows) figure = '<div class="ms-bs-fig" title="Spend in the month (debits)">' + __msBsEsc(__msBsMoney(s.debits || 0)) + '</div>';
+            var pins = ids.map(function (id) { return __msBsPinHtml(id, (s.rows ? s.rows + ' entr' + (s.rows === 1 ? 'y' : 'ies') : 'no entries read (open the file)')); }).join(' ');
+            var count = s.rows ? '<span class="ms-bs-n" title="Entries">' + s.rows + '</span>' : '';
+            html += '<td class="ms-bs-cell' + (ids.length ? '' : ' nofile') + '" style="text-align:center;" data-acct="' + a.id + '">' + (pins || '<span class="ms-bs-nofile" title="Entries from the CA pack, but no file in Files › Bank Statements for this month">•</span>') + ' ' + count + figure + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (!present) html += '<div style="padding:10px 4px 4px; font-size:12.5px; color:var(--text-dim);">Nothing in the folder for ' + __msBsFyLabel(fy) + '.</div>';
+    return html + '</div>';
+}
+function __msBsTodayYm() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+// The bank balances: the latest closing balance of each bank account, and a chart across the year.
+function __msBsLatestClosing(acct) {
+    var idx = __msBs.index, keys = __msBsMonthKeys();
+    for (var i = keys.length - 1; i >= 0; i--) {
+        var s = ((idx.months[keys[i]] || {}).accts || {})[acct];
+        if (s && s.closing !== null && s.closing !== undefined) return { ym: keys[i], closing: s.closing };
+    }
+    return null;
+}
+function __msBsBalancesHtml(fy) {
+    var banks = MS_BS_ACCTS.filter(function (a) { return a.kind === 'bank'; });
+    var cards = banks.map(function (a) {
+        var l = __msBsLatestClosing(a.id);
+        return '<div class="proposal-kpi-card ms-bs-bal" title="' + __msBsEsc(l ? 'Closing balance of the ' + __msBsMonthLabel(l.ym) + ' statement' : 'No closing balance read yet') + '">'
+            + '<div class="proposal-kpi-lbl"><i class="fas fa-building-columns"></i> ' + __msBsEsc(a.label) + '</div>'
+            + '<div class="proposal-kpi-val' + (l && l.closing < 0 ? ' neg' : '') + '">' + (l ? __msBsEsc(__msBsMoney(l.closing)) : '—') + '</div>'
+            + '<div class="proposal-kpi-sub">' + (l ? 'as of ' + __msBsEsc(__msBsShortMonth(l.ym)) + ' statement' : 'no statement read') + '</div></div>';
+    }).join('');
+    return '<div class="proposal-kpi-grid ms-bs-bals" style="grid-template-columns: repeat(5, 1fr); margin-bottom:14px;">' + cards + '</div>'
+        + '<div class="card" style="padding:14px 18px 10px; margin-bottom:14px;">'
+        + '<div style="font-size:13px; font-weight:600; margin-bottom:2px;">Month-end balances, ' + __msBsFyLabel(fy) + '</div>'
+        + '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">The closing balance of each bank statement. An OD account below zero is money drawn on the limit.</div>'
+        + '<div id="msBsChartBox" style="position:relative; height:220px;"><canvas id="msBsChart" aria-label="Month-end balances" role="img"></canvas></div></div>';
+}
+function __msBsDrawChart(fy) {
+    var cv = document.getElementById('msBsChart');
+    if (__msBs.chart) { try { __msBs.chart.destroy(); } catch (e) {} __msBs.chart = null; }
+    if (!cv || typeof Chart === 'undefined' || !__msBs.index) return;
+    var keys = MS_EXP_MONTHS.map(function (_m, i) { return __msBsMonthKey(fy, i); });
+    var css = getComputedStyle(document.body);
+    var grid = (css.getPropertyValue('--chart-grid') || '').trim() || 'rgba(20,20,15,0.06)';
+    var ink = (css.getPropertyValue('--text-dim') || '').trim() || '#74716a';
+    var palette = [(css.getPropertyValue('--accent-cyan') || '').trim() || '#0c5e5b', '#8a5a1f', (css.getPropertyValue('--purple') || '').trim() || '#614b8a', '#2c6e9c', '#b0413e'];
+    var sets = [];
+    MS_BS_ACCTS.filter(function (a) { return a.kind === 'bank'; }).forEach(function (a, i) {
+        var data = keys.map(function (ym) { var s = ((__msBs.index.months[ym] || {}).accts || {})[a.id]; return (s && s.closing !== null && s.closing !== undefined) ? Math.round(s.closing) : null; });
+        if (data.some(function (v) { return v !== null; })) sets.push({ label: a.label, data: data, borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length], spanGaps: true, tension: 0.2, pointRadius: 3, borderWidth: 2 });
+    });
+    try {
+        __msBs.chart = new Chart(cv.getContext('2d'), {
+            type: 'line',
+            data: { labels: MS_EXP_MONTHS.slice(), datasets: sets },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+                plugins: { legend: { display: true, position: 'bottom', labels: { color: ink, boxWidth: 10 } },
+                           tooltip: { callbacks: { title: function (items) { return items.length ? __msBsMonthLabel(keys[items[0].dataIndex]) : ''; }, label: function (item) { return item.dataset.label + ': ' + __msBsMoney(item.raw); } } } },
+                scales: { y: { grid: { color: grid }, border: { display: false }, ticks: { color: ink, callback: function (v) { var n = Number(v); return (n < 0 ? '−' : '') + fmtMoneyShort(Math.abs(n)); } } },
+                          x: { grid: { display: false }, ticks: { color: ink } } }
+            }
+        });
+    } catch (e) { __msBsLog('WARN', 'chart not drawn', { error: String((e && e.message) || e) }); }
+}
+// The entries: the search result (or the year's lines), newest first.
+function __msBsListHtml() {
+    var ui = __msBs.ui, rows = __msBsFiltered();
+    var deb = 0, cre = 0;
+    rows.forEach(function (ln) { if (ln.dc === 'D') deb += Number(ln.m) || 0; else cre += Number(ln.m) || 0; });
+    var what = (ui.q ? '“' + __msBsEsc(ui.q.trim()) + '”' : 'All entries') + (ui.acct !== 'ALL' ? ', ' + __msBsEsc(__msBsAcctLabel(ui.acct)) : '') + (ui.dc === 'D' ? ', debits' : (ui.dc === 'C' ? ', credits' : '')) + (ui.all ? ', all years' : ', ' + __msBsFyLabel(ui.fy));
+    var html = '<div class="card" style="margin-bottom:14px;"><div style="display:flex; justify-content:space-between; align-items:baseline; padding:14px 18px 8px; flex-wrap:wrap; gap:8px;">'
+        + '<div><span style="font-size:13px; font-weight:600;">Entries: ' + what + '</span> <span id="msBsListSum" style="font-size:12px; color:var(--text-dim);">' + rows.length.toLocaleString('en-IN') + ' · out ' + __msBsEsc(__msBsMoney(deb)) + ' · in ' + __msBsEsc(__msBsMoney(cre)) + '</span></div>'
+        + (__msBs.monthsLoading ? '<span style="font-size:12px; color:var(--text-dim);"><i class="fas fa-spinner fa-spin"></i> still reading the months</span>' : '')
+        + '</div><div class="table-scroll-wrap"><table id="msBsList" style="font-size:12.5px;"><thead><tr>'
+        + '<th>Date</th><th>Account</th><th>Description</th><th>Remark</th><th style="text-align:right;">Debit</th><th style="text-align:right;">Credit</th><th style="text-align:right;">Balance</th><th title="The statement the entry is from">File</th></tr></thead><tbody>';
+    if (!rows.length) html += '<tr><td colspan="8" style="text-align:center; padding:24px; color:var(--text-dim); font-style:italic;">' + (__msBs.monthsLoading ? 'Reading the months…' : 'No entries here.') + '</td></tr>';
+    rows.slice(0, ui.limit).forEach(function (ln) {
+        var pins = (ln.f ? __msBsPinHtml(ln.f, 'The ' + __msBsAcctLabel(ln.acct) + ' statement for ' + __msBsMonthLabel(ln.sm || ln.d.slice(0, 7))) : '');
+        html += '<tr data-id="' + __msBsEsc(ln.id || '') + '">'
+            + '<td style="white-space:nowrap;">' + __msBsEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
+            + '<td style="white-space:nowrap;">' + __msBsEsc(__msBsAcctLabel(ln.acct)) + '</td>'
+            + '<td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msBsEsc(ln.t + (ln.ref ? '\nRef ' + ln.ref : '')) + '">' + __msBsEsc(ln.t) + '</td>'
+            + '<td style="max-width:220px;">' + (ln.r ? __msBsEsc(ln.r) : '<span style="color:var(--text-dim); font-style:italic;">no remark</span>') + '</td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">' + (ln.dc === 'D' ? __msBsEsc(__msBsMoney(ln.m)) : '') + '</td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--success);">' + (ln.dc === 'C' ? __msBsEsc(__msBsMoney(ln.m)) : '') + '</td>'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--text-dim);">' + (ln.b !== null && ln.b !== undefined ? __msBsEsc(__msBsMoney(ln.b)) : '') + '</td>'
+            + '<td style="white-space:nowrap;">' + pins + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    if (rows.length > ui.limit) html += '<div style="padding:10px 18px; text-align:center;"><button class="btn btn-ghost btn-sm" onclick="__msBsSetUi(\'limit\', ' + (ui.limit + MS_BS_LIST_STEP * 4) + ')">Show more (' + (rows.length - ui.limit) + ' more)</button></div>';
+    return html + '</div>';
+}
+function __msBsSetUi(k, v) {
+    var ui = __msBs.ui;
+    ui[k] = v;
+    if (k !== 'limit') ui.limit = MS_BS_LIST_STEP;
+    if (k === 'q') {
+        renderBankStatementsPage();
+        var q = document.getElementById('msBsQ');
+        if (q) { q.focus(); try { q.setSelectionRange(q.value.length, q.value.length); } catch (e) {} }
+        return;
+    }
+    renderBankStatementsPage();
+}
+var __msBsSearchTimer = null;
+function __msBsSearch(v) {
+    clearTimeout(__msBsSearchTimer);
+    __msBsSearchTimer = setTimeout(function () { __msBsSetUi('q', v); }, 180);
+}
+
+// ---- Excel -------------------------------------------------------------------------
+function exportBankStatementsExcel() {
+    if (typeof XLSX === 'undefined') { __msBsToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Excel library not loaded — refresh and retry.', 4000); return; }
+    if (__msBs.state !== 'ready') return;
+    var ui = __msBs.ui, rows = __msBsFiltered();
+    var r2 = function (n) { return Math.round((Number(n) || 0) * 100) / 100; };
+    var scope = (ui.q ? 'search “' + ui.q.trim() + '”' : 'all entries') + (ui.acct !== 'ALL' ? ', ' + __msBsAcctLabel(ui.acct) : '') + (ui.dc === 'D' ? ', debits' : (ui.dc === 'C' ? ', credits' : '')) + (ui.all ? ', all years' : ', ' + __msBsFyLabel(ui.fy));
+    var head = ['Date', 'Account', 'Description', 'Remark', 'Debit (₹)', 'Credit (₹)', 'Balance (₹)', 'Reference', 'Statement month', 'Statement file'];
+    var aoa = [['Masterstone LLP — Bank and card statements: ' + scope], ['From the statements in Files › Bank Statements, as read by the CA pack. Made ' + new Date().toLocaleString('en-GB') + '.'], [], head];
+    rows.slice().reverse().forEach(function (ln) {
+        var f = ln.f ? __msBsFile(ln.f) : null;
+        aoa.push([ln.d, __msBsAcctLabel(ln.acct), ln.t || '', ln.r || '', ln.dc === 'D' ? r2(ln.m) : '', ln.dc === 'C' ? r2(ln.m) : '', (ln.b !== null && ln.b !== undefined) ? r2(ln.b) : '', ln.ref || '', ln.sm || '', f ? f.path : '']);
+    });
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [12, 14, 48, 30, 14, 14, 16, 20, 12, 60].map(function (w) { return { wch: w }; });
+    for (var r = 4; r < aoa.length; r++) { [4, 5, 6].forEach(function (c) { var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })]; if (cell && cell.t === 'n') cell.z = '#,##0.00'; }); }
+    for (var c = 0; c < head.length; c++) { var hc = ws[XLSX.utils.encode_cell({ r: 3, c: c })]; if (hc) hc.s = { font: { bold: true } }; }
+    if (ws.A1) ws.A1.s = { font: { bold: true, sz: 13 } };
+    ws['!view'] = [{ state: 'frozen', ySplit: 4, xSplit: 0, topLeftCell: 'A5', activePane: 'bottomLeft' }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Entries');
+    var fname = 'Masterstone_Statements_' + (ui.all ? 'all-years' : 'FY' + ui.fy + '-' + String(ui.fy + 1).slice(2)) + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    __msBsToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Statement entries exported — <strong>' + __msBsEsc(fname) + '</strong>', 4000);
+}
+
+// Styles for this page only, and a redraw of the chart when the theme changes.
+(function () {
+    try {
+        var css = document.createElement('style');
+        css.id = 'msBsStyles';
+        css.textContent = '#msBsRoot table th, #msBsRoot table td { padding: 8px 10px; }'
+            + ' #msBsRoot .ms-bs-grid td.ms-bs-cell { vertical-align: top; min-width: 92px; }'
+            + ' #msBsRoot .ms-bs-pin { color: var(--accent-cyan); font-size: 15px; margin: 0 2px; }'
+            + ' #msBsRoot .ms-bs-pin.missing, #msExpRoot .ms-bs-pin.missing { color: var(--text-dim); }'
+            + ' #msExpRoot .ms-bs-pin { color: var(--text-dim); font-size: 12px; margin-left: 4px; }'
+            + ' #msBsRoot .ms-bs-n { font-size: 10.5px; color: var(--text-dim); margin-left: 2px; }'
+            + ' #msBsRoot .ms-bs-fig { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }'
+            + ' #msBsRoot .ms-bs-nofile { color: var(--text-dim); }'
+            + ' #msBsRoot .ms-bs-bal .proposal-kpi-val { color: var(--accent-cyan); font-size: 18px; }'
+            + ' #msBsRoot .ms-bs-bal .proposal-kpi-val.neg { color: var(--danger); }'
+            + ' @media (max-width: 900px) { #msBsRoot .ms-bs-bals { grid-template-columns: repeat(2, 1fr) !important; } }';
+        (document.head || document.documentElement).appendChild(css);
+    } catch (e) {}
+    try {
+        var dark = document.body && document.body.classList.contains('dark-mode');
+        var mo = new MutationObserver(function () {
+            var now = document.body.classList.contains('dark-mode');
+            if (now !== dark) { dark = now; __msBsRefreshIfOpen(); }
+        });
+        if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
+})();
+// =================== /Phase 8FA — Bank Statements ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
