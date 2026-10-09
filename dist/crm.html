@@ -48714,7 +48714,8 @@ var MS_EXP_ACCTS = [
 ];
 var MS_EXP_FY_PREFIX = 'ms_app__expenses_fy';
 var MS_EXP_META_KEY = 'ms_app__expenses_meta_v1';
-var MS_EXP_CAPACK_UNDER_HOME = '/Library/CloudStorage/OneDrive-Masterstone/Masterstone/CA Pack';
+var MS_EXP_CAPACK_UNDER_HOME = '/Library/CloudStorage/OneDrive-Masterstone/Masterstone/Files/CA Pack';   // 8EZ: under Files since 9 Oct 2026
+var MS_EXP_CAPACK_OLD_UNDER_HOME = '/Library/CloudStorage/OneDrive-Masterstone/Masterstone/CA Pack';    // 8EZ: where it was before (a fallback)
 var MS_EXP_APP_DIR = '/_engine/app_expenses';
 var MS_EXP_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 var MS_EXP_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -48735,6 +48736,7 @@ var __msExp = {
     dirty: {},                       // setting key -> true
     saving: false, saveError: '', saveTimer: null, retryTimer: null,
     check: { running: false, status: '', detail: '', at: 0, path: '' },
+    missing: {}, probing: false, probeAgain: false,   // 8EZ: bill key (line id:index) -> the path looked at, for bills not on the Mac; not saved
     ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false },
     chart: null, editing: null
 };
@@ -48939,16 +48941,45 @@ window.addEventListener('beforeunload', function () {
 });
 
 // ---- the CA pack's files -------------------------------------------------------
+// 8EZ (9 Oct 2026): the CA Pack is under Files. A folder you chose wins (and follows the
+// move if it was the old place); otherwise the usual place, or where it used to be —
+// whichever has the engine's list of months (the usual place when neither does, so the
+// message names it).
 async function __msExpCaPackPath() {
-    if (__msExp.meta.caPackPath) return __msExp.meta.caPackPath;
+    var t = __msExpTauri();
+    if (__msExp.meta.caPackPath) {
+        var chosen = __msExp.meta.caPackPath, mapped = __msExpOldToNew(chosen + '/').replace(/\/$/, '');
+        if (!t || mapped === chosen) return chosen;
+        var exC = null, exM = null;
+        try { exC = await t.invoke('check_file_exists', { path: chosen + MS_EXP_APP_DIR + '/index.json' }); } catch (e) {}
+        if (exC && exC.ok && exC.exists) return chosen;
+        try { exM = await t.invoke('check_file_exists', { path: mapped + MS_EXP_APP_DIR + '/index.json' }); } catch (e) {}
+        if (exM && exM.ok && exM.exists) {
+            __msExp.meta.caPackPath = mapped;
+            __msExpMarkDirty(MS_EXP_META_KEY);
+            __msExpLog('INFO', 'the CA Pack folder you chose moved under Files; the app follows it', { from: chosen, to: mapped });
+            return mapped;
+        }
+        return chosen;
+    }
+    var home = '';
     try {
         var P = window.__TAURI__ && window.__TAURI__.path;
-        if (P && typeof P.homeDir === 'function') {
-            var home = String(await P.homeDir() || '').replace(/\/+$/, '');
-            if (home) return home + MS_EXP_CAPACK_UNDER_HOME;
-        }
+        if (P && typeof P.homeDir === 'function') home = String(await P.homeDir() || '').replace(/\/+$/, '');
     } catch (e) {}
-    return '';
+    if (!home) return '';
+    var usual = home + MS_EXP_CAPACK_UNDER_HOME;
+    if (!t) return usual;
+    var cands = [usual, home + MS_EXP_CAPACK_OLD_UNDER_HOME];
+    for (var i = 0; i < cands.length; i++) {
+        var ex = null;
+        try { ex = await t.invoke('check_file_exists', { path: cands[i] + MS_EXP_APP_DIR + '/index.json' }); } catch (e) {}
+        if (ex && ex.ok && ex.exists) {
+            if (i > 0 && !__msExp.oldPlaceNoted) { __msExp.oldPlaceNoted = true; __msExpLog('INFO', 'the CA Pack is still at its old place (Masterstone/CA Pack); the app looks under Files first', { path: cands[i] }); }
+            return cands[i];
+        }
+    }
+    return usual;
 }
 function __msExpBytesToText(b64) {
     var bin = atob(b64);
@@ -49124,6 +49155,7 @@ async function __msExpCheck(opts) {
                 waiting: result.waiting, bad: result.bad, saved: !pending || savedLines });
         }
         __msExpToastResult(result, !!opts.manual, !pending || savedLines);
+        __msExpProbeBills();                               // 8EZ: in the background — are the bills on the Mac?
         return result;
     } catch (e) {
         C.status = 'error'; C.detail = String((e && e.message) || e);
@@ -49283,24 +49315,120 @@ function __msExpHeadOptions(cur, withAll) {
 }
 
 // ---- a bill on the Mac --------------------------------------------------------
+// 8EZ (9 Oct 2026): Expenses and the CA Pack moved from Masterstone/ to Masterstone/Files/.
+// A bill is opened from the folder above CA Pack (Files/Expenses/...); a path recorded
+// before the move is tried where it is now too. A bill that is nowhere gets a grey
+// paperclip and a note saying where the app looked.
+var MS_EXP_PROBE_MAX = 1500;         // bills checked on the Mac after each look in the CA pack (newest first)
+function __msExpBillKey(id, k) { return String(id) + ':' + k; }
+function __msExpOldToNew(p) {
+    return String(p || '').replace(/\/Masterstone\/(Expenses|CA Pack)\//, '/Masterstone/Files/$1/');
+}
+// The paths a bill may be at, most likely first: the recorded path (a bill you added by hand),
+// then the CA pack's file under the folder above CA Pack; each also at its new place if it
+// names the old one.
+function __msExpBillCandidates(b, root) {
+    var out = [];
+    var add = function (p) { if (p && out.indexOf(p) === -1) out.push(p); };
+    if (!b) return out;
+    var rec = String(b.path || '');
+    if (rec) { add(rec); add(__msExpOldToNew(rec)); }
+    if (b.file) {
+        var above = String(root || '').replace(/\/+$/, '').replace(/\/[^\/]+$/, '');   // the folder above CA Pack
+        if (above) { add(above + '/' + b.file); add(__msExpOldToNew(above + '/' + b.file)); }
+    }
+    return out;
+}
+// Redraw the page for new marks. A search being typed is kept: the box's live text is
+// applied first (so the redraw cannot lose keystrokes), then the caret goes back.
+function __msExpRefreshKeepingSearch() {
+    var a = document.activeElement;
+    if (a && a.id === 'msExpQ' && a.value !== __msExp.ui.q) { clearTimeout(__msExpSearchTimer); __msExp.ui.q = a.value; __msExp.ui.limit = MS_EXP_LIST_STEP; }
+    __msExpRefreshIfOpen();
+}
+// What to do about a bill that is not on the Mac: a bill the CA pack read comes back when
+// that month's pack is rebuilt; one you added by hand is pointed at again from its form.
+function __msExpBillAdvice(ln) {
+    return (ln && ln.s === 'manual') ? 'Put it back, or edit this expense and Browse to the bill.' : 'Put it back, or rebuild that month\'s CA pack so the app learns its new place.';
+}
 async function __msExpOpenBill(id, k) {
     var f = __msExpFind(id);
     var b = f && f.ln.b && f.ln.b[k];
     if (!b) return;
-    var path = b.path || '';
-    if (!path && b.file) {
-        var root = __msExp.check.path || await __msExpCaPackPath();
-        var masterstone = String(root || '').replace(/\/+$/, '').replace(/\/[^\/]+$/, '');   // the folder above CA Pack
-        path = masterstone ? masterstone + '/' + b.file : '';
-    }
-    if (!path) { if (typeof showProspectToast === 'function') showProspectToast('No file is recorded for this bill.', 3500); return; }
-    var t = __msExpTauri(), ex = null;
-    try { ex = t ? await t.invoke('check_file_exists', { path: path }) : null; } catch (e) {}
-    if (ex && ex.ok && !ex.exists) {
-        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The bill isn\'t at ' + __msExpEsc(path) + ' (moved or renamed?).', 6000);
-        return;
+    var cands = __msExpBillCandidates(b, __msExp.check.path || await __msExpCaPackPath());
+    if (!cands.length) { if (typeof showProspectToast === 'function') showProspectToast('No file is recorded for this bill.', 3500); return; }
+    var t = __msExpTauri(), path = cands[0], key = __msExpBillKey(id, k);
+    if (t) {
+        var hit = '';
+        for (var i = 0; i < cands.length && !hit; i++) {
+            var ex = null;
+            try { ex = await t.invoke('check_file_exists', { path: cands[i] }); } catch (e) {}
+            if (!ex || !ex.ok || ex.exists) hit = cands[i];      // there — or it can't be checked: let the opener say
+        }
+        if (!hit) {
+            var was = !!__msExp.missing[key];
+            __msExp.missing[key] = cands[0];
+            if (!was) __msExpRefreshKeepingSearch();
+            if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The bill isn\'t on the Mac at ' + __msExpEsc(cands[0])
+                + (cands.length > 1 ? ' (nor at its new place under Files)' : '') + '. Moved or renamed? ' + __msExpEsc(__msExpBillAdvice(f.ln)), 8000);
+            return;
+        }
+        path = hit;
+        if (__msExp.missing[key]) { delete __msExp.missing[key]; __msExpRefreshKeepingSearch(); }
     }
     if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(path);
+}
+// Are the bills where the CA pack said? Runs in the background after each look in the CA
+// pack and marks the ones not on the Mac (grey paperclip; the status line counts them).
+// Only the bills it looked at are re-marked (a mark on a bill beyond the cap stays); a look
+// asked for while one runs is done once more afterwards. Nothing is saved: the next look
+// checks again.
+async function __msExpProbeBills() {
+    var t = __msExpTauri();
+    if (!t || __msExp.state !== 'ready') return;
+    if (__msExp.probing) { __msExp.probeAgain = true; return; }
+    __msExp.probing = true;
+    try {
+        var root = __msExp.check.path || await __msExpCaPackPath();
+        var lines = __msExpAllLines().filter(function (ln) { return ln.b && ln.b.length; });
+        lines.sort(function (a, b) { return a.d < b.d ? 1 : (a.d > b.d ? -1 : 0); });   // newest first
+        var missing = {}, visited = {}, ids = {}, n = 0;
+        for (var i = 0; i < lines.length && n < MS_EXP_PROBE_MAX; i++) {
+            var ln = lines[i], bs = ln.b || [];
+            ids[ln.i] = true;
+            for (var k = 0; k < bs.length && n < MS_EXP_PROBE_MAX; k++) {
+                var cands = __msExpBillCandidates(bs[k], root);
+                if (!cands.length) continue;
+                n++;
+                var found = false;
+                for (var c = 0; c < cands.length && !found; c++) {
+                    var ex = null;
+                    try { ex = await t.invoke('check_file_exists', { path: cands[c] }); } catch (e) {}
+                    if (!ex || !ex.ok || ex.exists) found = true;     // there, or it can't be checked: not marked
+                }
+                if (__msExp.state !== 'ready') return;
+                visited[__msExpBillKey(ln.i, k)] = true;
+                if (!found) missing[__msExpBillKey(ln.i, k)] = cands[0];
+            }
+        }
+        for (; i < lines.length; i++) ids[lines[i].i] = true;
+        var old = __msExp.missing || {};
+        Object.keys(old).forEach(function (key) {        // marks on bills beyond the cap stay while their line exists
+            if (!visited[key] && ids[key.replace(/:\d+$/, '')]) missing[key] = old[key];
+        });
+        var before = JSON.stringify(old), after = JSON.stringify(missing);
+        __msExp.missing = missing;
+        if (after !== before) {
+            var m = Object.keys(missing).length;
+            if (m) __msExpLog('WARN', 'bills not on the Mac where the CA pack recorded them', { bills: m, first: missing[Object.keys(missing)[0]] });
+            __msExpRefreshKeepingSearch();
+        }
+    } catch (e) {
+        __msExpLog('WARN', 'could not check the bills on the Mac', { error: String((e && e.message) || e) });
+    } finally {
+        __msExp.probing = false;
+        if (__msExp.probeAgain) { __msExp.probeAgain = false; __msExpProbeBills(); }
+    }
 }
 
 // ---- add / edit an expense by hand ----------------------------------------------
@@ -49418,10 +49546,14 @@ async function __msExpChooseFolder() {
     try { r = await t.invoke('pick_folder', { title: 'Choose your CA Pack folder' }); } catch (e) { r = null; }
     if (!r || !r.ok || !r.path) return;
     var p = String(r.path).replace(/\/+$/, '');
-    // the Masterstone folder (one up) works too
+    // the Masterstone folder (one up) works too — with CA Pack under Files (8EZ) or beside it
     var inner = null;
-    try { inner = await t.invoke('check_file_exists', { path: p + '/CA Pack/_engine' }); } catch (e) {}
-    if (inner && inner.ok && inner.exists) p = p + '/CA Pack';
+    try { inner = await t.invoke('check_file_exists', { path: p + '/Files/CA Pack/_engine' }); } catch (e) {}
+    if (inner && inner.ok && inner.exists) p = p + '/Files/CA Pack';
+    else {
+        try { inner = await t.invoke('check_file_exists', { path: p + '/CA Pack/_engine' }); } catch (e) {}
+        if (inner && inner.ok && inner.exists) p = p + '/CA Pack';
+    }
     __msExp.meta.caPackPath = p;
     __msExpMarkDirty(MS_EXP_META_KEY);
     await __msExpCheck({ manual: true });
@@ -49535,6 +49667,8 @@ function __msExpStatusHtml() {
             + ' (' + months.length + ' month' + (months.length === 1 ? '' : 's') + ')');
         if (lm && lm.in) parts.push('latest taken in ' + __msExpEsc(new Date(lm.in).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })));
     } else parts.push('Nothing from the CA pack yet');
+    var nMiss = Object.keys(S.missing || {}).length;   // 8EZ
+    if (nMiss) parts.push('<span id="msExpMissing" style="color:var(--warning);" title="Grey paperclips: the bill is not on the Mac where it was recorded. Put it back; for a bill the CA pack read, rebuild that month\'s pack, and for an expense you added, edit it and Browse to the bill.">' + nMiss + ' bill' + (nMiss === 1 ? '' : 's') + ' not on the Mac</span>');
     if (C.running) parts.push('<i class="fas fa-spinner fa-spin"></i> checking…');
     else if (S.meta.lastCheck) parts.push('checked ' + __msExpEsc(__msExpAgo(S.meta.lastCheck)));
     var note = '';
@@ -49716,7 +49850,8 @@ function __msExpListHtml(fy, lines) {
         var guessed = ' (matched to this payment by amount and date, not read off the bill)';
         var gstTitle = (ln.b || []).map(function (b) { return (b.vendor || 'Bill') + (b.no ? ' ' + b.no : '') + ': CGST ' + b.cgst + ', SGST ' + b.sgst + ', IGST ' + b.igst + (b.guessed ? guessed : ''); }).join('\n');
         var bills = (ln.b || []).map(function (b, k) {
-            return '<a href="#" onclick="__msExpOpenBill(\'' + __msExpEsc(ln.i) + '\', ' + k + '); return false;" title="' + __msExpEsc((b.vendor || 'Bill') + (b.no ? ' · ' + b.no : '') + ' · ' + (b.file || b.path || '') + (b.guessed ? guessed : '')) + '" style="color:var(--accent-cyan);"><i class="fas fa-paperclip"></i>' + (b.guessed ? '<span style="font-size:9px; color:var(--text-dim);">?</span>' : '') + '</a>';
+            var miss = __msExp.missing[__msExpBillKey(ln.i, k)];   // 8EZ: not on the Mac where the CA pack recorded it
+            return '<a href="#" onclick="__msExpOpenBill(\'' + __msExpEsc(ln.i) + '\', ' + k + '); return false;" title="' + __msExpEsc((miss ? 'Not on the Mac at ' + miss + ' \u2014 moved or renamed? ' + __msExpBillAdvice(ln) + '\n' : '') + (b.vendor || 'Bill') + (b.no ? ' · ' + b.no : '') + ' · ' + (b.file || b.path || '') + (b.guessed ? guessed : '')) + '" style="color:' + (miss ? 'var(--text-dim)' : 'var(--accent-cyan)') + ';"' + (miss ? ' data-missing="1"' : '') + '><i class="fas fa-paperclip"></i>' + (miss ? '<i class="fas fa-exclamation" style="font-size:8px; color:var(--warning); margin-left:1px;"></i>' : '') + (b.guessed ? '<span style="font-size:9px; color:var(--text-dim);">?</span>' : '') + '</a>';
         }).join(' ');
         html += '<tr data-id="' + __msExpEsc(ln.i) + '">'
             + '<td style="white-space:nowrap;">' + __msExpEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
