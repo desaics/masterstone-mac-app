@@ -11309,17 +11309,30 @@ window.__msRenderMissingOneDriveLinks = function () {
         <select id="conConsultantFilter" onchange="renderConsultantPayments()" style="width:220px;">
           <option value="ALL">All Consultants</option>
         </select>
-        <select id="conPeriodFilter" onchange="renderConsultantPayments()" style="width:170px;">
+        <select id="conPeriodFilter" onchange="__msConPeriodChanged()" style="width:170px;">
           <option value="ALL" selected>All Time</option>
           <option value="CURRENT_MONTH">Current Month</option>
           <option value="LAST_MONTH">Last Month</option>
           <option value="CURRENT_FY">Current FY</option>
+        </select>
+        <!-- 8FE — the financial year (April–March) of the consultant's invoice date; filled from the payments -->
+        <select id="conFyFilter" onchange="__msConFyChanged()" style="width:170px;" aria-label="Financial year">
+          <option value="ALL" selected>All Fiscal Years</option>
         </select>
       </div>
     </div>
 
     <!-- Register table -->
     <div class="card">
+      <!-- 8FE — the register's header, as on Receivables and Payables: the Selected Total (the payments on screen) on the right,
+           hidden when nothing narrows the list. The row keeps its height, so nothing moves when the box appears. -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap; min-height:44px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-list-alt"></i> Full Payment Register</h3>
+        <div id="conFilterTotal" title="The total of the payments on screen" style="display:none; padding:6px 12px; border:1px solid var(--glass-border-strong); border-radius:4px; background:var(--detail-bg); font-size:11.5px; line-height:1.3;">
+          <div style="font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:0.10em; color:var(--text-subtle);">Selected Total <span id="conFilterTotalBasis"></span></div>
+          <div id="conFilterTotalVal" style="margin-top:2px; color:var(--text-main); font-weight:600;">—</div>
+        </div>
+      </div>
       <div class="table-scroll-wrap">
         <table id="conPaymentsTable">
           <thead><tr>
@@ -11344,7 +11357,14 @@ window.__msRenderMissingOneDriveLinks = function () {
   <div id="conMasterSection" style="display:none;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
       <h2 style="margin:0;"><i class="fas fa-id-badge" style="color:var(--purple); margin-right:8px;"></i> Consultant Master</h2>
-      <button class="btn btn-primary" onclick="openConsultantForm()"><i class="fas fa-plus"></i> New Consultant</button>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <!-- 8FE — Grid (cards) or List (table); remembered -->
+        <div class="pipeline-view-toggle" role="group" aria-label="How consultants are shown">
+          <button class="pipeline-view-btn active" id="conViewGridBtn" aria-pressed="true" onclick="setConsultantMasterView('grid')"><i class="fas fa-table-cells-large"></i> Grid</button>
+          <button class="pipeline-view-btn" id="conViewListBtn" aria-pressed="false" onclick="setConsultantMasterView('list')"><i class="fas fa-list"></i> List</button>
+        </div>
+        <button class="btn btn-primary" onclick="openConsultantForm()"><i class="fas fa-plus"></i> New Consultant</button>
+      </div>
     </div>
     <div id="conMasterGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px;">
       <!-- populated by renderConsultantMaster() -->
@@ -16338,8 +16358,8 @@ function upsertClientMasterFromContract(c) {
 // (ms_cm_view_v1 / ms_rm_view_v1 — like the GST-basis switches of 8EL/8EP),
 // defaulting to Grid. Search, the count badge, the reseller filter chips, the
 // highlighted last-opened record and click-to-open work in both views.
-const MS_MASTER_VIEW_KEYS = { cm: 'ms_cm_view_v1', rm: 'ms_rm_view_v1' };
-var __msMasterViews = { cm: null, rm: null };   // read from browser storage on first use
+const MS_MASTER_VIEW_KEYS = { cm: 'ms_cm_view_v1', rm: 'ms_rm_view_v1', con: 'ms_con_view_v1' };   // 8FE: + Consultant Master
+var __msMasterViews = { cm: null, rm: null, con: null };   // read from browser storage on first use
 
 function __msMasterView(which) {
     if (__msMasterViews[which] === null) {
@@ -41856,6 +41876,7 @@ function __msSetConGstBasis(basis) {
     __msConGstBasis = (basis === 'excl') ? 'excl' : 'incl';
     try { localStorage.setItem(CON_GST_BASIS_KEY, __msConGstBasis); } catch (e) {}
     if (typeof recomputeConsultantKPIs === 'function') recomputeConsultantKPIs();
+    if (typeof __msConFilterTotal === 'function') __msConFilterTotal();   // 8FE — the Selected Total follows the switch
 }
 
 // Reflect the current basis on every switch and card label. Called from
@@ -41970,9 +41991,138 @@ function isPaymentInPeriod(payment, periodKey) {
     return true;
 }
 
+// ===== Phase 8FE — Consultants: the financial year, the Selected Total, Consultant Master as Grid or List =====
+// The Payment Register gets an "All Fiscal Years" box: the years that have payments, newest first. A payment's
+// year is the Indian financial year (April–March) of the consultant's invoice date — the date the Period box
+// already counts by — labelled as on the Invoices page ("FY 25-26"). A year and a period never narrow the list
+// together: picking one sets the other back to all, so the two cannot leave the list empty between them.
+// The Selected Total (as on Receivables and Payables) adds up the payments on screen whenever anything narrows
+// the list — year, period, status, consultant or search — on the cards' Incl / Excl GST basis, and hides when
+// every payment is shown. The cards above stay totals of everything, as before.
+// Consultant Master gets the Grid / List switch of Client Master and Resellers / Partners, remembered in
+// browser storage (ms_con_view_v1) and Grid by default — Grid is the cards exactly as they were; List is one
+// row per consultant (click a row to edit; "+ Payment" on each row).
+
+// The year a financial year starts in (April–March): '2025-04-01' → 2025, '2026-03-31' → 2025; null when
+// there is no date. A plain 'YYYY-MM-DD' date (what the form and the import store) is read as written — no time
+// zone can move it to another day; a date with a time is read in the Mac's own time, as the Period box reads it.
+function __msConFyStart(d) {
+    var s = String(d || '').trim();
+    if (!s) return null;
+    var y, mo, m = /^(\d{4})-(\d{2})-\d{2}$/.exec(s);
+    if (m) { y = parseInt(m[1], 10); mo = parseInt(m[2], 10); }
+    else {
+        var dt = new Date(s);
+        if (isNaN(dt.getTime())) return null;
+        y = dt.getFullYear(); mo = dt.getMonth() + 1;
+    }
+    if (!(mo >= 1 && mo <= 12)) return null;
+    return mo >= 4 ? y : y - 1;
+}
+// The financial year of a date, as the Invoices page writes it: '2025-04-01' → 'FY 25-26'; '' when there is none.
+function __msConFyOf(d) {
+    var start = __msConFyStart(d);
+    if (start === null) return '';
+    return 'FY ' + String(start).slice(-2) + '-' + String(start + 1).slice(-2);
+}
+
+// Fill the year box from the payments (newest first) and return the year chosen — kept while it still has
+// payments, else back to all.
+function populateConsultantFyDropdown() {
+    var sel = document.getElementById('conFyFilter');
+    if (!sel) return 'ALL';
+    var cur = sel.value || 'ALL';
+    var starts = {};
+    (consultantPayments || []).forEach(function (p) {
+        var st = __msConFyStart(p && p.invoiceDate);
+        if (st !== null) starts[__msConFyOf(p.invoiceDate)] = st;
+    });
+    var list = Object.keys(starts).sort(function (a, b) { return starts[b] - starts[a]; });
+    if (cur !== 'ALL' && list.indexOf(cur) === -1) cur = 'ALL';
+    sel.innerHTML = '<option value="ALL">All Fiscal Years</option>'
+        + list.map(function (fy) { return '<option value="' + pEsc(fy) + '">' + pEsc(fy) + '</option>'; }).join('');
+    sel.value = cur;
+    return cur;
+}
+
+// A year and a period never narrow the list together.
+function __msConFyChanged() {
+    var fy = document.getElementById('conFyFilter'), pp = document.getElementById('conPeriodFilter');
+    if (fy && pp && fy.value !== 'ALL' && pp.value !== 'ALL') pp.value = 'ALL';
+    renderConsultantPayments();
+}
+function __msConPeriodChanged() {
+    var fy = document.getElementById('conFyFilter'), pp = document.getElementById('conPeriodFilter');
+    if (fy && pp && pp.value !== 'ALL' && fy.value !== 'ALL') fy.value = 'ALL';
+    renderConsultantPayments();
+}
+
+// The Selected Total. Called by the register with the rows on screen and whether anything narrowed them;
+// called with no arguments by the Incl / Excl GST switch (the same rows, the other basis).
+var __msConFilterLast = null;
+function __msConFilterTotal(rows, narrowed) {
+    if (rows === undefined) {
+        if (!__msConFilterLast) return;
+        rows = __msConFilterLast.rows; narrowed = __msConFilterLast.narrowed;
+    } else {
+        __msConFilterLast = { rows: rows, narrowed: !!narrowed };
+    }
+    var box = document.getElementById('conFilterTotal'), val = document.getElementById('conFilterTotalVal'), lab = document.getElementById('conFilterTotalBasis');
+    if (!box || !val) return;
+    if (!narrowed || !rows || !rows.length) { box.style.display = 'none'; return; }
+    var excl = (typeof __msGetConGstBasis === 'function') && __msGetConGstBasis() === 'excl';
+    var t = 0;
+    rows.forEach(function (p) { t += excl ? (parseFloat(p.subtotal) || 0) : (parseFloat(p.totalAmount) || 0); });
+    val.textContent = '₹' + Number(t).toLocaleString('en-IN', { maximumFractionDigits: 0 }) + ' · ' + rows.length + ' payment' + (rows.length === 1 ? '' : 's');
+    if (lab) lab.textContent = excl ? '· excl. GST' : '· incl. GST';
+    box.style.display = 'inline-block';
+}
+
+// Consultant Master: Grid or List (the 8EY switch, a third page).
+function getConsultantMasterView() { return __msMasterView('con'); }
+function setConsultantMasterView(v) { __msSetMasterView('con', v); renderConsultantMaster(); }
+
+// The List view: one row per consultant, in the cards' order (active first, then archived; A–Z within each).
+function __msConMasterListHtml(list) {
+    var rows = list.map(function (c) {
+        var pays = consultantPayments.filter(function (p) { return p.consultantId === c.id; }).length;
+        var docs = (typeof getAttachmentCount === 'function') ? getAttachmentCount('consultant', c.id) : 0;
+        var av = __msMasterAvatar('rm', c.name || '?');
+        var dim = c.archived ? 'opacity:0.65;' : '';
+        var place = [c.city, c.state].filter(function (x) { return x && String(x).trim(); }).join(', ');
+        var gst = c.gstRegistered
+            ? (c.gstNumber ? '<span class="cm-row-mono">' + pEsc(c.gstNumber) + '</span>' : '<span class="cm-row-muted">GST, no number</span>')
+            : '<span class="cm-row-muted">No GST</span>';
+        var status = c.archived
+            ? '<span class="cm-row-flag" style="margin-left:0;">Archived</span>'
+            : '<span class="cm-client-status-dot" style="background:var(--success);"></span> <span class="cm-row-muted">Active</span>';
+        // the app's own escaping of a record key into a call (8EY), with the payment form's first argument (no payment yet)
+        var payJs = 'event.stopPropagation(); ' + __msMasterOnclick('openConsultantPaymentForm', c.id).replace(/^openConsultantPaymentForm\(/, 'openConsultantPaymentForm(null, ');
+        return __msMasterRowHtml({ active: false, onclick: __msMasterOnclick('openConsultantForm', c.id), cells: [
+            { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div>'
+                  + '<div style="min-width:0;"><div class="cm-row-title" title="' + pEsc(c.name || '') + '">' + pEsc(c.name || '(unnamed)') + '</div>'
+                  + (c.role ? '<div class="cm-row-muted">' + pEsc(c.role) + '</div>' : '') + '</div></div>', style: dim },
+            { html: pEsc(c.category || 'Consultant'), style: dim },
+            { html: c.panNumber ? '<span class="cm-row-mono">' + pEsc(c.panNumber) + '</span>' : '<span class="cm-row-muted">—</span>', style: dim },
+            { html: gst, style: dim },
+            { html: place ? pEsc(place) : '<span class="cm-row-muted">—</span>', style: dim },
+            { html: String(pays), style: 'text-align:center;' + dim },
+            { html: String(docs), style: 'text-align:center;' + dim },
+            { html: status, style: 'white-space:nowrap;' + dim },
+            { html: '<button class="btn btn-ghost btn-sm" onclick="' + pEsc(payJs) + '" onkeydown="event.stopPropagation()" title="New payment for this consultant"><i class="fas fa-plus"></i> Payment</button>', style: 'text-align:right; white-space:nowrap;' + dim }
+        ]});
+    });
+    return '<div class="cm-list-page-wrap"><div class="cm-list-table-wrap">' + __msMasterTableHtml([
+        { label: 'Consultant' }, { label: 'Category' }, { label: 'PAN' }, { label: 'GST' }, { label: 'City' },
+        { label: 'Payments', style: 'text-align:center;' }, { label: 'Docs', style: 'text-align:center;' }, { label: 'Status' }, { label: '' }
+    ], rows) + '</div></div>';
+}
+// ===== /Phase 8FE =====
+
 // ----- Payment Register render -----
 function renderConsultantPayments() {
     populateConsultantFilterDropdown();
+    const fyF = populateConsultantFyDropdown();   // 8FE — the years that have payments; the choice kept while it still has some
     const tbody = document.getElementById('conPaymentsBody');
     if (!tbody) return;
 
@@ -41989,6 +42139,7 @@ function renderConsultantPayments() {
     if (statusF !== 'ALL') rows = rows.filter(r => r.status === statusF);
     if (consultantF !== 'ALL') rows = rows.filter(r => r.consultantId === consultantF);
     rows = rows.filter(r => isPaymentInPeriod(r, periodF));
+    if (fyF !== 'ALL') rows = rows.filter(r => __msConFyOf(r.invoiceDate) === fyF);   // 8FE — the year of the invoice date
     if (search) {
         rows = rows.filter(r => {
             const consName = (getConsultantName(r.consultantId) || '').toLowerCase();
@@ -42008,6 +42159,7 @@ function renderConsultantPayments() {
     });
 
     recomputeConsultantKPIs(rows);
+    __msConFilterTotal(rows, !!search || statusF !== 'ALL' || consultantF !== 'ALL' || periodF !== 'ALL' || fyF !== 'ALL');   // 8FE — Selected Total
 
     if (rows.length === 0) {
         const msg = consultantPayments.length === 0
@@ -42076,6 +42228,9 @@ function renderConsultantPayments() {
 function renderConsultantMaster() {
     const grid = document.getElementById('conMasterGrid');
     if (!grid) return;
+    const view = getConsultantMasterView();          // 8FE — Grid (the cards, as before) or List (a table); remembered
+    __msSyncMasterViewUi('con', view);
+    grid.style.display = view === 'list' ? 'block' : 'grid';
     if (consultants.length === 0) {
         grid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding:40px; color:var(--text-dim); font-style:italic;">
             No consultants yet. Click <strong>+ New Consultant</strong> above to add one.
@@ -42087,6 +42242,7 @@ function renderConsultantMaster() {
         if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
         return (a.name || '').localeCompare(b.name || '');
     });
+    if (view === 'list') { grid.innerHTML = __msConMasterListHtml(sorted); return; }   // 8FE
     grid.innerHTML = sorted.map(c => {
         const paymentCount = consultantPayments.filter(p => p.consultantId === c.id).length;
         const attCount = (typeof getAttachmentCount === 'function')
