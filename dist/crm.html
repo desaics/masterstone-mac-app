@@ -7100,7 +7100,13 @@ window.__msRenderMissingOneDriveLinks = function () {
                     inv = invoices.find(function (x) { return x && x.invoiceNumber === invOrNumber; });
                 }
             }
-            if (!inv || !inv.signedPdfAttachmentId || !inv.id) return '';
+            if (!inv) return '';
+            // 8FD — an invoice imported from the Masters carries the path of its PDF in Files/Sales Invoices
+            if (!inv.signedPdfAttachmentId && inv.localPdfPath && typeof window.__msDocAnchor === 'function') {
+                return ' ' + window.__msDocAnchor(inv.localPdfPath, '', 'class="signed-inv-pin" title="Open the invoice PDF (Files)" style="color:var(--success); text-decoration:none; margin-left:4px;"',
+                    '<i class="fas fa-paperclip" style="font-size:11px;"></i>');
+            }
+            if (!inv.signedPdfAttachmentId || !inv.id) return '';
             var safeId = String(inv.id)
                 .replace(/&/g, '&amp;')
                 .replace(/"/g, '&quot;')
@@ -7175,6 +7181,7 @@ window.__msRenderMissingOneDriveLinks = function () {
                     return '<a href="#" onclick="event.stopPropagation(); window.__msOpenSignedInvoicePdf(\''
                         + safeId + '\'); return false;" ' + (attrs || '') + '>' + innerHtml + '</a>';
                 }
+                if (inv && inv.localPdfPath && !localPath) localPath = inv.localPdfPath;   // 8FD — the PDF of an invoice imported from the Masters
             }
         } catch (e) { /* fall through to the standard document anchor */ }
         return window.__msDocAnchor(localPath, url, attrs, innerHtml);
@@ -7288,6 +7295,8 @@ window.__msRenderMissingOneDriveLinks = function () {
   <!-- Phase 8BV — Document Export hub: per-deal Remittance Bundle + per-client
        Document Pack as .zip with an INDEX.txt checklist. -->
   <div class="nav-item" title="Document Export" onclick="showTab('docExportTab')"><i class="fas fa-box-archive"></i> Document Export</div>
+  <!-- 8FD — Import from the Masters: what the engine read from Files/Masters, the PDFs and the bank lines, proposed for the app. -->
+  <div class="nav-item" title="Import" onclick="showTab('importTab')"><i class="fas fa-file-import"></i> Import</div>
 
   <div class="nav-section-header">Admin</div>
   <div class="nav-item" title="System Controls" onclick="showTab('backupTab')"><i class="fas fa-cog"></i> System Controls</div>
@@ -11353,6 +11362,11 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div id="bankStatementsTab" class="hidden">
   <div id="msBsRoot"></div>
 </div><!-- end #bankStatementsTab -->
+
+<!-- 8FD — Import from the Masters (drawn by renderImportPage) -->
+<div id="importTab" class="hidden">
+  <div id="msImpRoot"></div>
+</div><!-- end #importTab -->
 
 <!-- ============================================================================
      8YZ — CONSULTANT PAYMENT FORM (full-page tab, mirrors Invoice form pattern)
@@ -20129,7 +20143,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab,#importTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -20332,6 +20346,11 @@ function showTab(tab) {
             if (__msBs.state === 'idle' || __msBs.state === 'failed' || (__msBs.state === 'ready' && Date.now() - (__msBs.at || 0) > 120000)) __msBsLoad();
             else if (__msBs.state === 'ready') __msBsLoadMonths();
         } catch (e) { console.warn('Bank statements tab error:', e); }
+    }
+
+    // Phase 8FD — Import from the Masters: draw the page; read the engine's list (again after two minutes or on Refresh).
+    if (tab === 'importTab') {
+        try { __msImpOnTab(); } catch (e) { console.warn('Import tab error:', e); }
     }
 
     // Phase 8EH — show/hide the "invoice draft in progress" pill.
@@ -21616,6 +21635,7 @@ async function saveContract() {
             oemInvoiceNo: existing.oemInvoiceNo || '',
             oemInvoiceDate: existing.oemInvoiceDate || null,
             oemPaymentDate: existing.oemPaymentDate || null,
+            clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
             arInvoices: existing.arInvoices || [],
             apInvoices: existing.apInvoices || []
         });
@@ -21648,6 +21668,7 @@ async function saveContract() {
                     oemInvoiceNo: existing.oemInvoiceNo || '',
                     oemInvoiceDate: existing.oemInvoiceDate || null,
                     oemPaymentDate: existing.oemPaymentDate || null,
+            clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
                     arInvoices: existing.arInvoices || [],
                     apInvoices: existing.apInvoices || []
                  });
@@ -21681,6 +21702,7 @@ async function saveContract() {
                     oemInvoiceNo: existing.oemInvoiceNo || '',
                     oemInvoiceDate: existing.oemInvoiceDate || null,
                     oemPaymentDate: existing.oemPaymentDate || null,
+            clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
                     arInvoices: existing.arInvoices || [],
                     apInvoices: existing.apInvoices || []
                 });
@@ -23018,7 +23040,7 @@ function openUnifiedModal(cIdx, yIdx) {
     if (y.arInvoices && y.arInvoices.length > 0) {
         y.arInvoices.forEach(inv => addArInvoiceRow(inv.invNo, inv.date, inv.amount, inv.paidDate, inv.link, inv.localPath || ''));
     } else if (y.clientInvoiceNo || y.actualInvoiceDate) {
-        addArInvoiceRow(y.clientInvoiceNo || '', y.actualInvoiceDate || '', cycleRev, y.paymentDate || '', y.clientInvoiceLink || '');
+        addArInvoiceRow(y.clientInvoiceNo || '', y.actualInvoiceDate || '', cycleRev, y.paymentDate || '', y.clientInvoiceLink || '', y.clientInvoiceLocalPath || '');   // 8FD — with its PDF's path
     } else {
         addArInvoiceRow('', '', cycleRev, '', '');
     }
@@ -23027,7 +23049,7 @@ function openUnifiedModal(cIdx, yIdx) {
     if (y.apInvoices && y.apInvoices.length > 0) {
         y.apInvoices.forEach(inv => addApInvoiceRow(inv.invNo, inv.date, inv.amount, inv.fx, inv.payDate, inv.link, isINR ? 'INR' : 'USD', inv.localPath || '', inv.apId || '', inv.uploadAttId || '', inv));
     } else if (y.oemInvoiceNo || y.oemInvoiceDate) {
-        addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD', '', '', '', {});   // 8ET — an old saved bill: nothing filled in
+        addApInvoiceRow(y.oemInvoiceNo || '', y.oemInvoiceDate || '', cycleCostUSD, y.settlementFX || (isINR ? '1.00' : ''), y.oemPaymentDate || '', y.oemInvoiceLink || '', isINR ? 'INR' : 'USD', y.oemInvoiceLocalPath || '', '', '', {});   // 8FD — with its PDF's path   // 8ET — an old saved bill: nothing filled in
     } else {
         addApInvoiceRow('', '', cycleCostUSD, isINR ? '1.00' : '', '', '', isINR ? 'INR' : 'USD');
     }
@@ -31394,16 +31416,19 @@ function _propagateInvoiceToContractCycle(inv) {
         // Any manual entries that previously existed in arInvoices[] for this
         // cycle are overwritten. The unified billing modal can still be used
         // to override post hoc.
+        // 8FD — the entry's document links (OneDrive link, local path) survive when it is the same invoice:
+        // a Mark-Issued or a payment must not drop the paperclip filled in by hand or by the import.
+        const oldAr = Array.isArray(cycle.arInvoices) ? cycle.arInvoices : [];
+        const sameOld = (oldAr.length === 1 && oldAr[0] && oldAr[0].invNo === (active.invoiceNumber || '')) ? oldAr[0] : null;
         const newArEntry = {
             invNo: active.invoiceNumber || '',
             date: active.invoiceDate || '',
             amount: parseFloat(active.grandTotal) || 0,
             paidDate: paymentDate || '',
-            link: '',
-            localPath: ''
+            link: sameOld ? (sameOld.link || '') : '',
+            localPath: sameOld ? (sameOld.localPath || '') : ''
         };
         // Compare to detect change
-        const oldAr = Array.isArray(cycle.arInvoices) ? cycle.arInvoices : [];
         const arChanged = oldAr.length !== 1
             || oldAr[0].invNo !== newArEntry.invNo
             || oldAr[0].date !== newArEntry.date
@@ -31753,7 +31778,7 @@ function renderInvoicesListView(filtered) {
             <td>${daysCell}</td>
             <td style="text-align:right;">
                 ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); composeInvoiceReminder('${inv.id}')" title="Send payment reminder" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i></button>` : ''}
-                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : 'Download PDF'}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : (inv.localPdfPath ? 'Open the invoice PDF (Files)' : 'Download PDF')}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openInvoiceDetail('${inv.id}')"><i class="fas fa-arrow-right"></i></button>
             </td>
         </tr>`;
@@ -34540,6 +34565,12 @@ function downloadInvoicePDF(invId) {
         // PDF, why am I seeing the unsigned generated one?").
         diag('CRITICAL', 'downloadInvoicePDF: orphan signed-PDF ref detected at click time', { invoiceNumber: inv.invoiceNumber, orphanAttId: inv.signedPdfAttachmentId });
         alert(`The signed PDF for ${inv.invoiceNumber} is referenced but not in storage. Open the invoice and use "Upload Signed PDF" to re-upload, or click 🐞 Diag → 🔧 Repair Orphans to clean up.`);
+        return;
+    }
+    // 8FD — an invoice imported from the Masters: open its PDF from Files (the generated one would not be the issued invoice).
+    if (inv && inv.localPdfPath && typeof window.__msOpenLocalFile === 'function') {
+        diag('INFO', 'downloadInvoicePDF: opening the imported invoice\'s PDF', { path: inv.localPdfPath });
+        window.__msOpenLocalFile(inv.localPdfPath);
         return;
     }
     // Fallback: open print preview of the generated PDF (legacy behaviour).
@@ -42003,7 +42034,11 @@ function renderConsultantPayments() {
         const otherCount = attList.filter(a => !(a.description || '').startsWith('Invoice')).length;
         const totalAttCount = attList.length;
         let filesCellHtml;
-        if (totalAttCount === 0) {
+        if (totalAttCount === 0 && r.localPath && typeof window.__msDocAnchor === 'function') {
+            // 8FD — a payment imported from the Masters: its invoice PDF lives in Files/Purchase Invoices
+            filesCellHtml = window.__msDocAnchor(r.localPath, '', `title="Open the invoice PDF (Files)" style="display:inline-flex; align-items:center; gap:3px; font-size:10.5px; padding:2px 7px; border-radius:999px; background:var(--accent-tint-low); color:var(--accent-cyan); font-weight:600; text-decoration:none; margin-right:4px;"`, '<i class="fas fa-paperclip" style="font-size:9px;"></i>PDF')
+                + `<a href="#" onclick="event.stopPropagation(); openConsultantPaymentForm('${pEsc(r.id)}'); return false;" title="Edit payment" style="color:var(--accent-cyan); padding:2px 6px; text-decoration:none;"><i class="fas fa-pencil-alt" style="font-size:11px;"></i></a>`;
+        } else if (totalAttCount === 0) {
             // No attachments — pin disabled, pencil only
             filesCellHtml = `<span style="color:var(--text-dim); font-size:11px; margin-right:6px;">—</span>
                 <a href="#" onclick="event.stopPropagation(); openConsultantPaymentForm('${pEsc(r.id)}'); return false;" title="Edit payment" style="color:var(--accent-cyan); padding:2px 6px; text-decoration:none;"><i class="fas fa-pencil-alt" style="font-size:11px;"></i></a>`;
@@ -51765,6 +51800,1473 @@ function exportRemittancesExcel() {
     __msRmtToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Remittances exported — <strong>' + __msRmtEsc(fname) + '</strong>', 4000);
 }
 // =================== /Phase 8FC — Remittances abroad on the Payables page ===================
+
+// =================== Phase 8FD — Import from the Masters (Tools › Import) (10 Oct 2026) ===================
+// The engine (CA Pack/_engine/app_import.py, run by the CA pack) reads every Sales and Payments row of
+// Files/Masters/Master_<FY>.xlsx from 2021-22, ties each to its PDF in Files/Sales Invoices, Files/Purchase
+// Invoices, finds the receipt or payment the Master does not record (the bank lines, the remittances), reads
+// the numbers in the PO files, pairs OEM bills with the sales they were bought for, and writes
+// _engine/app_import/index.json. This page reads that list, works out what the app already has (an invoice in
+// the Invoices module, a cycle on a contract, a bill on a cycle, a consultant's payment) and proposes the rest:
+//   - sales invoices not in the app at all → records in the Invoices module (number, items, GST split, the
+//     receipt and the TDS the client kept back, the PDF);
+//   - OEM bills with their sales → new contracts (client, product, cycles, the bills and invoices, the PO files),
+//     never a change to a contract already entered — a bill that belongs to one is an opt-in, unticked;
+//   - consultants' and vendors' invoices → the Consultants module (the consultant made where missing; Vikas
+//     Chauhan and Stone Temple Systems are the one consultant already there);
+//   - document links on what is already entered: the PDF of each invoice, bill and PO, where the link is empty,
+//     stale (the old folder names) or points at the old personal OneDrive — never the figures.
+// Everything added is stamped with a batch; the last batch can be undone. Nothing is written until "Add the
+// selected" is clicked and the question answered.
+var MS_IMP_APP_DIR = '/_engine/app_import';
+var MS_IMP_FRESH_MS = 120000;
+var MS_IMP_BATCH_KEY = 'ms_app__import_batches_v1';
+var MS_IMP_MAX_ROWS = 400;
+var __msImp = { idx: null, at: 0, error: '', missing: false, reading: false, again: false, retries: 0, root: '', filesRoot: '', rev: 0, known: null, dropped: 0,
+                exists: {}, toCheck: {}, checking: false,
+                ui: { fy: null, q: '', open: { sales: true, bills: true, vendors: true, contracts: true, links: false, batches: false } },
+                ticks: {}, plan: null, planKey: '', batches: null, batchesState: 'idle', batchesError: '', working: false, lastResult: null };
+var MS_IMP_ALIASES = [
+    ['63MOONS', /63 ?MOONS/i], ['CAMS', /(^|[^A-Z0-9])CAMS([^A-Z0-9]|$)|COMPUTER AGE/i], ['CARE', /(^|[^A-Z0-9])CARE([^A-Z0-9]|$)|QUALITY CARE/i],
+    ['JKCEMENT', /J\.?K\.? ?CEMENTS?|JKCL|JKCEMENTS?/i], ['KVB', /(^|[^A-Z0-9])KVB([^A-Z0-9]|$)|KARUR/i], ['APB', /(^|[^A-Z0-9])(APB|SDS)([^A-Z0-9]|$)|AIRTEL|STARLIGHT/i],
+    ['AMNS', /AMNS|AM_NS|AM NS|ARCELOR|AM\/NS/i], ['MRF', /(^|[^A-Z0-9])MRF([^A-Z0-9]|$)/i], ['MMT', /(^|[^A-Z0-9])MMT([^A-Z0-9]|$)|MAKE ?MY ?TRIP/i],
+    ['AMPHENOL', /AMPHENOL/i], ['ABP', /(^|[^A-Z0-9])ABP([^A-Z0-9]|$)/i], ['TIMES', /(^|[^A-Z0-9])TIMES|BENNETT/i], ['HCL', /(^|[^A-Z0-9])HCL([^A-Z0-9]|$)/i],
+    ['COVERMORE', /COVERMORE|COVER-MORE|KARVAT/i], ['NKGSB', /NKGSB/i], ['TRANSDIGM', /TRANSDIGM|CYBERSPACE/i], ['BBK', /(^|[^A-Z0-9])BBK([^A-Z0-9]|$)|BAHRAIN/i],
+    ['63SATS', /63 ?SATS/i], ['ANANDRATHI', /ANAND ?RATHI/i], ['MPHASIS', /MPHASIS/i], ['SHARED', /MASTERSTONE/i]
+];
+var MS_IMP_OEM_NAMES = { darktrace: 'Darktrace Holdings Limited', addigy: 'Addigy Inc.', rah: 'Rah Infotech Private Limited', redington: 'Redington India Limited',
+                         integra: 'Integra Micro Systems (P) Ltd', '63sats': '63SATS Cybertech Limited', gpn: 'Global Payment Networks Limited' };
+var MS_IMP_OEM_PRODUCT = { addigy: 'MSP Initiator Pac', rah: 'M365 SAAS', redington: 'Trend Micro', integra: 'Aadhaar Data Vault', '63sats': 'Cisco Secure Email', gpn: 'Morphisec' };
+
+// ---- little helpers ---------------------------------------------------------------------------
+// The first two words of a bill's first line that name what it is for, leaving out the OEM's own name and words that say
+// nothing of the product: 'Apex one Solution on premise with EDR' → Apex one; 'Deep Security - Malware Prevention' → Deep Security.
+var MS_IMP_LINE_STOP = ['renewal', 'renewals', 'the', 'for', 'being', 'charges', 'towards', 'supply', 'subscription', 'subscriptions', 'license', 'licence', 'licenses', 'licences',
+                        'annual', 'year', 'years', 'yearly', 'month', 'months', 'monthly', 'solution', 'solutions', 'with', 'and', 'per', 'new', 'service', 'services', 'support', 'premium',
+                        'premise', 'premises', 'from', 'pack', 'invoice', 'bill'];
+function __msImpLineWords(p) {
+    var own = {};
+    [p.head, p.product, MS_IMP_OEM_PRODUCT[p.oem], MS_IMP_OEM_NAMES[p.oem], p.party_canon, p.party].forEach(function (x) { String(x || '').toLowerCase().split(/[^a-z]+/).forEach(function (w) { if (w) own[w] = true; }); });
+    var out = [];
+    String(__msImpFirstLine(p.items, 400)).split(/[^A-Za-z]+/).forEach(function (w) {
+        var lw = w.toLowerCase();
+        if (lw.length < 3 || own[lw] || MS_IMP_LINE_STOP.indexOf(lw) !== -1 || out.length >= 2) return;
+        out.push(w);
+    });
+    return out;
+}
+function __msImpEsc(s) { return (typeof pEsc === 'function') ? pEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function __msImpLog(level, msg, data) { try { if (typeof diag === 'function') diag(level, 'Import: ' + msg, data || {}); } catch (e) {} }
+function __msImpTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
+function __msImpToast(html, ms) { try { if (typeof showProspectToast === 'function') showProspectToast(html, ms || 4000); } catch (e) {} }
+function __msImpNum(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+function __msImpR2(n) { return Math.round(__msImpNum(n) * 100) / 100; }
+function __msImpInr(n) { n = __msImpNum(n); var s = Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (n < 0 ? '−₹' : '₹') + s; }
+function __msImpUsd(n) { return '$' + __msImpNum(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function __msImpDate(iso) { return iso ? ((typeof formatDateReadable === 'function') ? formatDateReadable(iso) : iso) : '—'; }
+function __msImpIsoOk(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
+function __msImpFyOf(iso) { if (!__msImpIsoOk(iso)) return ''; var y = parseInt(iso.slice(0, 4), 10), m = parseInt(iso.slice(5, 7), 10); if (m < 4) y--; return y + '-' + String((y + 1) % 100).padStart(2, '0'); }
+function __msImpFyLabel(fy) { return 'FY ' + fy; }
+function __msImpCode(s) { return String(s == null ? '' : s).trim().toUpperCase().replace(/\s+/g, ''); }
+function __msImpLoose(s) { return String(s == null ? '' : s).toUpperCase().replace(/[^0-9A-Z]/g, ''); }
+function __msImpBillKey(no) { return String(no == null ? '' : no).toUpperCase().replace(/^DTGBR01[_ ]?/, '').replace(/[^0-9A-Z]/g, ''); }
+// An export paid in dollars: the rupees received differ from the invoice's rupee value by the exchange rate — not money owed.
+// The shortfall (above the rupee or two rounded into the receipt, up to 3% of the invoice), else 0.
+function __msImpFxDiff(r) {
+    if (!r || r.kind !== 'export' || !r.receipt || !(__msImpNum(r.receipt.amount) > 0)) return 0;
+    var d = __msImpR2(__msImpNum(r.total) - __msImpNum(r.receipt.amount) - __msImpNum(r.tds_adjusted));
+    return (d > 2.5 && d <= __msImpNum(r.total) * 0.03) ? d : 0;
+}
+// '23-24/12/DT174' and '23-24/09/DT174', '24-25/03/DT197' and '24-25/03/DT197a': the year and the serial ('23-24|DT174').
+function __msImpSerialKey(code) { var m = __msImpCode(code).match(/^(\d\d-\d\d)\/(?:\d\d\/)?([A-Z]+)(\d+)[A-Z]?$/); return m ? m[1] + '|' + m[2] + String(parseInt(m[3], 10)) : ''; }
+// A sale the app has under another way of writing its number: the same year and serial, and the same amount or a date within 45 days.
+function __msImpSameClient(r, appClient) {
+    var a1 = __msImpAlias((r.client || '') + ' ' + (r.end_client_hint || '')), a2 = __msImpAlias(appClient || '');
+    if (a1 && a2) return a1 === a2;
+    var t1 = __msImpLoose(r.client).slice(0, 8), t2 = __msImpLoose(appClient).slice(0, 8);
+    return !!t1 && t1 === t2;
+}
+function __msImpSerialHit(r, M) {
+    var sk = __msImpSerialKey(r.code); if (!sk) return null;
+    var hits = (M.bySerial[sk] || []).filter(function (x) {
+        if (__msImpCode(x.code) === __msImpCode(r.code)) return false;
+        var amt = x.amount !== null && x.amount !== undefined && x.amount > 0 && (Math.abs(x.amount - __msImpNum(r.total)) <= 1 || Math.abs(x.amount - __msImpNum(r.base)) <= 1);
+        var g = (x.date && r.date) ? __msImpDays(x.date, r.date) : null;
+        return amt || (g !== null && Math.abs(g) <= 45 && __msImpSameClient(r, x.client));
+    });
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1 && hits.every(function (x) { return x.kind === 'cycle' && __msImpCode(x.code) === __msImpCode(hits[0].code); })) return { kind: 'cycle', refs: hits.map(function (x) { return x.ref; }), code: hits[0].code };   // one invoice on two contracts
+    return null;
+}
+function __msImpAlias(s) { s = String(s || ''); for (var i = 0; i < MS_IMP_ALIASES.length; i++) if (MS_IMP_ALIASES[i][1].test(s)) return MS_IMP_ALIASES[i][0]; return ''; }
+// A file the engine lists, on this Mac: the Files folder is the one above the CA Pack folder the app reads (the engine may have
+// run elsewhere — its own path in the list is never used).
+function __msImpAbs(rel) { var root = __msImp.filesRoot || ''; return root ? root + '/' + String(rel || '').replace(/^\/+/, '') : ''; }
+function __msImpBase(p) { return String(p || '').split('/').pop(); }
+function __msImpAddMonths(iso, n) {
+    var d = new Date(iso + 'T00:00:00Z'); if (isNaN(d.getTime())) return iso;
+    var day = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n);
+    var last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, last));                                   // 30 Jan + 1 month = 28 Feb, not 2 Mar
+    return d.toISOString().slice(0, 10);
+}
+function __msImpAddDays(iso, n) { var d = new Date(iso + 'T00:00:00Z'); if (isNaN(d.getTime())) return iso; d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function __msImpDays(a, b) { if (!__msImpIsoOk(a) || !__msImpIsoOk(b)) return null; return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000); }
+function __msImpMonthsBetween(a, b) { var d = __msImpDays(a, b); return d === null ? 12 : Math.max(1, Math.round(d / 30.4375)); }
+function __msImpFirstLine(s, n) { var t = String(s || '').replace(/\t/g, ' ').split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean); var out = t.length ? t[0] : ''; return out.length > (n || 120) ? out.slice(0, (n || 120) - 1) + '…' : out; }
+function __msImpTabOpen() { var tab = document.getElementById('importTab'); return !!(tab && !tab.classList.contains('hidden')); }
+function __msImpNewId(prefix) { return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6); }
+function __msImpStyles() {
+    if (document.getElementById('msImpStyle')) return;
+    var st = document.createElement('style'); st.id = 'msImpStyle';
+    st.textContent = '.ms-imp-table{width:100%;border-collapse:collapse;font-size:12px}.ms-imp-table th{text-align:left;font-size:11px;color:var(--text-dim);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--glass-border);white-space:nowrap}'
+        + '.ms-imp-table td{padding:6px 8px;border-bottom:1px solid var(--glass-border);vertical-align:top}.ms-imp-table td.wrap{white-space:normal;line-height:1.45}.ms-imp-table tr.ms-imp-off td{opacity:.55}.ms-imp-table td.num,.ms-imp-table th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}'
+        + '.ms-imp-st{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:999px;font-weight:600;white-space:nowrap}.ms-imp-st.app{background:var(--accent-tint-low,rgba(0,200,200,.12));color:var(--accent-cyan)}'
+        + '.ms-imp-st.cycle{background:rgba(120,120,255,.12);color:var(--purple,#9b7bff)}.ms-imp-st.new{background:rgba(0,200,100,.12);color:var(--success)}.ms-imp-st.opt{background:rgba(255,180,0,.14);color:var(--warning)}.ms-imp-st.skip{background:var(--detail-bg);color:var(--text-dim)}'
+        + '.ms-imp-pin{color:var(--accent-cyan);text-decoration:none;margin-left:4px}.ms-imp-sec{margin-bottom:16px}.ms-imp-sec h3{margin:0;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:8px}.ms-imp-sec h3 .n{font-size:11px;color:var(--text-dim);font-weight:500}'
+        + '.ms-imp-note{font-size:11px;color:var(--text-dim)}.ms-imp-warn{color:var(--warning)}.ms-imp-fy{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.ms-imp-fy .arap-subtab{padding:6px 12px}'
+        + '.ms-imp-card{border:1px solid var(--glass-border);border-radius:10px;padding:10px 14px;margin-bottom:10px;background:var(--detail-bg)}.ms-imp-card.off{opacity:.55}.ms-imp-kv{font-size:12px;line-height:1.6}.ms-imp-kv b{color:var(--text-main)}'
+        + '.ms-imp-strip{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;margin:8px 0 14px}.ms-imp-strip .k{color:var(--text-dim);font-size:11px}.ms-imp-strip .v{font-weight:700;font-size:14px}';
+    document.head.appendChild(st);
+}
+
+// ---- the engine's list ------------------------------------------------------------------------
+function __msImpRowOk(r, kind) {
+    if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !/^[SP]\d{6}:\d{3}$/.test(r.id) || typeof r.fy !== 'string' || !/^\d{4}-\d{2}$/.test(r.fy)) return false;
+    if (r.date !== null && r.date !== undefined && !__msImpIsoOk(r.date)) return false;
+    if (kind === 'sale') { if (typeof r.code !== 'string' || !r.code) return false; }
+    else { if (typeof r.number !== 'string' || typeof r.party !== 'string' || (r.kind !== 'oem' && r.kind !== 'vendor')) return false; }
+    if (r.total !== null && r.total !== undefined && !isFinite(Number(r.total))) return false;
+    if (r.file && (typeof r.file !== 'object' || typeof r.file.rel !== 'string')) return false;
+    return true;
+}
+function __msImpIndexOk(d) {
+    if (!d || typeof d !== 'object' || d.kind !== 'masterstone-import-index' || d.format !== 1 || typeof d.root !== 'string' || !d.root) return null;
+    if (!Array.isArray(d.sales) || !Array.isArray(d.payments) || !Array.isArray(d.pairs) || !d.docs || typeof d.docs !== 'object') return null;
+    var dropped = 0;
+    var sales = d.sales.filter(function (r) { var o = __msImpRowOk(r, 'sale'); if (!o) dropped++; return o; });
+    var payments = d.payments.filter(function (r) { var o = __msImpRowOk(r, 'pay'); if (!o) dropped++; return o; });
+    var ids = {}; sales.concat(payments).forEach(function (r) { ids[r.id] = r; });
+    var pairs = d.pairs.filter(function (p) { var o = p && ids[p.bill] && ids[p.sale]; if (!o) dropped++; return o; });
+    var docs = {};
+    ['sales', 'purchase', 'internal_po', 'client_po'].forEach(function (k) {
+        docs[k] = (Array.isArray(d.docs[k]) ? d.docs[k] : []).filter(function (x) { return x && typeof x.rel === 'string' && typeof x.name === 'string'; });
+    });
+    return { kind: d.kind, format: 1, sig: String(d.sig || ''), made: String(d.made || ''), root: d.root.replace(/\/+$/, ''), masters: Array.isArray(d.masters) ? d.masters : [],
+             sales: sales, payments: payments, pairs: pairs, clients: (d.clients && typeof d.clients === 'object') ? d.clients : {}, parties: (d.parties && typeof d.parties === 'object') ? d.parties : {},
+             docs: docs, unmatched_docs: d.unmatched_docs || {}, unread: Array.isArray(d.unread) ? d.unread : [], errors: Array.isArray(d.errors) ? d.errors : [], by_fy: d.by_fy || {}, stats: d.stats || {}, dropped: dropped };
+}
+async function __msImpRead(force) {
+    if (__msImp.reading) { __msImp.again = __msImp.again || !!force; return; }
+    if (!force && __msImp.at && Date.now() - __msImp.at < MS_IMP_FRESH_MS) return;
+    var t = __msImpTauri();
+    if (!t || typeof __msExpCaPackPath !== 'function' || typeof __msExpReadJson !== 'function') {
+        __msImp.idx = null; __msImp.error = ''; __msImp.missing = true; __msImp.at = Date.now();
+        __msImpRefreshIfOpen();
+        return;
+    }
+    __msImp.reading = true;
+    __msImpRefreshIfOpen();
+    try {
+        var root = await __msExpCaPackPath();
+        __msImp.root = root || '';
+        var fr = String(root || '').replace(/\/+$/, '').replace(/\/[^\/]+$/, '');
+        if (fr !== __msImp.filesRoot) { __msImp.filesRoot = fr; __msImp.known = null; __msImp.plan = null; __msImp.exists = {}; }
+        else if (force) { __msImp.exists = {}; __msImp.plan = null; }       // Refresh: ask the Mac about the files again
+        if (!root) { __msImp.error = 'The app could not work out where your CA Pack folder is.'; __msImp.missing = false; return; }
+        var r = await __msExpReadJson(root + MS_IMP_APP_DIR + '/index.json');
+        if (!r.ok) {
+            if (r.missing && typeof __msExp !== 'undefined' && __msExp && __msExp.state !== 'ready' && __msImp.retries < 3) {
+                __msImp.retries++;
+                setTimeout(function () { __msImp.at = 0; if (__msImpTabOpen()) __msImpRead(false); }, 3000);
+            }
+            if (r.missing) { if (!__msImp.idx) __msImp.missing = true; __msImp.error = __msImp.idx ? 'The engine\'s list is no longer at ' + root + MS_IMP_APP_DIR + ' — what was read before is shown.' : ''; }
+            else { __msImp.missing = false; __msImp.error = 'The engine\'s list ' + r.error + '.' + (__msImp.idx ? ' What was read before is shown.' : ''); }
+            return;
+        }
+        var idx = __msImpIndexOk(r.data);
+        if (!idx) { __msImp.missing = false; __msImp.error = 'The engine\'s list is not in the expected shape.' + (__msImp.idx ? ' What was read before is shown.' : ''); return; }
+        var changed = !__msImp.idx || __msImp.idx.sig !== idx.sig || __msImp.idx.made !== idx.made;
+        __msImp.idx = idx; __msImp.error = ''; __msImp.missing = false; __msImp.dropped = idx.dropped;
+        if (changed) { __msImp.rev++; __msImp.known = null; __msImp.plan = null; }
+        __msImpLog('INFO', changed ? 'the list was read' : 'the list was read again (unchanged)', { sales: idx.sales.length, payments: idx.payments.length, pairs: idx.pairs.length, made: idx.made, dropped: idx.dropped });
+    } catch (e) {
+        __msImp.error = 'The engine\'s list could not be read (' + String((e && e.message) || e) + ').';
+        __msImpLog('WARN', 'the list could not be read', { error: __msImp.error });
+    } finally {
+        __msImp.reading = false;
+        __msImp.at = Date.now();
+        var again = __msImp.again;
+        __msImp.again = false;
+        __msImpRefreshIfOpen();
+        if (again) __msImpRead(true);
+    }
+}
+function __msImpRefreshIfOpen() { if (!__msImpTabOpen()) return; try { renderImportPage(); } catch (e) { __msImpLog('WARN', 'redraw failed', { error: String((e && e.message) || e) }); } }
+// Called by showTab: draw, read the list (again after two minutes or on Refresh), load the batches.
+function __msImpOnTab() {
+    __msImpStyles();
+    __msImp.plan = null;
+    if (!__msImp.reading && (!__msImp.at || Date.now() - __msImp.at >= MS_IMP_FRESH_MS)) __msImpRead(false);
+    if (__msImp.batchesState === 'idle' || __msImp.batchesState === 'error') __msImpBatchesLoad();
+    renderImportPage();
+}
+// The files the engine listed, by absolute path (what "on the Mac" means here), and by number.
+function __msImpKnown() {
+    if (__msImp.known) return __msImp.known;
+    var idx = __msImp.idx, K = { paths: {}, salesByCode: {}, salesBySerial: {}, purchByNo: [], ipo: [], cpo: [] };
+    if (!idx) return K;
+    ['sales', 'purchase', 'internal_po', 'client_po'].forEach(function (k) { idx.docs[k].forEach(function (d) { K.paths[__msImpAbs(d.rel)] = d; }); });
+    idx.docs.sales.forEach(function (d) {
+        if (d.doc_kind === 'credit_note' || d.doc_kind === 'proforma' || d.cancelled) return;
+        if (d.code) { K.salesByCode[__msImpCode(d.code)] = K.salesByCode[__msImpCode(d.code)] || []; K.salesByCode[__msImpCode(d.code)].push(d); }
+    });
+    idx.docs.purchase.forEach(function (d) { K.purchByNo.push(d); });
+    K.ipo = idx.docs.internal_po.filter(function (d) { return d.ext === '.pdf'; });
+    K.cpo = idx.docs.client_po.filter(function (d) { return d.ext === '.pdf'; });
+    __msImp.known = K;
+    return K;
+}
+// A stored path that should be replaced by the engine's file: empty, under one of the four folders but not there any more
+// (the folders were renamed), or outside the Masterstone Files folder altogether (the old personal OneDrive).
+// A file under the four folders that the engine did not list is asked about on the Mac first (it may be a file the engine
+// skips): it is stale only when it is not there.
+function __msImpPathStale(p) {
+    p = String(p || '').trim();
+    if (!p) return 'empty';
+    var K = __msImpKnown(), root = __msImp.filesRoot || '';
+    if (K.paths[p]) return '';
+    if (!root || p.indexOf(root + '/') !== 0) return 'outside';
+    var sub = p.slice(root.length + 1);
+    var four = ['Sales Invoices/', 'Purchase Invoices/', 'Internal POs/', 'Client POs/'];
+    if (!four.some(function (f) { return sub.indexOf(f) === 0; })) return '';
+    if (p in __msImp.exists) return __msImp.exists[p] === false ? 'moved' : '';
+    if (!__msImpTauri()) return 'moved';
+    __msImp.toCheck[p] = true;                                          // asked about once the plan is drawn; until then left alone
+    return '';
+}
+async function __msImpCheckPaths() {
+    var t = __msImpTauri();
+    if (!t || __msImp.checking) return;
+    var list = Object.keys(__msImp.toCheck).filter(function (p) { return !(p in __msImp.exists); });
+    __msImp.toCheck = {};
+    if (!list.length) return;
+    __msImp.checking = true;
+    try {
+        await Promise.all(list.map(function (p) {
+            return Promise.resolve().then(function () { return t.invoke('check_file_exists', { path: p }); })
+                .then(function (r) { __msImp.exists[p] = (r && r.ok) ? !!r.exists : 'unknown'; }, function () { __msImp.exists[p] = 'unknown'; });
+        }));
+    } finally {
+        __msImp.checking = false;
+        __msImp.plan = null;
+        __msImpRefreshIfOpen();
+    }
+}
+function __msImpSalesDoc(code) { var l = __msImpKnown().salesByCode[__msImpCode(code)] || []; return l.length === 1 ? l[0] : null; }
+function __msImpPurchaseDoc(no, party) {
+    var key = __msImpBillKey(no);
+    if (!key || key.length < 4) return null;
+    var hits = __msImpKnown().purchByNo.filter(function (d) { return (d.numbers || []).some(function (n) { return __msImpBillKey(n) === key; }) || __msImpLoose(d.name).indexOf(key) !== -1 && key.length >= 6; });
+    if (party && hits.length > 1) { var pk = __msImpAlias(party) || __msImpLoose(party).slice(0, 6); var narrowed = hits.filter(function (d) { return __msImpLoose(d.name).indexOf(pk) !== -1; }); if (narrowed.length) hits = narrowed; }
+    return hits.length === 1 ? hits[0] : null;
+}
+// The PO file carrying a number (in its text or its name); else the client's PO nearest a date.
+function __msImpPoDoc(kind, number, clientAlias, product, date) {
+    var list = kind === 'internal' ? __msImpKnown().ipo : __msImpKnown().cpo;
+    var key = __msImpLoose(number);
+    var hits = [];
+    if (key && key.length >= 4) {
+        hits = list.filter(function (d) {
+            if (d.number && __msImpLoose(d.number) === key) return true;
+            if ((d.text_numbers || []).some(function (n) { return __msImpLoose(n) === key; })) return true;
+            var tail = key.replace(/^0+/, '');
+            if (tail.length >= 5 && d.number && __msImpLoose(d.number).replace(/^0+/, '') === tail) return true;
+            if (tail.length >= 5 && (d.text_numbers || []).some(function (n) { return __msImpLoose(n).replace(/^0+/, '') === tail; })) return true;
+            return false;
+        });
+        if (hits.length > 1 && clientAlias) { var c = hits.filter(function (d) { return __msImpAlias(d.client_token) === clientAlias || __msImpAlias(d.name) === clientAlias; }); if (c.length) hits = c; }
+        if (hits.length > 1 && date) hits.sort(function (a, b) { return Math.abs(__msImpDays(a.date || date, date) || 0) - Math.abs(__msImpDays(b.date || date, date) || 0); });
+        if (hits.length) return { doc: hits[0], how: 'number' };
+    }
+    if (!clientAlias || !date) return null;
+    var near = list.filter(function (d) {
+        if (__msImpAlias(d.client_token) !== clientAlias && __msImpAlias(d.name) !== clientAlias) return false;
+        if (product && d.product && d.product.indexOf(product) === -1 && product.indexOf(d.product) === -1) return false;
+        var g = __msImpDays(d.date, date);
+        return g !== null && Math.abs(g) <= 60;
+    });
+    if (!near.length) return null;
+    near.sort(function (a, b) { return Math.abs(__msImpDays(a.date, date)) - Math.abs(__msImpDays(b.date, date)); });
+    if (near.length > 1 && Math.abs(__msImpDays(near[0].date, date)) === Math.abs(__msImpDays(near[1].date, date))) return null;   // two of the same day: say nothing
+    return { doc: near[0], how: 'client+date' };
+}
+
+// ---- what the app has -------------------------------------------------------------------------
+function __msImpMaps() {
+    var M = { invByCode: {}, invByLoose: {}, cyclesBySale: {}, bySerial: {}, apByNo: {}, cycByNo: {}, conByPan: {}, conByName: {}, conPay: {}, clientByPan: {}, clientByName: {}, clientByAlias: {}, resellerByPan: {}, resellerByName: {},
+              companyState: String((typeof companyProfile === 'object' && companyProfile && companyProfile.stateCode) || '') };
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (inv) {
+        if (!inv || !inv.invoiceNumber || inv.status === 'Cancelled') return;
+        M.invByCode[__msImpCode(inv.invoiceNumber)] = M.invByCode[__msImpCode(inv.invoiceNumber)] || inv;
+        M.invByLoose[__msImpLoose(inv.invoiceNumber)] = M.invByLoose[__msImpLoose(inv.invoiceNumber)] || inv;
+        var sk = __msImpSerialKey(inv.invoiceNumber);
+        if (sk) (M.bySerial[sk] = M.bySerial[sk] || []).push({ kind: 'inv', inv: inv, code: inv.invoiceNumber, amount: __msImpNum(inv.grandTotal), date: inv.invoiceDate || '', client: inv.clientName || '' });
+    });
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c, ci) {
+        if (!c || !Array.isArray(c.billingYears)) return;
+        c.billingYears.forEach(function (y, yi) {
+            if (!y) return;
+            var add = function (map, key, ref) { if (!key) return; (map[key] = map[key] || []).push(ref); };
+            var addSerial = function (code, ref, amount, date) { var sk = __msImpSerialKey(code); if (sk) (M.bySerial[sk] = M.bySerial[sk] || []).push({ kind: 'cycle', ref: ref, code: code, amount: amount, date: date, client: c.client || '' }); };
+            if (Array.isArray(y.arInvoices)) y.arInvoices.forEach(function (ar, ai) { if (ar && ar.invNo) { add(M.cyclesBySale, __msImpCode(ar.invNo), { ci: ci, yi: yi, ar: ai }); addSerial(ar.invNo, { ci: ci, yi: yi, ar: ai }, __msImpNum(ar.amount), ar.date || ''); } });
+            if (y.clientInvoiceNo && !(Array.isArray(y.arInvoices) && y.arInvoices.some(function (ar) { return ar && __msImpCode(ar.invNo) === __msImpCode(y.clientInvoiceNo); }))) { add(M.cyclesBySale, __msImpCode(y.clientInvoiceNo), { ci: ci, yi: yi, ar: null }); addSerial(y.clientInvoiceNo, { ci: ci, yi: yi, ar: null }, null, y.actualInvoiceDate || ''); }
+            if (Array.isArray(y.apInvoices)) y.apInvoices.forEach(function (ap, ai) { if (ap && ap.invNo) add(M.apByNo, __msImpBillKey(ap.invNo), { ci: ci, yi: yi, ap: ai }); });
+            if (y.oemInvoiceNo) {
+                // '124864_65' is two bills: 124864 and 124865
+                var parts = String(y.oemInvoiceNo).split(/[_,/ ]+/).filter(Boolean), first = parts[0] || '';
+                parts.forEach(function (part, pi) {
+                    var k = (pi > 0 && /^\d+$/.test(part) && /^\d+$/.test(first) && part.length < first.length) ? __msImpBillKey(first.slice(0, first.length - part.length) + part) : __msImpBillKey(part);
+                    if (k && !(M.apByNo[k] || []).some(function (r) { return r.ci === ci && r.yi === yi; })) add(M.cycByNo, k, { ci: ci, yi: yi });
+                });
+            }
+        });
+    });
+    if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (c) {
+        if (!c) return;
+        if (c.panNumber) M.conByPan[String(c.panNumber).toUpperCase()] = M.conByPan[String(c.panNumber).toUpperCase()] || c;
+        M.conByName[__msImpLoose(c.name)] = M.conByName[__msImpLoose(c.name)] || c;
+    });
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) { if (p && p.consultantId) M.conPay[p.consultantId + '|' + __msImpLoose(p.invoiceNumber)] = p; });
+    if (typeof clientMaster === 'object' && clientMaster) Object.keys(clientMaster).forEach(function (name) {
+        var rec = clientMaster[name]; if (!rec) return;
+        var pan = String(rec.pan || '').toUpperCase().trim();
+        if (/^[A-Z]{5}\d{4}[A-Z]$/.test(pan)) M.clientByPan[pan] = M.clientByPan[pan] || name;
+        var g = String(rec.gstin || '').toUpperCase().trim();
+        if (g.length === 15 && !/^[A-Z]{5}\d{4}[A-Z]$/.test(pan)) M.clientByPan[g.slice(2, 12)] = M.clientByPan[g.slice(2, 12)] || name;   // a PAN typed short: the GSTIN carries it
+        M.clientByName[__msImpLoose(name)] = name;
+        var al = __msImpAlias(name); if (al && al !== 'SHARED') M.clientByAlias[al] = M.clientByAlias[al] || name;
+    });
+    if (typeof resellerMaster === 'object' && resellerMaster) Object.keys(resellerMaster).forEach(function (k) {
+        var r = resellerMaster[k]; if (!r) return;
+        if (r.pan) M.resellerByPan[String(r.pan).toUpperCase()] = k;
+        M.resellerByName[__msImpLoose(r.companyName || r.legalName || k)] = k;
+    });
+    return M;
+}
+// The app's client for a Master row: by PAN, by name, by its short name; else a new one from the Master's particulars.
+function __msImpClientFor(r, M) {
+    var idx = __msImp.idx, pan = String(r.pan || '').toUpperCase();
+    var engineC = idx.clients[r.client_key] || null;
+    var name = pan && M.clientByPan[pan];
+    if (!name) name = M.clientByName[__msImpLoose(r.client)] || (engineC && M.clientByName[__msImpLoose(engineC.name)]);
+    if (!name) { var al = __msImpAlias(r.client); if (al && al !== 'SHARED') name = M.clientByAlias[al]; }
+    if (name) return { name: name, isNew: false, key: r.client_key };
+    return { name: (engineC && engineC.name) || String(r.client || '').trim(), isNew: true, key: r.client_key, rec: engineC };
+}
+// A sale billed to a reseller for an end client (SDS → Airtel, Techsec → MRF / MMT / Amphenol / BBK).
+function __msImpResale(r, M) {
+    var hint = String(r.end_client_hint || '');
+    if (!hint) return null;
+    var pan = String(r.pan || '').toUpperCase();
+    var rkey = (pan && M.resellerByPan[pan]) || M.resellerByName[__msImpLoose(r.client)] || '';
+    var al = __msImpAlias(hint);
+    var end = (al && M.clientByAlias[al]) || '';
+    return { resellerKey: rkey, resellerName: String(r.client || '').trim(), endClient: end, hint: hint };
+}
+function __msImpConsultantFor(v, M) {
+    var idx = __msImp.idx, party = idx.parties[v.party_key] || null;
+    var pan = String(v.pan || (party && party.pan) || '').toUpperCase();
+    var c = (pan && M.conByPan[pan]) || M.conByName[__msImpLoose(v.party)] || (party && M.conByName[__msImpLoose(party.name)]) || null;
+    if (!c && party && party.same_as) { var p2 = idx.parties[party.same_as]; if (p2) c = (p2.pan && M.conByPan[String(p2.pan).toUpperCase()]) || M.conByName[__msImpLoose(p2.name)] || null; }
+    if (c) return { id: c.id, name: c.name, isNew: false, partyKey: v.party_key };
+    var key = (party && party.same_as) || v.party_key;
+    var base = idx.parties[key] || party;
+    return { id: null, name: (base && base.name) || String(v.party || '').trim(), isNew: true, partyKey: key, rec: base };
+}
+
+// ---- the plan: what each row is, and where it goes ------------------------------------------
+function __msImpHash(s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + ':' + s.length; }
+// What a contract is, for telling it from another when the list is re-ordered: client, product, start.
+function __msImpConIdent(c) { return c ? [c.client || '', c.product || '', c.start || ''].join('|') : ''; }
+// Everything the plan reads from the app's records, folded into one key: a change made elsewhere rebuilds the plan.
+function __msImpRecordsSig() {
+    var parts = [];
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c) {
+        if (!c) { parts.push('-'); return; }
+        parts.push(JSON.stringify([__msImpConIdent(c), c.internalPO, c.internalPOLocalPath, c.internalPODate, c.clientPO, c.clientPOLocalPath, (c.clientPOs || []).map(function (po) { return po ? [po.poNo, po.localPath, po.poDate] : null; }),
+            (c.billingYears || []).map(function (y) { return y ? [y.billDate, y.duration, y.clientInvoiceNo, y.clientInvoiceLocalPath, y.oemInvoiceNo, y.oemInvoiceLocalPath, (y.arInvoices || []).map(function (a) { return a ? [a.invNo, a.localPath, a.date, a.amount] : null; }), (y.apInvoices || []).map(function (a) { return a ? [a.invNo, a.localPath, a.apId] : null; })] : null; })]));
+    });
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (i) { parts.push(i ? [i.id, i.invoiceNumber, i.status, i.localPdfPath, i.grandTotal, i.invoiceDate, i.linkedContractIdx, i.linkedCycleYearIdx, i.signedPdfAttachmentId].join('|') : '-'); });
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) { parts.push(p ? [p.id, p.consultantId, p.invoiceNumber, p.localPath].join('|') : '-'); });
+    if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (c) { parts.push(c ? [c.id, c.name, c.panNumber].join('|') : '-'); });
+    if (typeof clientMaster === 'object' && clientMaster) Object.keys(clientMaster).forEach(function (k) { var r = clientMaster[k]; parts.push(k + '|' + (r ? (r.pan || '') + '|' + (r.gstin || '') : '')); });
+    return __msImpHash(parts.join('\n'));
+}
+function __msImpPlanKey() {
+    return [__msImp.rev, __msImp.idx ? __msImp.idx.sig : '', __msImp.filesRoot, __msImpRecordsSig()].join('|');
+}
+// The plan as last built (the row-by-row calls while a page is drawn); __msImpPlan() checks it is still current.
+function __msImpCurPlan() { return __msImp.plan || __msImpPlan(); }
+function __msImpPlan() {
+    var key = __msImpPlanKey();
+    if (__msImp.plan && __msImp.planKey === key) return __msImp.plan;
+    var idx = __msImp.idx;
+    if (!idx) { __msImp.plan = null; return null; }
+
+    var M = __msImpMaps();
+    var P = { key: key, fys: [], sales: [], bills: [], vendors: [], proposals: [], links: [], clients: {}, consultants: {}, byFy: {}, byId: {} };
+    var saleById = {}, billById = {};
+    var pairBySale = {}, pairByBill = {};
+    idx.pairs.forEach(function (p) { pairBySale[p.sale] = p; pairByBill[p.bill] = p; });
+    var fyset = {};
+    var addLink = function (L) {
+        if (!L.after || L.after === L.before) return null;
+        L.id = 'L:' + L.key;
+        if (P.byId[L.id]) return null;                                  // one field, one file: '124864_65' names two bills, its bill field holds the first
+        if (L.entity === 'contract') L.ident0 = __msImpLinkIdent(L);
+        L.tickKey = 'L|' + (L.entity === 'invoice' ? 'inv|' + L.invId : L.entity === 'conpay' ? 'cp|' + L.payId : JSON.stringify(L.ident0) + '|' + L.field) + '|' + L.after;
+        P.links.push(L); P.byId[L.id] = L;
+        return L.id;
+    };
+    // --- sales
+    idx.sales.forEach(function (r) {
+        fyset[r.fy] = true;
+        var code = __msImpCode(r.code);
+        var it = { id: r.id, tickKey: 'S|' + __msImpCode(r.code) + '|' + (r.date || ''), r: r, fy: r.fy, state: 'new', inv: null, refs: [], differs: null, links: [], client: null, resale: null, proposal: null, tickable: false, why: '' };
+        var inv = M.invByCode[code] || M.invByLoose[__msImpLoose(r.code)] || null;
+        var doc = r.file ? r.file : null;
+        var after = doc ? __msImpAbs(doc.rel) : '';
+        var alt = (!inv && !(M.cyclesBySale[code] || []).length) ? __msImpSerialHit(r, M) : null;
+        if (alt) {
+            it.numberDiffers = alt.code;                                  // the app writes it its own way: its PDF, when there is one by that number
+            var d2 = __msImpSalesDoc(alt.code); if (d2) after = __msImpAbs(d2.rel);
+            if (alt.kind === 'inv') inv = alt.inv;
+        }
+        if (inv) {
+            it.state = 'app'; it.inv = inv;
+            var dAmt = Math.abs(__msImpNum(inv.grandTotal) - __msImpNum(r.total)) > 1, dDate = (inv.invoiceDate || '') !== (r.date || '');
+            if (dAmt || dDate) it.differs = { amount: dAmt ? __msImpNum(inv.grandTotal) : null, date: dDate ? (inv.invoiceDate || '') : null };
+            if (after && !inv.signedPdfAttachmentId && __msImpPathStale(inv.localPdfPath)) {
+                var lid = addLink({ key: 'inv:' + inv.id, entity: 'invoice', invId: inv.id, field: 'localPdfPath', label: 'Invoice ' + (inv.invoiceNumber || r.code) + ' — the PDF', before: inv.localPdfPath || '', after: after, how: 'number' });
+                if (lid) it.links.push(lid);
+            }
+        } else {
+            var refs = (alt && alt.kind === 'cycle') ? (alt.refs || [alt.ref]) : (M.cyclesBySale[code] || []);
+            if (refs.length) {
+                it.state = 'cycle'; it.refs = refs;
+                refs.forEach(function (ref) {
+                    var c = contracts[ref.ci], y = c.billingYears[ref.yi];
+                    var before = ref.ar === null ? (y.clientInvoiceLocalPath || '') : ((y.arInvoices[ref.ar] && y.arInvoices[ref.ar].localPath) || '');
+                    if (after && __msImpPathStale(before)) {
+                        var lid2 = addLink({ key: 'ar:' + ref.ci + ':' + ref.yi + ':' + (ref.ar === null ? 'legacy' : ref.ar), entity: 'contract', ci: ref.ci, yi: ref.yi, ar: ref.ar, field: ref.ar === null ? 'clientInvoiceLocalPath' : 'arInvoices[].localPath',
+                                             label: __msImpContractLabel(c, ref.yi) + ' — invoice ' + (it.numberDiffers || r.code), before: before, after: after, how: 'number' });
+                        if (lid2) it.links.push(lid2);
+                    }
+                });
+            } else {
+                it.state = 'new'; it.tickable = (r.kind !== 'credit_note') && !!r.date && r.total !== null;
+                it.fxDiff = __msImpFxDiff(r);
+                it.client = __msImpClientFor(r, M);
+                it.resale = __msImpResale(r, M);
+                if (!it.tickable) it.why = !r.date ? 'no invoice date in the Master' : 'no value in the Master';
+            }
+        }
+        saleById[r.id] = it; P.sales.push(it); P.byId[it.id] = it;
+    });
+    // --- OEM bills and consultants' / vendors' invoices
+    idx.payments.forEach(function (p) {
+        fyset[p.fy] = true;
+        if (p.kind === 'vendor') {
+            var vt = { id: p.id, tickKey: 'V|' + (p.party_key || '') + '|' + __msImpLoose(p.raw_no) + '|' + (p.date || ''), v: p, fy: p.fy, state: 'new', consultant: null, tickable: false, why: '' };
+            var con = __msImpConsultantFor(p, M);
+            vt.consultant = con;
+            if (!con.isNew && M.conPay[con.id + '|' + __msImpLoose(p.raw_no)]) { vt.state = 'app'; vt.pay = M.conPay[con.id + '|' + __msImpLoose(p.raw_no)]; }
+            else { vt.tickable = !!p.date && p.total !== null; if (!vt.tickable) vt.why = !p.date ? 'no invoice date in the Master' : 'no value in the Master'; }
+            if (vt.state === 'app' && p.file && vt.pay && __msImpPathStale(vt.pay.localPath) && !(typeof getAttachmentsFor === 'function' && getAttachmentsFor('consultant_payment', vt.pay.id).length)) {
+                var lid3 = addLink({ key: 'cp:' + vt.pay.id, entity: 'conpay', payId: vt.pay.id, field: 'localPath', label: 'Consultant payment ' + (vt.pay.paymentNumber || p.raw_no) + ' — the invoice PDF', before: vt.pay.localPath || '', after: __msImpAbs(p.file.rel), how: 'number' });
+                vt.links = lid3 ? [lid3] : [];
+            }
+            P.vendors.push(vt); P.byId[vt.id] = vt;
+            return;
+        }
+        var bt = { id: p.id, tickKey: 'P|' + (p.party_key || '') + '|' + __msImpBillKey(p.number) + '|' + (p.date || ''), p: p, fy: p.fy, state: 'new', refs: [], home: { kind: 'none' }, pair: pairByBill[p.id] ? pairByBill[p.id].sale : null, pairInfo: pairByBill[p.id] || null, links: [], tickable: false, optIn: false, why: '' };
+        var key = __msImpBillKey(p.number);
+        var after2 = p.file ? __msImpAbs(p.file.rel) : '';
+        var apRefs = M.apByNo[key] || [], cyRefs = M.cycByNo[key] || [];
+        if (apRefs.length) {
+            bt.state = 'app'; bt.refs = apRefs;
+            apRefs.forEach(function (ref) {
+                var c = contracts[ref.ci], y = c.billingYears[ref.yi], ap = y.apInvoices[ref.ap];
+                if (after2 && __msImpPathStale(ap.localPath)) {
+                    var lid4 = addLink({ key: 'ap:' + ref.ci + ':' + ref.yi + ':' + ref.ap, entity: 'contract', ci: ref.ci, yi: ref.yi, ap: ref.ap, field: 'apInvoices[].localPath', label: __msImpContractLabel(c, ref.yi) + ' — bill ' + p.number, before: ap.localPath || '', after: after2, how: 'number' });
+                    if (lid4) bt.links.push(lid4);
+                }
+            });
+        } else if (cyRefs.length) {
+            bt.state = 'cycle'; bt.refs = cyRefs;
+            cyRefs.forEach(function (ref) {
+                var c = contracts[ref.ci], y = c.billingYears[ref.yi];
+                if (after2 && __msImpPathStale(y.oemInvoiceLocalPath)) {
+                    var lid5 = addLink({ key: 'oem:' + ref.ci + ':' + ref.yi, entity: 'contract', ci: ref.ci, yi: ref.yi, field: 'oemInvoiceLocalPath', label: __msImpContractLabel(c, ref.yi) + ' — bill ' + p.number, before: y.oemInvoiceLocalPath || '', after: after2, how: 'number' });
+                    if (lid5) bt.links.push(lid5);
+                }
+            });
+        } else {
+            bt.state = 'new';
+            bt.tickable = !!p.date && (p.usd !== null && p.usd !== undefined || p.base !== null && p.base !== undefined);
+            if (!bt.tickable) bt.why = !p.date ? 'no invoice date in the Master' : 'no value in the Master';
+        }
+        billById[p.id] = bt; P.bills.push(bt); P.byId[bt.id] = bt;
+    });
+    // --- where a new bill goes: the sale it was bought for (on a cycle → that cycle, opt-in; new → a contract to make), else a
+    //     contract of the same client and product that covers its date (opt-in), else a contract made of bills alone
+    var groups = {};
+    var groupKeyOf = function (bt, clientKey, product) { return (bt.p.oem || 'oem') + '|' + (clientKey || '?') + '|' + (product || ''); };
+    P.bills.forEach(function (bt) {
+        if (bt.state !== 'new' || !bt.tickable) return;
+        var p = bt.p, sale = bt.pair ? saleById[bt.pair] : null;
+        if (sale && (sale.state === 'cycle' || (sale.state === 'app' && sale.inv && sale.inv.linkedContractIdx !== '' && sale.inv.linkedContractIdx !== null && sale.inv.linkedContractIdx !== undefined))) {
+            var ref = sale.state === 'cycle' ? sale.refs[0] : { ci: parseInt(sale.inv.linkedContractIdx, 10), yi: parseInt(sale.inv.linkedCycleYearIdx, 10) || 0 };
+            if (contracts[ref.ci] && contracts[ref.ci].billingYears && contracts[ref.ci].billingYears[ref.yi]) { bt.home = { kind: 'cycle', ci: ref.ci, yi: ref.yi, via: 'its sale ' + sale.r.code }; bt.optIn = true; return; }
+        }
+        if (sale && sale.state === 'new' && sale.tickable) {
+            var ck = sale.client ? (sale.resale && sale.resale.endClient ? __msImpLoose(sale.resale.endClient) : __msImpLoose(sale.client.name)) : '?';
+            var product = p.product || (p.oem === 'darktrace' ? sale.r.product : '') || MS_IMP_OEM_PRODUCT[p.oem] || '';
+            var gk = groupKeyOf(bt, ck, product);
+            var g = groups[gk] || (groups[gk] = { key: gk, oem: p.oem, client: sale.client, resale: sale.resale, product: product, items: [], billsOnly: false });
+            g.items.push({ bill: bt, sale: sale });
+            bt.home = { kind: 'proposal', group: gk }; sale.proposal = gk;
+            return;
+        }
+        // no usable sale: an existing contract of the client and product whose term covers the bill
+        var al = __msImpAlias(p.end_client || '') || __msImpAlias((p.file && p.file.rel) || '') || p.end_client_key || '';
+        var found = null;
+        if (al && typeof contracts !== 'undefined') contracts.forEach(function (c, ci) {
+            if (found || !c || !Array.isArray(c.billingYears) || !c.billingYears.length) return;
+            if (__msImpAlias(c.client || '') !== al) return;
+            if (p.product && c.product && c.product.indexOf(p.product) === -1 && !(p.product.indexOf(',') !== -1)) return;
+            var cs = __msImpContractOem(c);
+            if (cs && p.oem && cs !== p.oem) return;
+            var start = c.start || c.billingYears[0].billDate, end = c.endDate || __msImpAddMonths(c.billingYears[c.billingYears.length - 1].billDate, c.billingYears[c.billingYears.length - 1].duration || 12);
+            if (!(start && end && p.date >= __msImpAddDays(start, -45) && p.date <= __msImpAddDays(end, 45))) return;
+            var yi = 0;
+            c.billingYears.forEach(function (y, i) { if (y && y.billDate && y.billDate <= __msImpAddDays(p.date, 45)) yi = i; });
+            found = { ci: ci, yi: yi };
+        });
+        if (found) { bt.home = { kind: 'cycle', ci: found.ci, yi: found.yi, via: 'the client, product and dates' }; bt.optIn = true; return; }
+        var ck2 = al ? al : (p.oem === 'addigy' ? 'SHARED' : '?');
+        var product2 = p.product || MS_IMP_OEM_PRODUCT[p.oem] || '';
+        var gk2 = groupKeyOf(bt, ck2, product2);
+        var g2 = groups[gk2] || (groups[gk2] = { key: gk2, oem: p.oem, client: null, resale: null, product: product2, items: [], billsOnly: true, clientAlias: ck2 });
+        g2.items.push({ bill: bt, sale: null });
+        bt.home = { kind: 'proposal', group: gk2 };
+    });
+    // --- a distributor sells many products under one head (Trend Micro: Apex One, Deep Security …): one client's bills whose
+    //     items name different products are different contracts
+    Object.keys(groups).forEach(function (gk) {
+        var g = groups[gk];
+        if (g.oem === 'darktrace' || g.items.length < 2) return;
+        var byLine = {}, order = [];
+        g.items.forEach(function (it) {
+            var w = __msImpLineWords(it.bill.p), k = w.join(' ').toLowerCase();
+            if (!byLine[k]) { byLine[k] = { words: w, items: [] }; order.push(k); }
+            byLine[k].items.push(it);
+        });
+        if (order.length < 2) return;
+        delete groups[gk];
+        order.forEach(function (k) {
+            var sub = byLine[k], nk = gk + '|' + k;
+            var label = sub.words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join(' ');
+            groups[nk] = { key: nk, oem: g.oem, client: g.client, resale: g.resale, product: g.product, items: sub.items, billsOnly: g.billsOnly, clientAlias: g.clientAlias, variant: label };
+            sub.items.forEach(function (it) { it.bill.home = { kind: 'proposal', group: nk }; if (it.sale) it.sale.proposal = nk; });
+        });
+    });
+    // --- the proposals
+    Object.keys(groups).forEach(function (gk) {
+        var g = groups[gk];
+        g.items.sort(function (a, b) { return String((a.sale && a.sale.r.date) || a.bill.p.date).localeCompare(String((b.sale && b.sale.r.date) || b.bill.p.date)); });
+        var prop = __msImpProposal(g, M);
+        if (prop) { P.proposals.push(prop); P.byId[prop.id] = prop; }
+    });
+    P.proposals.sort(function (a, b) { return String(a.start).localeCompare(String(b.start)); });
+    // --- the PO files of the contracts already entered
+    if (typeof contracts !== 'undefined') contracts.forEach(function (c, ci) {
+        if (!c) return;
+        var al = __msImpAlias(c.client || ''), prod = __msImpProductOf(c.product || '');
+        if (c.internalPO && __msImpPathStale(c.internalPOLocalPath)) {
+            var h = __msImpPoDoc('internal', c.internalPO, al, prod, c.internalPODate || c.start || '');
+            if (h) addLink({ key: 'ipo:' + ci, entity: 'contract', ci: ci, field: 'internalPOLocalPath', label: __msImpContractLabel(c, null) + ' — internal PO ' + c.internalPO, before: c.internalPOLocalPath || '', after: __msImpAbs(h.doc.rel), how: h.how });
+        }
+        var pos = Array.isArray(c.clientPOs) && c.clientPOs.length ? c.clientPOs : (c.clientPO ? [{ poNo: c.clientPO, poDate: c.clientPODate, localPath: c.clientPOLocalPath, _legacy: true }] : []);
+        pos.forEach(function (po, pi) {
+            if (!po || !po.poNo) return;
+            var cur = po._legacy ? (c.clientPOLocalPath || '') : (po.localPath || '');
+            if (!__msImpPathStale(cur)) return;
+            var h2 = __msImpPoDoc('client', po.poNo, al, prod, po.poDate || c.clientPODate || c.start || '');
+            if (!h2) return;
+            var L = { key: 'cpo:' + ci + ':' + (po._legacy ? 'legacy' : pi), entity: 'contract', ci: ci, field: po._legacy ? 'clientPOLocalPath' : 'clientPOs[].localPath', pi: po._legacy ? null : pi, label: __msImpContractLabel(c, null) + ' — client PO ' + po.poNo, before: cur, after: __msImpAbs(h2.doc.rel), how: h2.how };
+            if (!po._legacy && pi === 0 && __msImpPathStale(c.clientPOLocalPath)) L.alsoPrimary = true;   // the first PO is mirrored on the contract's own field
+            addLink(L);
+        });
+    });
+    // --- the clients and consultants the ticked rows would need
+    P.sales.forEach(function (it) { if (it.state === 'new' && it.client && it.client.isNew) P.clients[it.client.key] = it.client; });
+    P.proposals.forEach(function (pr) { if (pr.client && pr.client.isNew) P.clients[pr.client.key] = pr.client; });
+    P.vendors.forEach(function (vt) { if (vt.state === 'new' && vt.consultant && vt.consultant.isNew) P.consultants[vt.consultant.partyKey] = vt.consultant; });
+    P.fys = Object.keys(fyset).sort().reverse();
+    P.fys.forEach(function (fy) {
+        var s = P.sales.filter(function (x) { return x.fy === fy; }), b = P.bills.filter(function (x) { return x.fy === fy; }), v = P.vendors.filter(function (x) { return x.fy === fy; });
+        var cnt = function (list, st) { return list.filter(function (x) { return x.state === st; }).length; };
+        P.byFy[fy] = { sales: s.length, salesTotal: s.reduce(function (t, x) { return t + __msImpNum(x.r.total); }, 0), salesApp: cnt(s, 'app'), salesCycle: cnt(s, 'cycle'), salesNew: cnt(s, 'new'),
+                       bills: b.length, billsTotal: b.reduce(function (t, x) { return t + __msImpNum(x.p.total); }, 0), billsApp: cnt(b, 'app'), billsCycle: cnt(b, 'cycle'), billsNew: cnt(b, 'new'),
+                       vendors: v.length, vendorsTotal: v.reduce(function (t, x) { return t + __msImpNum(x.v.total); }, 0), vendorsApp: cnt(v, 'app'), vendorsNew: cnt(v, 'new') };
+    });
+    __msImp.plan = P; __msImp.planKey = key;
+    if (Object.keys(__msImp.toCheck).length && !__msImp.checking) setTimeout(__msImpCheckPaths, 0);
+    return P;
+}
+function __msImpContractLabel(c, yi) { return (c.client || '(no client)') + ' · ' + (c.product || '') + (yi === null || yi === undefined ? '' : ' · cycle ' + (yi + 1)); }
+function __msImpContractOem(c) { var s = String((c && (c.oem || c.product)) || '').toLowerCase(); for (var k in MS_IMP_OEM_NAMES) if (s.indexOf(k === 'gpn' ? 'global payment' : k === 'rah' ? 'rah ' : k) !== -1) return k; if (/varonis/.test(s)) return 'rah'; if (/trend/.test(s)) return 'redington'; return ''; }
+function __msImpProductOf(product) { var m = String(product || '').match(/DT (Network|Email|Cloud|Endpoint|OT)/g); return m ? m.map(function (x) { return x; }).sort().join(', ') : ''; }
+// A contract made of its bills and sales: the client, product, cycles (one per bill, the sale beside it), the term, the PO files.
+function __msImpProposal(g, M) {
+    var items = g.items;
+    if (!items.length) return null;
+    var oemName = MS_IMP_OEM_NAMES[g.oem] || (items[0].bill.p.party_canon || items[0].bill.p.party);
+    var isInr = !(items[0].bill.p.usd > 0 && items[0].bill.p.usd_rate > 0) && !(g.oem === 'darktrace' || g.oem === 'addigy');
+    var client = g.client, unknown = false;
+    if (!client) {
+        var al = g.clientAlias || '';
+        var name = (al === 'SHARED') ? (M.clientByAlias.SHARED || 'Masterstone — Shared Services') : (M.clientByAlias[al] || '');
+        var rec = null;
+        if (!name && al && al !== '?') {                                    // a client of the Masters that the app does not have yet
+            var ek = Object.keys(__msImp.idx.clients).filter(function (k) { return __msImp.idx.clients[k].alias === al || __msImpAlias(__msImp.idx.clients[k].name) === al; })[0];
+            if (ek) { rec = __msImp.idx.clients[ek]; name = rec.name; }
+        }
+        if (!name) { unknown = true; name = '(client unknown — the bill names none)'; }
+        client = { name: name, isNew: !unknown && !(M.clientByName[__msImpLoose(name)]), key: rec ? rec.key : __msImpLoose(name), rec: rec };
+    }
+    var endClient = (g.resale && g.resale.endClient) ? g.resale.endClient : client.name;
+    // one cycle per bill, in date order. Its start: the invoice's billing period, else its licence period (either only when
+    // it does not repeat an earlier cycle's start — a licence billed twice a year names the same licence twice), else the
+    // earlier of the invoice's and the bill's dates. Its length: the billing / licence period that gave the start; else the
+    // gap to the next cycle when the group runs regularly (three or more, six months apart or less); else the cycle
+    // before it; else a year (a month for Addigy). A guessed length never runs into the next cycle.
+    var cycles = [], starts = {};
+    items.forEach(function (it) {
+        var p = it.bill.p, s = it.sale ? it.sale.r : null;
+        var start = null, period = null;
+        if (s && s.billing_start && !starts[s.billing_start]) { start = s.billing_start; period = s.billing_end ? __msImpMonthsBetween(s.billing_start, __msImpAddDays(s.billing_end, 1)) : null; }
+        else if (s && s.license_start && !starts[s.license_start]) { start = s.license_start; period = s.license_end ? __msImpMonthsBetween(s.license_start, __msImpAddDays(s.license_end, 1)) : null; }
+        if (!start) start = (s && s.date && p.date) ? (s.date < p.date ? s.date : p.date) : (s ? s.date : p.date);
+        if (!s && g.oem === 'addigy' && __msImpIsoOk(p.date)) start = p.date.slice(0, 8) + '01';   // a month's bill, dated at its end: the cycle is that month
+        starts[start] = true;
+        var cost = isInr ? __msImpNum(p.base) : __msImpNum(p.usd);
+        var fx = isInr ? 1 : (__msImpNum(p.usd_rate) || (s && __msImpNum(s.usd_rate)) || 83.5);
+        var pay = p.payment || null, rc = s ? s.receipt : null;
+        var paidOk = !!(rc && rc.amount && s && (__msImpNum(rc.amount) + __msImpNum(s.tds_adjusted) >= __msImpNum(s.total) - 2));
+        cycles.push({ bill: it.bill, sale: it.sale, billDate: start, period: period, cost: cost, sell: s ? __msImpNum(s.base) : 0, fx: fx,
+                      payDate: pay ? (pay.date || '') : '', payFx: pay && pay.fx ? __msImpNum(pay.fx) : null, payRef: pay && pay.source === 'remittance' ? (pay.ref || '') : '', paidOk: paidOk, paidDate: paidOk ? (rc.date || '') : '' });
+    });
+    cycles.sort(function (a, b) { return String(a.billDate).localeCompare(String(b.billDate)); });
+    var n = cycles.length;
+    cycles.forEach(function (c, i) {
+        var next = cycles[i + 1];
+        var gap = next ? Math.max(1, __msImpMonthsBetween(c.billDate, next.billDate)) : null;
+        var dur = c.period || null;
+        if (!dur && gap && n >= 3 && gap <= 6) dur = gap;
+        if (!dur && i > 0) dur = cycles[i - 1].duration;
+        if (!dur) dur = (g.oem === 'addigy') ? 1 : 12;
+        if (!c.period && gap && dur > gap) dur = gap;
+        c.duration = Math.min(60, Math.max(1, dur));
+        c.ratio = c.duration / 12;
+        c.baseCost = __msImpR2(c.cost / c.ratio);
+        c.baseSell = __msImpR2(c.sell / c.ratio);
+    });
+    var start = cycles[0].billDate, last = cycles[cycles.length - 1];
+    var endDate = __msImpAddDays(__msImpAddMonths(last.billDate, last.duration), -1);
+    var term = Math.max(1, __msImpMonthsBetween(start, __msImpAddDays(endDate, 1)));
+    var prodName = g.product || MS_IMP_OEM_PRODUCT[g.oem] || (/training/i.test(items[0].bill.p.items || '') ? 'Training' : (__msImpFirstLine(items[0].bill.p.items, 40) || 'product'));
+    if (g.variant) prodName += ' ' + g.variant;                         // Trend Micro Apex One, Trend Micro Deep Security
+    var product = oemName + ' (' + prodName + ')';
+    var al2 = __msImpAlias(endClient) || __msImpAlias(client.name);
+    var ipo = __msImpPoDoc('internal', '', al2, g.product, start);
+    var cpo = __msImpPoDoc('client', '', al2, g.product, start);
+    var ipoNo = '';
+    if (ipo) { var tn = (ipo.doc.text_numbers || []).filter(function (n) { return /^\d{5,6}-\d{6}-\d{2}-\d{6}$|^MS-PO-|^MST\//.test(n); }); ipoNo = ipo.doc.number || tn[0] || ''; }
+    var id = 'C:' + g.key;
+    return { id: id, key: g.key, oem: g.oem, oemName: oemName, client: client, endClient: endClient, resale: g.resale, product: product, currency: isInr ? 'INR' : 'USD',
+             cycles: cycles, start: start, endDate: endDate, term: term, billsOnly: g.billsOnly, unknownClient: unknown, defaultOn: !unknown && !(g.billsOnly && g.oem === 'darktrace' && cycles.length === 1), productShort: prodName,
+             internalPO: ipo ? { no: ipoNo, path: __msImpAbs(ipo.doc.rel), name: ipo.doc.name, date: ipo.doc.date || '', how: ipo.how } : null,
+             clientPO: cpo ? { no: cpo.doc.number || '', path: __msImpAbs(cpo.doc.rel), name: cpo.doc.name, date: cpo.doc.date || '', how: cpo.how } : null,
+             fys: cycles.map(function (c) { return c.bill.fy; }).filter(function (v, i, a) { return a.indexOf(v) === i; }) };
+}
+
+// ---- ticks ------------------------------------------------------------------------------------
+function __msImpDefaultTick(item) {
+    if (!item) return false;
+    if (item.id.indexOf('L:') === 0) return true;
+    if (item.id.indexOf('C:') === 0) return !!item.defaultOn;
+    if (item.r) return item.state === 'new' && item.tickable && !item.proposal && !!item.r.receipt;   // no receipt found: unticked — added, it would show as owed
+    if (item.p) return false;                                   // a bill inside a proposal goes with it; an opt-in starts off
+    if (item.v) return item.state === 'new' && item.tickable;
+    return false;
+}
+function __msImpTickKey(item) { return (item && item.tickKey) || (item && item.id) || ''; }
+function __msImpTicked(id) { var P = __msImpCurPlan(); if (!P || !P.byId[id]) return false; var it = P.byId[id]; if (it.unknownClient) return false; var k = __msImpTickKey(it); return (k in __msImp.ticks) ? !!__msImp.ticks[k] : __msImpDefaultTick(it); }
+function __msImpTick(id, on) { var P = __msImpCurPlan(); var it = P && P.byId[id]; __msImp.ticks[it ? __msImpTickKey(it) : id] = !!on; renderImportPage(); }
+function __msImpTickAll(kind, fy, on) {
+    var P = __msImpPlan(); if (!P) return;
+    var list = kind === 'sales' ? P.sales : kind === 'bills' ? P.bills : kind === 'vendors' ? P.vendors : kind === 'contracts' ? P.proposals : P.links;
+    list.forEach(function (it) {
+        if (fy && it.fy && it.fy !== fy) return;
+        if (kind === 'bills') { if (it.state === 'new' && it.tickable && it.home.kind === 'cycle') __msImp.ticks[__msImpTickKey(it)] = !!on; return; }
+        if (kind === 'sales' || kind === 'vendors') { if (it.state === 'new' && it.tickable && !it.proposal) __msImp.ticks[__msImpTickKey(it)] = !!on; return; }
+        if (it.unknownClient) return;
+        __msImp.ticks[__msImpTickKey(it)] = !!on;
+    });
+    renderImportPage();
+}
+// Everything ticked, resolved to what gets made.
+function __msImpSelection(P) {
+    var S = { sales: [], proposals: [], optIn: [], vendors: [], links: [], clients: {}, consultants: {} };
+    P.proposals.forEach(function (pr) { if (__msImpTicked(pr.id)) { S.proposals.push(pr); if (pr.client.isNew) S.clients[pr.client.key] = pr.client; } });
+    P.sales.forEach(function (it) {
+        if (it.state !== 'new' || !it.tickable) return;
+        if (it.proposal) return;                                        // goes with its contract
+        if (!__msImpTicked(it.id)) return;
+        S.sales.push(it); if (it.client && it.client.isNew) S.clients[it.client.key] = it.client;
+    });
+    P.bills.forEach(function (bt) { if (bt.state === 'new' && bt.tickable && bt.home.kind === 'cycle' && __msImpTicked(bt.id)) S.optIn.push(bt); });
+    P.vendors.forEach(function (vt) { if (vt.state === 'new' && vt.tickable && __msImpTicked(vt.id)) { S.vendors.push(vt); if (vt.consultant.isNew) S.consultants[vt.consultant.partyKey] = vt.consultant; } });
+    P.links.forEach(function (L) { if (__msImpTicked(L.id)) S.links.push(L); });
+    S.count = S.sales.length + S.proposals.length + S.optIn.length + S.vendors.length + S.links.length;
+    return S;
+}
+
+// ---- the page ---------------------------------------------------------------------------------
+function renderImportPage() {
+    var root = document.getElementById('msImpRoot');
+    if (!root) return;
+    __msImpStyles();
+    var S = __msImp;
+    var head = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:12px;">'
+        + '<h2 style="margin:0;"><i class="fas fa-file-import" style="color:var(--accent-cyan); margin-right:8px;"></i> Import from the Masters</h2>'
+        + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + '<button class="btn btn-ghost" id="msImpRefreshBtn" onclick="__msImpRead(true)"' + (S.reading || S.missing ? ' disabled' : '') + ' title="Read the engine\'s list again (after a CA pack run)"><i class="fas fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
+        + '</div></div>'
+        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack reads every Sales and Payments row of <b>Files › Masters</b> from FY 2021-22 and ties each to its PDF, its receipt or payment and (for OEM bills) the sale it was bought for. Tick what should go into the app and click <b>Add the selected</b>. Rows already in the app are shown but never changed — only their document links are filled in.</p>';
+    if (S.missing && !S.idx) {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (__msImpTauri() ? '<i class="fas fa-circle-info"></i> The engine\'s list is not there yet. Run the CA pack once (it writes <code>_engine/app_import/index.json</code>), then click Refresh.' + (S.error ? ' ' + __msImpEsc(S.error) : '') : '<i class="fas fa-circle-info"></i> The Masters live on the Mac; open this page in the Masterstone app.') + '</div>';
+        return;
+    }
+    if (!S.idx) {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (S.error ? '<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> ' + __msImpEsc(S.error) : '<i class="fas fa-spinner fa-spin"></i> Reading the engine\'s list…') + '</div>';
+        return;
+    }
+    var P = __msImpPlan();
+    if (!P) { root.innerHTML = head; return; }
+    if (S.ui.fy === null || P.fys.indexOf(S.ui.fy) === -1) S.ui.fy = P.fys[0] || null;
+    var html = head + __msImpStatusHtml(P);
+    html += '<div class="ms-imp-fy">' + P.fys.map(function (fy) { var c = P.byFy[fy]; return '<div class="arap-subtab' + (fy === S.ui.fy ? ' active' : '') + '" onclick="__msImpSetFy(\'' + fy + '\')">' + __msImpFyLabel(fy) + ' <span class="n" style="font-size:10.5px; color:var(--text-dim);">' + (c.salesNew + c.billsNew + c.vendorsNew) + ' new</span></div>'; }).join('') + '</div>';
+    html += '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
+        + '<input type="text" id="msImpQ" value="' + __msImpEsc(S.ui.q) + '" placeholder="Search number, client, party, amount…" style="flex:1; min-width:220px; max-width:380px;" oninput="__msImpSearch(this.value)">'
+        + '<span class="ms-imp-note">Tick-boxes: ticked rows are added; untick what should stay out. Nothing is written until you click Add.</span></div></div>';
+    html += __msImpStripHtml(P, S.ui.fy);
+    html += __msImpSalesHtml(P, S.ui.fy);
+    html += __msImpBillsHtml(P, S.ui.fy);
+    html += __msImpVendorsHtml(P, S.ui.fy);
+    html += __msImpProposalsHtml(P);
+    html += __msImpLinksHtml(P);
+    html += __msImpAddHtml(P);
+    html += __msImpBatchesHtml();
+    root.innerHTML = html;
+}
+function __msImpSetFy(fy) { __msImp.ui.fy = fy; renderImportPage(); }
+function __msImpSearch(q) { __msImp.ui.q = String(q || ''); clearTimeout(__msImp.ui.qt); __msImp.ui.qt = setTimeout(function () { renderImportPage(); var el = document.getElementById('msImpQ'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 120); }
+function __msImpToggle(sec) { __msImp.ui.open[sec] = !__msImp.ui.open[sec]; renderImportPage(); }
+function __msImpMatches(text) { var q = __msImp.ui.q.trim().toLowerCase(); return !q || String(text || '').toLowerCase().indexOf(q) !== -1; }
+function __msImpStatusHtml(P) {
+    var idx = __msImp.idx, parts = [];
+    parts.push(idx.sales.length + ' sales rows, ' + idx.payments.length + ' payment rows in ' + (idx.stats.masters || P.fys.length) + ' Masters');
+    if (idx.made) parts.push('read by the CA pack ' + __msImpEsc(typeof __msExpAgo === 'function' ? __msExpAgo(idx.made) : idx.made));
+    if (__msImp.error) parts.push('<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msImpEsc(__msImp.error) + '</span>');
+    if (__msImp.dropped) parts.push('<span class="ms-imp-warn">' + __msImp.dropped + ' odd record' + (__msImp.dropped === 1 ? '' : 's') + ' in the list dropped</span>');
+    if (idx.errors.length) parts.push('<span class="ms-imp-warn" title="' + __msImpEsc(idx.errors.map(function (e) { return e.file + ': ' + e.err; }).join('\n')) + '">' + idx.errors.length + ' Master' + (idx.errors.length === 1 ? '' : 's') + ' could not be read</span>');
+    var um = (idx.unmatched_docs.sales || []).length + (idx.unmatched_docs.purchase || []).length;
+    if (um) parts.push('<span title="' + __msImpEsc((idx.unmatched_docs.sales || []).concat(idx.unmatched_docs.purchase || []).join('\n')) + '">' + um + ' PDF' + (um === 1 ? '' : 's') + ' with no Master row (credit notes, cancelled, proformas)</span>');
+    return '<div id="msImpStatus" class="ms-imp-note" style="margin-bottom:4px;">' + parts.join(' · ') + '</div>';
+}
+function __msImpStripHtml(P, fy) {
+    var c = P.byFy[fy]; if (!c) return '';
+    var cell = function (k, v, sub) { return '<div><div class="k">' + k + '</div><div class="v">' + v + '</div>' + (sub ? '<div class="ms-imp-note">' + sub + '</div>' : '') + '</div>'; };
+    return '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div class="ms-imp-strip">'
+        + cell('Sales invoices in the Master', c.sales + ' · ' + __msImpInr(c.salesTotal), c.salesApp + ' in the Invoices module · ' + c.salesCycle + ' on a contract cycle · <b>' + c.salesNew + ' not in the app</b>')
+        + cell('OEM bills', c.bills + ' · ' + __msImpInr(c.billsTotal), c.billsApp + ' on a cycle\'s bills · ' + c.billsCycle + ' on an older cycle · <b>' + c.billsNew + ' not in the app</b>')
+        + cell('Consultants & vendors', c.vendors + ' · ' + __msImpInr(c.vendorsTotal), c.vendorsApp + ' in the Consultants module · <b>' + c.vendorsNew + ' not in the app</b>')
+        + '</div></div>';
+}
+function __msImpPin(path, title) { if (!path) return '<span class="ms-imp-note">no file</span>'; return '<a href="javascript:void(0)" class="ms-imp-pin" data-path="' + __msImpEsc(path) + '" onclick="__msImpOpen(this.dataset.path); return false;" title="' + __msImpEsc(title || path) + '"><i class="fas fa-paperclip"></i></a>'; }
+function __msImpStateHtml(st, text, title) { return '<span class="ms-imp-st ' + st + '"' + (title ? ' title="' + __msImpEsc(title) + '"' : '') + '>' + text + '</span>'; }
+function __msImpSecHead(key, title, n, extra) {
+    var open = !!__msImp.ui.open[key];
+    return '<h3 onclick="__msImpToggle(\'' + key + '\')"><i class="fas fa-chevron-' + (open ? 'down' : 'right') + '" style="font-size:11px; color:var(--text-dim);"></i> ' + title + ' <span class="n">' + n + '</span>' + (extra || '') + '</h3>';
+}
+function __msImpSalesHtml(P, fy) {
+    var rows = P.sales.filter(function (it) { return it.fy === fy; });
+    var shown = rows.filter(function (it) { return __msImpMatches([it.r.code, it.r.raw_no, it.r.client, it.r.total, it.r.items].join(' ')); });
+    var nNew = rows.filter(function (it) { return it.state === 'new' && it.tickable && !it.proposal; }).length;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('sales', 'Sales invoices', rows.length + ' rows · ' + nNew + ' to add as invoice records',
+        nNew ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'sales\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'sales\', \'' + fy + '\', false)">none</a></span>' : '');
+    if (!__msImp.ui.open.sales) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">An invoice already in the Invoices module or on a contract cycle is left as it is (its PDF link is filled in — see Document links). A new one becomes an invoice record with its items, GST, the receipt and the TDS the client kept back.</div>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpSales"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Client</th><th class="num">Base</th><th class="num">GST</th><th class="num">Total</th><th>Receipt</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (it) {
+        var r = it.r, tick = '';
+        if (it.state === 'new' && it.tickable && !it.proposal) tick = '<input type="checkbox"' + (__msImpTicked(it.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + it.id + '\', this.checked)" aria-label="Add ' + __msImpEsc(r.code) + '">';
+        var st;
+        if (it.state === 'app') st = __msImpStateHtml('app', 'in the app', 'Invoice ' + (it.inv.invoiceNumber || '') + ' in the Invoices module (' + (it.inv.status || '') + ')') + (it.differs ? ' <span class="ms-imp-warn" title="The Master and the app differ; the app is left as it is">differs: ' + (it.differs.amount !== null ? __msImpInr(it.differs.amount) : '') + (it.differs.date !== null ? ' ' + __msImpDate(it.differs.date) : '') + ' in the app</span>' : '');
+        else if (it.state === 'cycle') st = __msImpStateHtml('cycle', 'on a contract', it.refs.map(function (ref) { return __msImpContractLabel(contracts[ref.ci], ref.yi); }).join('\n')) + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[it.refs[0].ci], it.refs[0].yi)) + '</span>';
+        else if (it.proposal) st = __msImpStateHtml('new', 'with a new contract', 'Goes in with the contract proposed below') + ' <span class="ms-imp-note">' + __msImpEsc((P.byId['C:' + it.proposal] || {}).product || '') + '</span>';
+        else if (!it.tickable) st = __msImpStateHtml('skip', 'left out', it.why) + ' <span class="ms-imp-note">' + __msImpEsc(it.why) + '</span>';
+        else st = __msImpStateHtml('new', 'new') + ' <span class="ms-imp-note">→ Invoices module' + (it.client && it.client.isNew ? ', client <b>' + __msImpEsc(it.client.name) + '</b> made' : '') + (it.resale && it.resale.endClient ? ', resale for ' + __msImpEsc(it.resale.endClient) : '') + '</span>'
+            + (r.receipt ? '' : ' <span class="ms-imp-warn" title="Added, the invoice would show as owed (and overdue). Tick it if it really is.">no receipt found — unticked</span>');
+        if (it.numberDiffers) st += ' <span class="ms-imp-note" title="The same year and serial, and the same amount or date">· the app writes it <b>' + __msImpEsc(it.numberDiffers) + '</b></span>';
+        var rc = r.receipt, rcHtml;
+        if (rc) rcHtml = (rc.date ? __msImpDate(rc.date) : '<span class="ms-imp-warn">date unknown</span>') + ' · ' + __msImpInr(rc.amount) + (r.tds_adjusted ? ' <span class="ms-imp-note" title="TDS kept back by the client">+ TDS ' + __msImpInr(r.tds_adjusted) + '</span>' : '') + (it.fxDiff ? ' <span class="ms-imp-note" title="Paid in dollars: the rupees received differ from the invoice\'s rupee value">+ exchange difference ' + __msImpInr(it.fxDiff) + '</span>' : '') + ' <span class="ms-imp-note">' + (rc.source === 'master' ? 'Master' : rc.source === 'statement' ? 'bank statement' + (rc.warning ? ' <span class="ms-imp-warn" title="' + __msImpEsc(rc.warning) + '">?</span>' : '') : 'inward remittance') + (rc.together ? ', paid with ' + (rc.together.length - 1) + ' other' + (rc.together.length > 2 ? 's' : '') : '') + '</span>';
+        else rcHtml = '<span class="ms-imp-warn" title="No receipt in the Master, none found in the bank statements: the invoice would show as outstanding">not found</span>';
+        var kind = r.kind === 'export' ? ' <span class="ms-imp-st skip">export</span>' : '';
+        html += '<tr data-id="' + it.id + '"' + (tick && !__msImpTicked(it.id) ? ' class="ms-imp-off"' : '') + '><td>' + tick + '</td><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(r.code) + kind + '</td><td style="white-space:nowrap;">' + __msImpDate(r.date) + '</td>'
+            + '<td class="wrap" style="min-width:160px;" title="' + __msImpEsc(__msImpFirstLine(r.items, 200)) + '">' + __msImpEsc(r.client) + '</td><td class="num">' + __msImpInr(r.base) + '</td><td class="num">' + __msImpInr(r.gst_total) + '</td><td class="num"><b>' + __msImpInr(r.total) + '</b></td>'
+            + '<td class="wrap" style="min-width:150px;">' + rcHtml + '</td><td class="wrap" style="min-width:170px;">' + st + '</td><td>' + __msImpPin(r.file ? __msImpAbs(r.file.rel) : '', r.file ? r.file.rel : '') + (r.warnings && r.warnings.length ? ' <span class="ms-imp-warn" title="' + __msImpEsc(r.warnings.join('\n')) + '"><i class="fas fa-exclamation-triangle"></i></span>' : '') + '</td></tr>';
+    });
+    if (!shown.length) html += '<tr><td colspan="10" class="ms-imp-note" style="text-align:center; padding:14px;">Nothing here' + (__msImp.ui.q ? ' for this search' : '') + '.</td></tr>';
+    if (shown.length > MS_IMP_MAX_ROWS) html += '<tr><td colspan="10" class="ms-imp-note">' + (shown.length - MS_IMP_MAX_ROWS) + ' more — narrow the search.</td></tr>';
+    return html + '</tbody></table></div></div>';
+}
+function __msImpBillsHtml(P, fy) {
+    var rows = P.bills.filter(function (bt) { return bt.fy === fy; });
+    var shown = rows.filter(function (bt) { return __msImpMatches([bt.p.number, bt.p.party, bt.p.end_client, bt.p.total, bt.p.usd, bt.p.items].join(' ')); });
+    var nOpt = rows.filter(function (bt) { return bt.state === 'new' && bt.tickable && bt.home.kind === 'cycle'; }).length;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('bills', 'OEM bills', rows.length + ' rows · ' + rows.filter(function (bt) { return bt.state === 'new'; }).length + ' not in the app',
+        nOpt ? '<span style="margin-left:auto; font-size:11px; font-weight:500;">' + nOpt + ' opt-in: <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'bills\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'bills\', \'' + fy + '\', false)">none</a></span>' : '');
+    if (!__msImp.ui.open.bills) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">A bill already on a contract is left as it is. A bill not in the app goes in with a <b>new contract</b> (below) when its sale is new too; a bill that belongs to a contract you entered is an <b>opt-in</b> — unticked, since adding it changes that contract\'s cycle.</div>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpBills"><thead><tr><th></th><th>Bill</th><th>Date</th><th>OEM · end client</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Total ₹</th><th>Paid</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (bt) {
+        var p = bt.p, tick = '', st;
+        if (bt.state === 'app') st = __msImpStateHtml('app', 'on a cycle\'s bills', bt.refs.map(function (ref) { return __msImpContractLabel(contracts[ref.ci], ref.yi); }).join('\n')) + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[bt.refs[0].ci], bt.refs[0].yi)) + '</span>';
+        else if (bt.state === 'cycle') st = __msImpStateHtml('cycle', 'on an older cycle', 'The cycle\'s own bill fields name it') + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[bt.refs[0].ci], bt.refs[0].yi)) + '</span>';
+        else if (!bt.tickable) st = __msImpStateHtml('skip', 'left out', bt.why) + ' <span class="ms-imp-note">' + __msImpEsc(bt.why) + '</span>';
+        else if (bt.home.kind === 'cycle') {
+            var c = contracts[bt.home.ci];
+            tick = '<input type="checkbox"' + (__msImpTicked(bt.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + bt.id + '\', this.checked)" aria-label="Add bill ' + __msImpEsc(p.number) + ' to the contract">';
+            var yy = c && c.billingYears ? c.billingYears[bt.home.yi] : null;
+            st = __msImpStateHtml('opt', 'opt-in', 'Adding it changes a contract you entered') + ' <span class="ms-imp-note">→ bills of ' + __msImpEsc(__msImpContractLabel(c, bt.home.yi)) + ' (by ' + __msImpEsc(bt.home.via) + ')'
+                + (yy && yy.oemInvoiceNo && !(Array.isArray(yy.apInvoices) && yy.apInvoices.length) ? '; the cycle\'s own bill ' + __msImpEsc(yy.oemInvoiceNo) + ' goes into its bill list beside it, as the app does when a bill is added' : '') + '</span>';
+        } else if (bt.home.kind === 'proposal') st = __msImpStateHtml('new', 'with a new contract', 'Goes in with the contract proposed below') + ' <span class="ms-imp-note">' + __msImpEsc((P.byId['C:' + bt.home.group] || {}).product || '') + '</span>';
+        else st = __msImpStateHtml('skip', 'no home', 'No sale, no contract of this client and product');
+        var pay = p.payment, payHtml;
+        if (pay && pay.date) payHtml = __msImpDate(pay.date) + (pay.fx ? ' @ ' + __msImpNum(pay.fx).toFixed(2) : '') + ' <span class="ms-imp-note">' + (pay.source === 'master' ? 'Master' : pay.source === 'remittance' ? 'remittance' : 'bank statement') + '</span>';
+        else payHtml = '<span class="ms-imp-note">' + (p.paid_in_master ? 'paid, date unknown' : 'not found') + '</span>';
+        html += '<tr data-id="' + bt.id + '"' + (tick && !__msImpTicked(bt.id) ? ' class="ms-imp-off"' : '') + '><td>' + tick + '</td><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(p.number) + '</td><td style="white-space:nowrap;"' + (p.date_master ? ' title="The Master says ' + __msImpEsc(__msImpDate(p.date_master)) + '; the file is dated ' + __msImpEsc(__msImpDate(p.date)) + '"' : '') + '>' + __msImpDate(p.date) + (p.date_master ? ' <span class="ms-imp-warn">*</span>' : '') + '</td>'
+            + '<td class="wrap" style="min-width:160px;" title="' + __msImpEsc(__msImpFirstLine(p.items, 200)) + '">' + __msImpEsc(p.party_canon || p.party) + (p.end_client ? ' <span class="ms-imp-note">· ' + __msImpEsc(p.end_client) + '</span>' : '') + (p.product ? ' <span class="ms-imp-note">· ' + __msImpEsc(p.product) + '</span>' : '') + '</td>'
+            + '<td class="num">' + (p.usd ? __msImpUsd(p.usd) : __msImpInr(p.base)) + '</td><td class="num">' + (p.usd_rate ? __msImpNum(p.usd_rate).toFixed(3) : '—') + '</td><td class="num"><b>' + __msImpInr(p.total) + '</b></td>'
+            + '<td class="wrap" style="min-width:120px;">' + payHtml + '</td><td class="wrap" style="min-width:170px;">' + st + '</td><td>' + __msImpPin(p.file ? __msImpAbs(p.file.rel) : '', p.file ? p.file.rel : '') + (p.warnings && p.warnings.length ? ' <span class="ms-imp-warn" title="' + __msImpEsc(p.warnings.join('\n')) + '"><i class="fas fa-exclamation-triangle"></i></span>' : '') + '</td></tr>';
+    });
+    if (!shown.length) html += '<tr><td colspan="10" class="ms-imp-note" style="text-align:center; padding:14px;">Nothing here' + (__msImp.ui.q ? ' for this search' : '') + '.</td></tr>';
+    if (shown.length > MS_IMP_MAX_ROWS) html += '<tr><td colspan="10" class="ms-imp-note">' + (shown.length - MS_IMP_MAX_ROWS) + ' more — narrow the search.</td></tr>';
+    return html + '</tbody></table></div></div>';
+}
+function __msImpVendorsHtml(P, fy) {
+    var rows = P.vendors.filter(function (vt) { return vt.fy === fy; });
+    var shown = rows.filter(function (vt) { return __msImpMatches([vt.v.number, vt.v.raw_no, vt.v.party, vt.v.total, vt.v.items].join(' ')); });
+    var nNew = rows.filter(function (vt) { return vt.state === 'new' && vt.tickable; }).length;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('vendors', 'Consultants & vendors', rows.length + ' rows · ' + nNew + ' to add',
+        nNew ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'vendors\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'vendors\', \'' + fy + '\', false)">none</a></span>' : '');
+    if (!__msImp.ui.open.vendors) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Each invoice becomes a payment in the Consultants module under its consultant (made where missing, with PAN, GSTIN and address from the Master). Vikas Chauhan and Stone Temple Systems are the one consultant already in the app.</div>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpVendors"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Party</th><th class="num">Base</th><th class="num">GST</th><th class="num">TDS</th><th class="num">Total</th><th>Paid</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (vt) {
+        var v = vt.v, tick = '', st;
+        if (vt.state === 'app') st = __msImpStateHtml('app', 'in the app', 'Payment ' + (vt.pay.paymentNumber || '') + ' under ' + vt.consultant.name) + ' <span class="ms-imp-note">' + __msImpEsc(vt.pay.paymentNumber || '') + '</span>';
+        else if (!vt.tickable) st = __msImpStateHtml('skip', 'left out', vt.why) + ' <span class="ms-imp-note">' + __msImpEsc(vt.why) + '</span>';
+        else { tick = '<input type="checkbox"' + (__msImpTicked(vt.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + vt.id + '\', this.checked)" aria-label="Add ' + __msImpEsc(v.raw_no) + '">'; st = __msImpStateHtml('new', 'new') + ' <span class="ms-imp-note">→ ' + __msImpEsc(vt.consultant.name) + (vt.consultant.isNew ? ' <b>(new consultant, ' + __msImpEsc((vt.consultant.rec && vt.consultant.rec.category) || v.category || 'Service Vendor') + ')</b>' : '') + '</span>'; }
+        var pay = v.payment, payHtml;
+        if (pay && pay.date) payHtml = __msImpDate(pay.date) + ' <span class="ms-imp-note">' + (pay.source === 'master' ? 'Master' : 'bank statement') + '</span>';
+        else payHtml = v.paid_in_master ? '<span class="ms-imp-note" title="The Master records the amount paid but no date: added as Paid without a date">paid, date unknown</span>' : '<span class="ms-imp-warn" title="Neither the Master nor the bank statements show a payment: added as Pending">not found</span>';
+        html += '<tr data-id="' + vt.id + '"' + (tick && !__msImpTicked(vt.id) ? ' class="ms-imp-off"' : '') + '><td>' + tick + '</td><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(v.raw_no) + '</td><td style="white-space:nowrap;">' + __msImpDate(v.date) + '</td>'
+            + '<td class="wrap" style="min-width:140px;" title="' + __msImpEsc(__msImpFirstLine(v.items, 200)) + '">' + __msImpEsc(v.party) + '</td><td class="num">' + __msImpInr(v.base) + '</td><td class="num">' + (v.gst_total ? __msImpInr(v.gst_total) : '—') + '</td><td class="num">' + (v.tds ? __msImpInr(v.tds) : '—') + '</td><td class="num"><b>' + __msImpInr(v.total) + '</b></td>'
+            + '<td class="wrap" style="min-width:120px;">' + payHtml + '</td><td class="wrap" style="min-width:170px;">' + st + '</td><td>' + __msImpPin(v.file ? __msImpAbs(v.file.rel) : '', v.file ? v.file.rel : '') + '</td></tr>';
+    });
+    if (!shown.length) html += '<tr><td colspan="11" class="ms-imp-note" style="text-align:center; padding:14px;">Nothing here' + (__msImp.ui.q ? ' for this search' : '') + '.</td></tr>';
+    if (shown.length > MS_IMP_MAX_ROWS) html += '<tr><td colspan="11" class="ms-imp-note">' + (shown.length - MS_IMP_MAX_ROWS) + ' more — narrow the search.</td></tr>';
+    return html + '</tbody></table></div></div>';
+}
+function __msImpProposalsHtml(P) {
+    var list = P.proposals;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px; border-top:3px solid var(--success);">' + __msImpSecHead('contracts', 'New contracts', list.length + ' proposed · ' + list.filter(function (pr) { return __msImpTicked(pr.id); }).length + ' ticked',
+        list.length ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'contracts\', null, true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'contracts\', null, false)">none</a></span>' : '');
+    if (!__msImp.ui.open.contracts) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">One contract per client and product, made of the OEM bills and the sales invoices they were bought for (all years together). Each cycle carries its bill and its invoice with their PDFs; the PO files are linked when one of the client, product and date is found. Open the contract afterwards to adjust anything.</div>';
+    if (!list.length) html += '<div class="ms-imp-note">Nothing to propose: every OEM bill with a sale is already on a contract.</div>';
+    list.forEach(function (pr) {
+        var on = __msImpTicked(pr.id);
+        var usd = pr.currency === 'USD';
+        html += '<div class="ms-imp-card' + (on ? '' : ' off') + '" data-id="' + pr.id + '"><div style="display:flex; gap:10px; align-items:flex-start;">'
+            + '<input type="checkbox"' + (on ? ' checked' : '') + (pr.unknownClient ? ' disabled' : '') + ' onchange="__msImpTick(\'' + pr.id + '\', this.checked)" aria-label="Make the contract ' + __msImpEsc(pr.client.name + ' ' + pr.product) + '" style="margin-top:3px;">'
+            + '<div style="flex:1;"><div style="font-weight:700; font-size:13px;">' + __msImpEsc(pr.endClient) + (pr.resale && pr.resale.resellerName && pr.resale.endClient ? ' <span class="ms-imp-note">via ' + __msImpEsc(pr.resale.resellerName) + ' (resale)</span>' : '') + ' · ' + __msImpEsc(pr.product) + (pr.client.isNew ? ' <span class="ms-imp-st new">new client</span>' : '') + (pr.billsOnly ? ' <span class="ms-imp-st opt" title="No sales invoice was found for these bills — check this one">bills only</span>' : '') + (pr.unknownClient ? ' <span class="ms-imp-st skip" title="The bill names no client and no sale was found: add this contract by hand">cannot be added — no client</span>' : '') + '</div>'
+            + '<div class="ms-imp-kv">' + __msImpDate(pr.start) + ' – ' + __msImpDate(pr.endDate) + ' · ' + pr.term + ' months · ' + pr.cycles.length + ' cycle' + (pr.cycles.length === 1 ? '' : 's') + ' · cost ' + (usd ? __msImpUsd(pr.cycles[0].baseCost) : __msImpInr(pr.cycles[0].baseCost)) + ' a year @ ' + (usd ? __msImpNum(pr.cycles[0].fx).toFixed(2) : '1') + (pr.cycles[0].baseSell ? ' · sell ' + __msImpInr(pr.cycles[0].baseSell) + ' a year' : '') + '</div>'
+            + '<table class="ms-imp-table" style="margin-top:6px;"><thead><tr><th>Cycle</th><th>From</th><th>Months</th><th>OEM bill</th><th class="num">Cost</th><th>Paid</th><th>Sales invoice</th><th class="num">Base ₹</th><th>Received</th></tr></thead><tbody>';
+        pr.cycles.forEach(function (cy, i) {
+            var p = cy.bill.p, s = cy.sale ? cy.sale.r : null;
+            html += '<tr><td>' + (i + 1) + '</td><td style="white-space:nowrap;">' + __msImpDate(cy.billDate) + '</td><td>' + cy.duration + '</td><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(p.number) + ' ' + __msImpPin(p.file ? __msImpAbs(p.file.rel) : '', p.file ? p.file.rel : '') + '</td>'
+                + '<td class="num">' + (usd ? __msImpUsd(p.usd) : __msImpInr(p.base)) + '</td><td style="white-space:nowrap;">' + (cy.payDate ? __msImpDate(cy.payDate) + (cy.payFx ? ' @ ' + cy.payFx.toFixed(2) : '') : '<span class="ms-imp-note">—</span>') + '</td>'
+                + '<td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + (s ? __msImpEsc(s.code) + ' ' + __msImpPin(s.file ? __msImpAbs(s.file.rel) : '', s.file ? s.file.rel : '') + __msImpFarHtml(cy.bill.pairInfo) : '<span class="ms-imp-note">no sale</span>') + '</td><td class="num">' + (s ? __msImpInr(s.base) : '—') + '</td><td style="white-space:nowrap;">' + (cy.paidDate ? __msImpDate(cy.paidDate) : (cy.paidOk ? '<span class="ms-imp-note" title="The Master records the amount received, not the date">received, no date</span>' : (s ? (s.receipt ? '<span class="ms-imp-note" title="Part received">part</span>' : '<span class="ms-imp-warn" title="No receipt in the Master or the bank statements: the invoice will show as owed">not found</span>') : ''))) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        html += '<div class="ms-imp-note" style="margin-top:6px;">' + (pr.internalPO ? 'Internal PO ' + (pr.internalPO.no ? '<b>' + __msImpEsc(pr.internalPO.no) + '</b> ' : '') + __msImpPin(pr.internalPO.path, pr.internalPO.name) + ' ' + __msImpEsc(pr.internalPO.name) + (pr.internalPO.how === 'client+date' ? ' <span class="ms-imp-warn">(by the client, product and date — check)</span>' : '') : 'No internal PO file found') + ' · '
+            + (pr.clientPO ? 'Client PO ' + (pr.clientPO.no ? '<b>' + __msImpEsc(pr.clientPO.no) + '</b> ' : '') + __msImpPin(pr.clientPO.path, pr.clientPO.name) + ' ' + __msImpEsc(pr.clientPO.name) + (pr.clientPO.how === 'client+date' ? ' <span class="ms-imp-warn">(by the client, product and date — check)</span>' : '') : 'No client PO file found') + '</div>';
+        html += '</div></div></div>';
+    });
+    return html + '</div>';
+}
+// A bill and its invoice far apart in time (the bill names the client — an advance paid long before, say): worth a look.
+function __msImpFarHtml(pi) {
+    if (!pi || !(Math.abs(pi.gap_days) > 120)) return '';
+    var m = Math.max(1, Math.round(Math.abs(pi.gap_days) / 30.44));
+    return ' <span class="ms-imp-warn" title="The bill names this client but is dated ' + Math.abs(pi.gap_days) + ' days ' + (pi.gap_days > 0 ? 'before' : 'after') + ' the invoice — check they belong together">bill ' + m + ' month' + (m === 1 ? '' : 's') + ' ' + (pi.gap_days > 0 ? 'earlier' : 'later') + '</span>';
+}
+function __msImpLinksHtml(P) {
+    var list = P.links;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('links', 'Document links on what is already entered', list.length + ' to fill in · ' + list.filter(function (L) { return __msImpTicked(L.id); }).length + ' ticked',
+        list.length ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'links\', null, true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'links\', null, false)">none</a></span>' : '');
+    if (!__msImp.ui.open.links) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Invoices, bills and POs already in the app whose PDF link is empty, points at a folder since renamed, or at the old personal OneDrive. Only the link is written — never a figure.</div>';
+    if (!list.length) html += '<div class="ms-imp-note">Every document link is in place.</div>';
+    else {
+        html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpLinks"><thead><tr><th></th><th>Where</th><th>Now</th><th>Will be</th></tr></thead><tbody>';
+        list.slice(0, MS_IMP_MAX_ROWS).forEach(function (L) {
+            var on = __msImpTicked(L.id);
+            html += '<tr data-id="' + L.id + '"' + (on ? '' : ' class="ms-imp-off"') + '><td><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="__msImpTick(\'' + L.id + '\', this.checked)" aria-label="' + __msImpEsc(L.label) + '"></td><td class="wrap" style="min-width:260px;">' + __msImpEsc(L.label) + (L.how === 'client+date' ? ' <span class="ms-imp-warn" title="No number matched: the client\'s PO file nearest the date">by date</span>' : '') + '</td>'
+                + '<td class="ms-imp-note wrap" style="min-width:140px; overflow-wrap:anywhere;" title="' + __msImpEsc(L.before) + '">' + (L.before ? __msImpEsc(__msImpBase(L.before)) + (__msImpPathStale(L.before) === 'outside' ? ' (old folder)' : ' (not there)') : 'empty') + '</td><td class="wrap" style="min-width:180px; overflow-wrap:anywhere;">' + __msImpPin(L.after, L.after) + ' ' + __msImpEsc(__msImpBase(L.after)) + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+    }
+    return html + '</div>';
+}
+function __msImpAddHtml(P) {
+    var S = __msImpSelection(P);
+    var parts = [];
+    if (S.proposals.length) parts.push(S.proposals.length + ' contract' + (S.proposals.length === 1 ? '' : 's') + ' (' + S.proposals.reduce(function (n, pr) { return n + pr.cycles.length; }, 0) + ' cycles with their bills and invoices)');
+    if (S.sales.length) parts.push(S.sales.length + ' invoice record' + (S.sales.length === 1 ? '' : 's'));
+    if (S.optIn.length) parts.push(S.optIn.length + ' bill' + (S.optIn.length === 1 ? '' : 's') + ' added to contracts you entered');
+    if (S.vendors.length) parts.push(S.vendors.length + ' consultant payment' + (S.vendors.length === 1 ? '' : 's'));
+    var nc = Object.keys(S.clients).length, nk = Object.keys(S.consultants).length;
+    if (nc) parts.push(nc + ' new client' + (nc === 1 ? '' : 's'));
+    if (nk) parts.push(nk + ' new consultant' + (nk === 1 ? '' : 's'));
+    if (S.links.length) parts.push(S.links.length + ' document link' + (S.links.length === 1 ? '' : 's'));
+    return '<div class="card" style="padding:14px 16px; margin-bottom:14px; border-top:3px solid var(--accent-cyan);"><div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">'
+        + '<button class="btn btn-primary" id="msImpAddBtn" onclick="__msImpApply()"' + (S.count && !__msImp.working ? '' : ' disabled') + '><i class="fas fa-' + (__msImp.working ? 'spinner fa-spin' : 'plus') + '"></i> Add the selected</button>'
+        + '<div style="font-size:12.5px;">' + (parts.length ? parts.join(' · ') : '<span class="ms-imp-note">Nothing ticked.</span>') + '</div></div>'
+        + (__msImp.lastResult ? '<div class="ms-imp-note" style="margin-top:8px;">' + __msImp.lastResult + '</div>' : '') + '</div>';
+}
+function __msImpBatchesHtml() {
+    var b = __msImp.batches || [];
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('batches', 'Imports done', b.length + (__msImp.batchesState === 'loading' ? ' · reading…' : ''));
+    if (!__msImp.ui.open.batches) return html + '</div>';
+    if (__msImp.batchesError) html += '<div class="ms-imp-warn" style="font-size:12px;">' + __msImpEsc(__msImp.batchesError) + '</div>';
+    if (!b.length) html += '<div class="ms-imp-note">None yet.</div>';
+    else {
+        html += '<table class="ms-imp-table"><thead><tr><th>When</th><th>What went in</th><th></th></tr></thead><tbody>';
+        b.slice().reverse().forEach(function (x) {
+            var c = x.counts || {};
+            var what = [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills on contracts' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : '', c.links ? c.links + ' links' : ''].filter(Boolean).join(', ');
+            html += '<tr><td style="white-space:nowrap;">' + __msImpEsc(__msImpWhen(x.at)) + (x.undone ? ' <span class="ms-imp-st skip">undone ' + __msImpEsc(__msImpWhen(x.undone)) + '</span>' : '') + '</td><td>' + __msImpEsc(what || '—') + '</td><td>' + (!x.undone && __msImpCanUndo(x) ? '<button class="btn btn-ghost btn-sm" onclick="__msImpUndo(\'' + __msImpEsc(x.id) + '\')"><i class="fas fa-undo"></i> Undo this import</button>' : (__msImpUndoWhyNot(x) ? '<span class="ms-imp-note">' + __msImpEsc(__msImpUndoWhyNot(x)) + '</span>' : '')) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+    }
+    return html + '</div>';
+}
+function __msImpWhen(iso) { if (!iso) return ''; try { var d = new Date(iso); return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return String(iso); } }
+async function __msImpOpen(path) {
+    if (!path) return;
+    if (typeof window.__msOpenLocalFile === 'function') { await window.__msOpenLocalFile(path); return; }
+    __msImpToast('<i class="fas fa-circle-info"></i> Files open in the Masterstone app on the Mac.', 3500);
+}
+
+// ---- the batches (what each import put in, for Undo) -----------------------------------------
+async function __msImpBatchesRead() {
+    var t = __msImpTauri();
+    if (!t) return { ok: true, list: [] };
+    try {
+        var r = await t.invoke('get_app_settings');
+        if (!r || !r.ok || !r.settings || typeof r.settings !== 'object') return { ok: false, error: (r && r.error) || 'the settings did not load' };
+        var raw = r.settings[MS_IMP_BATCH_KEY];
+        if (!raw) return { ok: true, list: [] };
+        var list = JSON.parse(raw);
+        if (!Array.isArray(list)) return { ok: false, error: 'it is not a list' };
+        return { ok: true, list: list.filter(function (b) { return b && typeof b.id === 'string' && b.at; }) };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+function __msImpBatchesMerge(stored, mine) {
+    var byId = {};
+    (stored || []).forEach(function (b) { byId[b.id] = b; });
+    (mine || []).forEach(function (b) { byId[b.id] = b; });
+    return Object.keys(byId).map(function (k) { return byId[k]; }).sort(function (a, b) { return String(a.at).localeCompare(String(b.at)); });
+}
+async function __msImpBatchesLoad() {
+    var t = __msImpTauri();
+    if (!t) { __msImp.batches = __msImp.batches || []; __msImp.batchesState = 'ready'; return; }
+    __msImp.batchesState = 'loading';
+    var r = await __msImpBatchesRead();
+    if (r.ok) { __msImp.batches = __msImpBatchesMerge(r.list, __msImp.batches); __msImp.batchesError = ''; __msImp.batchesState = 'ready'; }
+    else { __msImp.batches = __msImp.batches || []; __msImp.batchesError = 'The list of imports done could not be read (' + r.error + ').'; __msImp.batchesState = 'error'; }
+    __msImpRefreshIfOpen();
+}
+// What is stored now, with this session's added: a log that could not be read is never written over.
+async function __msImpBatchesSave() {
+    var t = __msImpTauri();
+    if (!t) return true;
+    var cur = await __msImpBatchesRead();
+    if (!cur.ok) { __msImp.batchesError = 'The list of imports done could not be read, so it was not written over (' + cur.error + ') — Undo will not be offered after a restart.'; __msImpLog('WARN', 'batch log not saved', { error: cur.error }); return false; }
+    var merged = __msImpBatchesMerge(cur.list, __msImp.batches);
+    try {
+        var r = await t.invoke('save_app_setting', { key: MS_IMP_BATCH_KEY, value: JSON.stringify(merged) });
+        if (!r || !r.ok) throw new Error((r && r.error) || 'not saved');
+        __msImp.batches = merged; __msImp.batchesState = 'ready';
+        return true;
+    } catch (e) { __msImp.batchesError = 'The list of imports done could not be saved (' + String((e && e.message) || e) + ') — Undo will not be offered after a restart.'; __msImpLog('WARN', 'batch log not saved', { error: String((e && e.message) || e) }); return false; }
+}
+function __msImpCanUndo(b) {
+    if (!b || b.undone) return false;
+    var list = __msImp.batches || [];
+    var later = list.filter(function (x) { return !x.undone && x.at > b.at; });
+    if (later.length) return false;                                              // only the latest
+    var made = (b.created && b.created.contracts) || [];
+    if (made.length && typeof contracts !== 'undefined') {
+        var first = Math.min.apply(null, made);
+        if (first + made.length !== contracts.length) return false;              // contracts were added since: their places would shift
+        for (var i = first; i < contracts.length; i++) if (!contracts[i] || !contracts[i].imported || contracts[i].imported.batch !== b.id) return false;
+    }
+    if (typeof contracts !== 'undefined' && !__msImpUndoCheck(b).ok) return false;            // contracts deleted or re-ordered since
+    return true;
+}
+// Why the latest import cannot be undone, in a line for the list.
+function __msImpUndoWhyNot(b) {
+    if (!b || b.undone) return '';
+    var list = __msImp.batches || [];
+    if (list.some(function (x) { return !x.undone && x.at > b.at; })) return '';
+    var made = (b.created && b.created.contracts) || [];
+    if (made.length && typeof contracts !== 'undefined') {
+        var first = Math.min.apply(null, made);
+        if (first + made.length !== contracts.length) return 'Contracts were added or removed since — the snapshot taken before this import can put everything back.';
+    }
+    if (typeof contracts !== 'undefined' && !__msImpUndoCheck(b).ok) return 'Contracts were changed (removed or re-ordered) since — the snapshot taken before this import can put everything back.';
+    return '';
+}
+
+// ---- making the records ---------------------------------------------------------------------
+function __msImpClientRecord(client, at) {
+    var rec = (typeof cmBlankRecord === 'function') ? cmBlankRecord(client.name) : { companyName: client.name };
+    var e = client.rec || {};
+    rec.companyName = client.name;
+    rec.gstin = e.gst || ''; rec.pan = e.pan || ''; rec.contactPhone = e.phone || '';
+    rec.billAddr = e.address || ''; rec.shipAddr = e.ship_address || e.address || '';
+    rec.notes = 'Imported from the Masters on ' + at.slice(0, 10) + (e.names && e.names.length > 1 ? ' (also written as ' + e.names.filter(function (n) { return n !== client.name; }).join('; ') + ')' : '');
+    if (rec.gstin && typeof meNewId === 'function') {
+        rec.gstEntries = [{ id: meNewId('g'), label: 'Primary', gstin: rec.gstin, stateCode: rec.gstin.slice(0, 2), isPrimary: true }];
+        if (rec.billAddr) rec.billingAddresses = [{ id: meNewId('b'), label: 'Primary', address: rec.billAddr, stateCode: rec.gstin.slice(0, 2), country: 'India', linkedGstId: rec.gstEntries[0].id, isPrimary: true, isDefault: true }];
+        if (rec.shipAddr) rec.shippingAddresses = [{ id: meNewId('s'), label: 'Primary', address: rec.shipAddr, isPrimary: true }];
+    } else if (/darktrace/i.test(client.name) && rec.billAddr && typeof meNewId === 'function') {
+        rec.billingAddresses = [{ id: meNewId('b'), label: 'Primary', address: rec.billAddr, stateCode: '', country: 'United Kingdom', isPrimary: true, isDefault: true }];
+    }
+    rec.imported = { at: at };
+    try { if (typeof migrateClientMasterRecord === 'function') migrateClientMasterRecord(rec); } catch (err) {}
+    return rec;
+}
+function __msImpConsultantRecord(con, at) {
+    var c = (typeof consultantBlank === 'function') ? consultantBlank() : { id: __msImpNewId('cons') };
+    var e = con.rec || {};
+    c.name = con.name; c.category = e.category || 'Service Vendor';
+    c.role = c.category === 'Content' ? 'Content vendor' : (c.category === 'Consultant' ? 'Consultant' : 'Service vendor');
+    c.panNumber = e.pan || ''; c.gstRegistered = !!e.gst_registered; c.gstNumber = e.gst || ''; c.contactPhone = e.phone || '';
+    c.addressLine1 = String(e.address || '').replace(/\s+/g, ' ').slice(0, 160); c.state = c.gstNumber ? ((typeof GST_STATE_CODES === 'object' && GST_STATE_CODES[c.gstNumber.slice(0, 2)]) || '') : '';
+    c.notes = 'Imported from the Masters on ' + at.slice(0, 10) + (e.names && e.names.length > 1 ? ' (also written as ' + e.names.join('; ') + ')' : '');
+    c.imported = { at: at };
+    return c;
+}
+function __msImpGstMode(r, M) {
+    if (r.kind === 'export') return 'export';
+    if (__msImpNum(r.cgst) > 0 || __msImpNum(r.sgst) > 0) return 'intra';
+    if (__msImpNum(r.igst) > 0) return 'inter';
+    var st = r.gst ? r.gst.slice(0, 2) : '';
+    if (st && M.companyState) return st === M.companyState ? 'intra' : 'inter';
+    return 'unknown';
+}
+function __msImpPayMode(mode) { var m = String(mode || '').toUpperCase(); if (/RTGS/.test(m)) return 'RTGS'; if (/IMPS/.test(m)) return 'IMPS'; if (/UPI/.test(m)) return 'UPI'; if (/CHEQUE|CHQ/.test(m)) return 'Cheque'; if (/NEFT/.test(m)) return 'NEFT'; return 'Other'; }
+function __msImpInvoiceRecord(it, link, M, batch, at) {
+    var r = it.r, inv = (typeof invoiceBlank === 'function') ? invoiceBlank() : { id: __msImpNewId('inv'), lineItems: [], payments: [], statusHistory: [] };
+    inv.invoiceNumber = r.code; inv.invoiceDate = r.date; inv.dueDate = r.due || __msImpAddDays(r.date, __msImpNum(r.terms_days) || 30);
+    inv.clientName = (it.resale && it.resale.endClient) ? it.resale.endClient : it.client.name;
+    inv.linkedContractIdx = link ? String(link.ci) : ''; inv.linkedCycleYearIdx = link ? String(link.yi) : '';
+    if (it.resale && it.resale.resellerKey && it.resale.endClient) { inv.commercialModel = 'Resale'; inv.sourcedViaResellerKey = it.resale.resellerKey; } else { inv.commercialModel = 'Direct'; inv.sourcedViaResellerKey = ''; }
+    inv.subject = __msImpFirstLine(r.items, 120);
+    var base = __msImpNum(r.base), qty = __msImpNum(r.qty) > 0 ? __msImpNum(r.qty) : 1, unit = qty ? base / qty : base;
+    if (Math.abs(unit * qty - base) > 0.005 || Math.round(unit * 100) !== unit * 100) { qty = 1; unit = base; }
+    var gstPct = base > 0 ? Math.round(__msImpNum(r.gst_total) / base * 10000) / 100 : 0;
+    inv.lineItems = [{ id: (typeof invNewId === 'function') ? invNewId('li') : __msImpNewId('li'), product: __msImpFirstLine(r.items, 160) || r.code, qty: qty, unit: qty > 1 ? 'Nos' : '', unitPrice: unit, gstPct: gstPct, hsnCode: '', discountPct: 0 }];
+    if (String(r.items || '').split(/\r?\n/).filter(function (x) { return x.trim(); }).length > 1) inv.notes = String(r.items).replace(/\t/g, ' ').trim().slice(0, 600);
+    inv.gstMode = __msImpGstMode(r, M); inv.reverseCharge = false;
+    inv.placeOfSupplyCode = r.gst ? r.gst.slice(0, 2) : ''; inv.placeOfSupplyName = inv.placeOfSupplyCode && typeof GST_STATE_CODES === 'object' ? (GST_STATE_CODES[inv.placeOfSupplyCode] || '') : '';
+    inv.grossTotal = base; inv.discountTotal = 0; inv.subtotal = base; inv.cgst = __msImpNum(r.cgst); inv.sgst = __msImpNum(r.sgst); inv.igst = __msImpNum(r.igst); inv.gstTotal = __msImpNum(r.gst_total); inv.grandTotal = __msImpNum(r.total);
+    inv.payments = [];
+    var rc = r.receipt, note = 'Imported from Master_' + r.fy + ' (row ' + (r.sr || '?') + ')';
+    if (rc && __msImpNum(rc.amount) > 0) {
+        var d = rc.date || r.date;
+        inv.payments.push({ date: d, amount: __msImpR2(rc.amount), mode: rc.source === 'remittance' ? 'Other' : __msImpPayMode(rc.mode), reference: rc.ref || '', notes: note + ' — ' + (rc.source === 'master' ? 'receipt as the Master records it' : rc.source === 'statement' ? 'receipt found in the bank statement (' + (rc.acct || '') + ')' : 'inward remittance') + (rc.date ? '' : '; the date is not in the Master') });
+        var tds = __msImpNum(r.tds_adjusted);
+        var gap = __msImpR2(inv.grandTotal - __msImpNum(rc.amount));
+        if (tds > 0 && Math.abs(gap - tds) <= 2.5) inv.payments.push({ date: d, amount: gap, mode: 'Other', reference: 'TDS', notes: 'TDS kept back by the client (the Master: "Balance adjusted towards TDS")' });
+        else if (gap > 0 && gap <= 2.5) inv.payments[0].amount = __msImpR2(__msImpNum(rc.amount) + gap);
+        var fxd = __msImpFxDiff(r);
+        if (fxd) inv.payments.push({ date: d, amount: fxd, mode: 'Other', reference: 'FX', notes: 'Exchange difference — the export was paid in dollars; the rupees received differ from the invoice\'s rupee value' });
+    }
+    inv.amountPaid = __msImpR2(inv.payments.reduce(function (s, p) { return s + __msImpNum(p.amount); }, 0));
+    inv.amountOutstanding = Math.max(0, __msImpR2(inv.grandTotal - inv.amountPaid));
+    inv.status = inv.amountPaid >= inv.grandTotal - 0.005 && inv.grandTotal > 0 ? 'Paid' : (inv.amountPaid > 0 ? 'Partially Paid' : 'Issued');
+    inv.type = /^(SERVICE|CONTENT|VIRTUAL SERVICE|ILOUPE)$/.test(r.head || '') ? 'service' : 'subscription';
+    inv.issuedAt = r.date + 'T00:00:00.000Z'; inv.paidAt = inv.status === 'Paid' ? (inv.payments[inv.payments.length - 1].date + 'T00:00:00.000Z') : null;
+    inv.createdAt = at; inv.updatedAt = at;
+    inv.statusHistory = [{ status: 'Draft', changedAt: at }, { status: 'Issued', changedAt: inv.issuedAt }];
+    if (inv.status !== 'Issued') inv.statusHistory.push({ status: inv.status, changedAt: inv.paidAt || at });
+    inv.localPdfPath = r.file ? __msImpAbs(r.file.rel) : '';
+    inv.imported = { batch: batch, at: at, fy: r.fy, sr: r.sr, master: 'Master_' + r.fy + '.xlsx' };
+    return inv;
+}
+function __msImpConPayRecord(vt, consultantId, seq, batch, at) {
+    var v = vt.v, rec = (typeof consultantPaymentBlank === 'function') ? consultantPaymentBlank() : { id: __msImpNewId('cpay') };
+    rec.consultantId = consultantId;
+    rec.paymentNumber = 'MS-CON-' + v.fy.replace('-', '') + '-I' + String(seq).padStart(3, '0');
+    rec.periodCovered = __msImpFirstLine(v.items, 80);
+    rec.invoiceDate = v.date; rec.invoiceNumber = v.raw_no; rec.dueDate = v.due || '';
+    rec.subtotal = __msImpNum(v.base); rec.gstApplicable = __msImpNum(v.gst_total) > 0; rec.gstAmount = __msImpNum(v.gst_total); rec.totalAmount = __msImpNum(v.total);
+    rec.tdsAmount = (v.tds !== null && v.tds !== undefined && __msImpNum(v.tds) > 0 && __msImpNum(v.tds) <= rec.subtotal) ? __msImpR2(v.tds) : null;
+    var pay = v.payment;
+    rec.status = (pay && pay.date) || v.paid_in_master ? 'Paid' : 'Pending';
+    rec.paidDate = pay && pay.date ? pay.date : null;
+    rec.paymentMode = rec.status === 'Paid' ? 'Bank Transfer' : '';
+    rec.paymentReference = pay && pay.ref ? String(pay.ref) : '';
+    rec.notes = 'Imported from Master_' + v.fy + ' (row ' + (v.sr || '?') + ')' + (pay && pay.source === 'statement' ? ' — payment found in the bank statement (' + (pay.acct || '') + ')' : (rec.status === 'Paid' && !rec.paidDate ? ' — the Master records the amount paid but no date' : (rec.status === 'Pending' ? ' — no payment found in the Master or the bank statements' : '')));
+    rec.link = ''; rec.localPath = v.file ? __msImpAbs(v.file.rel) : '';
+    rec.createdAt = at; rec.updatedAt = at;
+    rec.imported = { batch: batch, at: at, fy: v.fy, sr: v.sr, master: 'Master_' + v.fy + '.xlsx' };
+    return rec;
+}
+function __msImpContractRecord(pr, M, batch, at) {
+    var usd = pr.currency === 'USD';
+    var clientRec = (typeof clientMaster === 'object' && clientMaster && clientMaster[pr.endClient]) || null;
+    var e = pr.client.rec || {};
+    var cycles = pr.cycles.map(function (cy, i) {
+        var p = cy.bill.p, s = cy.sale ? cy.sale.r : null;
+        var ap = { invNo: p.number, date: p.date, amount: usd ? __msImpNum(p.usd) : __msImpNum(p.base), fx: usd ? (cy.payFx || cy.fx) : 1, payDate: cy.payDate || '', link: '', localPath: p.file ? __msImpAbs(p.file.rel) : '',
+                   apId: __msImpNewId('apinv'), uploadAttId: '', gstAmount: !usd && __msImpNum(p.gst_total) > 0 ? __msImpR2(p.gst_total) : null, tdsAmount: p.tds ? __msImpR2(p.tds) : null };
+        if (cy.payFx) ap.payFx = cy.payFx;
+        if (cy.payRef) ap.payRef = cy.payRef;
+        var ar = s ? [{ invNo: s.code, date: s.date, amount: __msImpNum(s.base), paidDate: cy.paidDate || '', link: '', localPath: s.file ? __msImpAbs(s.file.rel) : '' }] : [];
+        return { cycle: i + 1, duration: cy.duration, ratio: cy.ratio, fx: cy.fx, billDate: cy.billDate, baseCost: cy.baseCost, baseSell: cy.baseSell,
+                 invoiceRaised: !!s, actualInvoiceDate: s ? s.date : null, clientInvoiceNo: s ? s.code : '', paid: !!cy.paidOk, paymentDate: cy.paidDate || null,
+                 vendorPaid: !!cy.payDate || !!p.paid_in_master, settlementFX: cy.payFx || null, clientInvoiceLink: '', oemInvoiceLink: '', oemInvoiceNo: p.number, oemInvoiceDate: p.date, oemPaymentDate: cy.payDate || null,
+                 clientInvoiceLocalPath: s && s.file ? __msImpAbs(s.file.rel) : '', oemInvoiceLocalPath: p.file ? __msImpAbs(p.file.rel) : '', arInvoices: ar, apInvoices: [ap] };
+    });
+    var first = cycles[0];
+    var resale = !!(pr.resale && pr.resale.resellerKey && pr.resale.endClient);
+    var c = { client: pr.endClient, product: pr.product, oem: pr.oemName, licenses: '', hardware: '', services: '',
+              internalPO: pr.internalPO ? (pr.internalPO.no || '') : '', internalPOLink: '', internalPOLocalPath: pr.internalPO ? pr.internalPO.path : '', internalPOUploadAttId: '', internalPODate: pr.internalPO ? (pr.internalPO.date || '') : '',
+              oemQuote: '', oemQuoteLink: '', oemQuoteLocalPath: '',
+              clientPO: pr.clientPO ? (pr.clientPO.no || '') : '', clientPOLink: '', clientPOLocalPath: pr.clientPO ? pr.clientPO.path : '', clientPODate: pr.clientPO ? (pr.clientPO.date || '') : '',
+              clientPOs: pr.clientPO ? [{ poNo: pr.clientPO.no || '', poLink: '', poDate: pr.clientPO.date || '', localPath: pr.clientPO.path, cpoId: __msImpNewId('cpo'), uploadAttId: '' }] : [],
+              vendorCode: (clientRec && clientRec.vendorCode) || '', businessHead: '',
+              clientGST: (clientRec && clientRec.gstin) || e.gst || '', clientPAN: (clientRec && clientRec.pan) || e.pan || '', clientCIN: (clientRec && clientRec.cin) || '',
+              clientContactName: (clientRec && clientRec.contactName) || '', clientEmail: (clientRec && clientRec.contactEmail) || '', clientPhone: (clientRec && clientRec.contactPhone) || e.phone || '',
+              billAddr: (clientRec && clientRec.billAddr) || e.address || '', shipAddr: (clientRec && clientRec.shipAddr) || e.ship_address || e.address || '',
+              isReseller: resale, resellerName: resale ? pr.resale.resellerName : '', commercialModel: resale ? 'Resale' : 'Direct', sourcedViaResellerKey: resale ? pr.resale.resellerKey : '',
+              commissionTypeOverride: '', commissionPctOverride: '', commissionFixedOverride: '',
+              costCurrency: usd ? 'USD' : 'INR', costUSD: first.baseCost, sellINR: first.baseSell, term: pr.term, start: pr.start, endDate: pr.endDate, billingYears: cycles, baseFX: usd ? first.fx : 1,
+              type: 'subscription', serviceId: '', serviceSAC: '', serviceDuration: '', servicePaymentTerms: '',
+              imported: { batch: batch, at: at, from: pr.cycles.map(function (cy) { return 'Master_' + cy.bill.fy; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(', '), note: pr.billsOnly ? 'bills only — no sales invoice was found' : '' } };
+    return c;
+}
+// Which record a contract link writes, told apart from the others: the contract (client, product, start), the cycle's date, and
+// the invoice, bill or PO number it carries — checked before an Undo puts a link back.
+function __msImpLinkNo(L) {
+    var c = contracts[L.ci]; if (!c) return null;
+    if (L.field === 'internalPOLocalPath') return String(c.internalPO || '');
+    if (L.field === 'clientPOLocalPath') return String(c.clientPO || '');
+    if (L.field === 'clientPOs[].localPath') return (Array.isArray(c.clientPOs) && c.clientPOs[L.pi]) ? String(c.clientPOs[L.pi].poNo || '') : null;
+    var y = c.billingYears && c.billingYears[L.yi]; if (!y) return null;
+    if (L.field === 'clientInvoiceLocalPath') return String(y.clientInvoiceNo || '');
+    if (L.field === 'oemInvoiceLocalPath') return String(y.oemInvoiceNo || '');
+    if (L.field === 'arInvoices[].localPath') return (y.arInvoices && y.arInvoices[L.ar]) ? String(y.arInvoices[L.ar].invNo || '') : null;
+    if (L.field === 'apInvoices[].localPath') return (y.apInvoices && y.apInvoices[L.ap]) ? String(y.apInvoices[L.ap].invNo || '') : null;
+    return null;
+}
+function __msImpLinkIdent(L) {
+    var c = contracts[L.ci], y = (c && c.billingYears && L.yi !== undefined && L.yi !== null) ? c.billingYears[L.yi] : null;
+    return { con: __msImpConIdent(c), bill: y ? (y.billDate || '') : null, no: __msImpLinkNo(L) };
+}
+// Can a batch be put back exactly? Every record it touched must still be where it was ('moved' counts those that are not);
+// a link changed by hand since is left as it is ('changed').
+function __msImpUndoCheck(b) {
+    var moved = 0, changed = [];
+    (b.links || []).forEach(function (L, i) {
+        if (L.entity === 'contract' && L.ident) {
+            var c = contracts[L.ci], y = (c && c.billingYears && L.yi !== undefined && L.yi !== null) ? c.billingYears[L.yi] : null;
+            if (!c || __msImpConIdent(c) !== L.ident.con || (L.ident.bill !== null && (!y || (y.billDate || '') !== L.ident.bill)) || __msImpLinkNo(L) !== L.ident.no) { moved++; return; }
+        }
+        var refs = __msImpFieldRefs(L);
+        if (!refs.length) { moved++; return; }
+        if (String(refs[0].o[refs[0].k] || '') !== String(L.after || '')) changed.push(i);
+    });
+    (b.optIn || []).forEach(function (o) {
+        var c = contracts[o.ci], y = c && c.billingYears && c.billingYears[o.yi];
+        if (!c || !y || (o.ident && (__msImpConIdent(c) !== o.ident.con || (y.billDate || '') !== o.ident.bill))) moved++;
+    });
+    return { ok: moved === 0, moved: moved, changed: changed };
+}
+// The record and key a document link writes — two when a contract's first client PO is mirrored on its own field.
+function __msImpFieldRefs(L) {
+    if (L.entity === 'invoice') { var inv = (typeof invoices !== 'undefined' ? invoices : []).find(function (x) { return x && x.id === L.invId; }); return inv ? [{ o: inv, k: 'localPdfPath' }] : []; }
+    if (L.entity === 'conpay') { var cp = (typeof consultantPayments !== 'undefined' ? consultantPayments : []).find(function (x) { return x && x.id === L.payId; }); return cp ? [{ o: cp, k: 'localPath' }] : []; }
+    var c = contracts[L.ci]; if (!c) return [];
+    if (L.field === 'internalPOLocalPath' || L.field === 'clientPOLocalPath') return [{ o: c, k: L.field }];
+    if (L.field === 'clientPOs[].localPath') return (Array.isArray(c.clientPOs) && c.clientPOs[L.pi]) ? [{ o: c.clientPOs[L.pi], k: 'localPath' }].concat(L.alsoPrimary ? [{ o: c, k: 'clientPOLocalPath' }] : []) : [];
+    var y = c.billingYears && c.billingYears[L.yi]; if (!y) return [];
+    if (L.field === 'clientInvoiceLocalPath' || L.field === 'oemInvoiceLocalPath') return [{ o: y, k: L.field }];
+    if (L.field === 'arInvoices[].localPath') return (y.arInvoices && y.arInvoices[L.ar]) ? [{ o: y.arInvoices[L.ar], k: 'localPath' }] : [];
+    if (L.field === 'apInvoices[].localPath') return (y.apInvoices && y.apInvoices[L.ap]) ? [{ o: y.apInvoices[L.ap], k: 'localPath' }] : [];
+    return [];
+}
+function __msImpSetField(L, value) { var refs = __msImpFieldRefs(L); refs.forEach(function (r) { r.o[r.k] = value; }); return refs.length > 0; }
+// Undo of a link: each field exactly as it was — its old value, or no field at all where there was none.
+function __msImpPutBack(L) {
+    var refs = __msImpFieldRefs(L);
+    if (!refs.length) return false;
+    if (!Array.isArray(L.prior) || L.prior.length !== refs.length) { refs.forEach(function (r) { r.o[r.k] = L.before; }); return true; }
+    refs.forEach(function (r, i) { if (L.prior[i] && L.prior[i].had) r.o[r.k] = L.prior[i].v; else delete r.o[r.k]; });
+    return true;
+}
+function __msImpSaveAll(which) {
+    var errs = [];
+    var tryIt = function (name, fn) { try { fn(); } catch (e) { errs.push(name + ': ' + String((e && e.message) || e)); } };
+    if (which.clients && typeof saveClientMasterData === 'function') tryIt('clients', saveClientMasterData);
+    if (which.consultants && typeof saveConsultants === 'function') tryIt('consultants', saveConsultants);
+    if (which.contracts && typeof persistData === 'function') tryIt('contracts', persistData);
+    if (which.invoices && typeof saveInvoices === 'function') tryIt('invoices', saveInvoices);
+    if (which.conPays && typeof saveConsultantPayments === 'function') tryIt('consultant payments', saveConsultantPayments);
+    return errs;
+}
+
+// ---- Add the selected -------------------------------------------------------------------------
+async function __msImpApply() {
+    if (__msImp.working) return;
+    __msImp.plan = null;
+    var P = __msImpPlan();
+    // the files the Mac has not been asked about yet: asked first, so what is added is what the page will show
+    for (var rounds = 0; rounds < 3 && P && (__msImp.checking || Object.keys(__msImp.toCheck).length); rounds++) {
+        for (var wt = 0; wt < 100 && __msImp.checking; wt++) await new Promise(function (res) { setTimeout(res, 50); });
+        await __msImpCheckPaths();
+        __msImp.plan = null; P = __msImpPlan();
+    }
+    if (!P || __msImp.working) return;
+    var S = __msImpSelection(P);
+    if (!S.count) { __msImpToast('<i class="fas fa-circle-info"></i> Nothing is ticked.', 3000); return; }
+    if (__msImp.batchesState !== 'ready') await __msImpBatchesLoad();
+    var lines = ['Add to the app:'];
+    if (S.proposals.length) lines.push('  ' + S.proposals.length + ' new contract' + (S.proposals.length === 1 ? '' : 's') + ' — ' + S.proposals.map(function (pr) { return pr.endClient + ' (' + pr.productShort + ', ' + pr.cycles.length + ' cycle' + (pr.cycles.length === 1 ? '' : 's') + ')'; }).slice(0, 8).join('; ') + (S.proposals.length > 8 ? '; …' : ''));
+    if (S.sales.length) lines.push('  ' + S.sales.length + ' invoice record' + (S.sales.length === 1 ? '' : 's') + ' in the Invoices module (' + __msImpInr(S.sales.reduce(function (t, it) { return t + __msImpNum(it.r.total); }, 0)) + ')');
+    if (S.optIn.length) lines.push('  ' + S.optIn.length + ' bill' + (S.optIn.length === 1 ? '' : 's') + ' added to the cycles of contracts you entered');
+    if (S.vendors.length) lines.push('  ' + S.vendors.length + ' consultant payment' + (S.vendors.length === 1 ? '' : 's') + ' (' + __msImpInr(S.vendors.reduce(function (t, vt) { return t + __msImpNum(vt.v.total); }, 0)) + ')');
+    var nc = Object.keys(S.clients).length, nk = Object.keys(S.consultants).length;
+    if (nc) lines.push('  ' + nc + ' new client' + (nc === 1 ? '' : 's') + ': ' + Object.keys(S.clients).map(function (k) { return S.clients[k].name; }).join(', '));
+    if (nk) lines.push('  ' + nk + ' new consultant' + (nk === 1 ? '' : 's') + ': ' + Object.keys(S.consultants).map(function (k) { return S.consultants[k].name; }).join(', '));
+    if (S.links.length) lines.push('  ' + S.links.length + ' document link' + (S.links.length === 1 ? '' : 's') + ' on what is already entered');
+    lines.push('');
+    lines.push('Nothing already in the app is changed except those links. ' + (__msImpTauri() && typeof window.__msSnapshot === 'function' ? 'A snapshot is taken first; this import can be undone from this page' : 'This import can be undone from this page') + (__msImp.batchesState === 'error' ? ' until the app is closed (the list of imports done does not read).' : '.'));
+    if (!(await __msAsk(lines.join('\n'), { ok: 'Add to the app' }))) return;
+    __msImp.working = true; __msImp.lastResult = ''; renderImportPage();
+    var at = new Date().toISOString(), batch = { id: 'imp_' + Date.now().toString(36), at: at, counts: {}, created: { contracts: [], invoices: [], consultants: [], conPays: [], clients: [] }, optIn: [], links: [] };
+    var M = __msImpMaps();
+    var problems = [];
+    try {
+        if (__msImpTauri() && typeof window.__msSnapshot === 'function') { try { await window.__msSnapshot(); } catch (e) { problems.push('the snapshot could not be taken (' + String((e && e.message) || e) + ')'); } }
+        // the clients
+        var made = {};
+        Object.keys(S.clients).forEach(function (k) {
+            var cl = S.clients[k];
+            if (!cl.name || (typeof clientMaster === 'object' && clientMaster && clientMaster[cl.name])) return;
+            clientMaster[cl.name] = __msImpClientRecord(cl, at); batch.created.clients.push(cl.name); made[k] = cl.name;
+        });
+        // the consultants
+        var conIds = {};
+        Object.keys(S.consultants).forEach(function (k) {
+            var con = S.consultants[k];
+            var c = __msImpConsultantRecord(con, at);
+            consultants.push(c); batch.created.consultants.push(c.id); conIds[k] = c.id;
+        });
+        // the contracts
+        var firstCycleOf = {};
+        S.proposals.forEach(function (pr) {
+            var c = __msImpContractRecord(pr, M, batch.id, at);
+            contracts.push(c);
+            var ci = contracts.length - 1;
+            batch.created.contracts.push(ci);
+            pr.cycles.forEach(function (cy, yi) { if (cy.sale) firstCycleOf[cy.sale.id] = { ci: ci, yi: yi }; });
+        });
+        // the invoice records: the plain ones, and those that go with the new contracts (linked to their cycle)
+        var invRows = S.sales.slice();
+        S.proposals.forEach(function (pr) { pr.cycles.forEach(function (cy) { if (cy.sale && cy.sale.state === 'new' && cy.sale.tickable) invRows.push(cy.sale); }); });
+        invRows.forEach(function (it) {
+            var inv = __msImpInvoiceRecord(it, firstCycleOf[it.id] || null, M, batch.id, at);
+            if (M.invByCode[__msImpCode(inv.invoiceNumber)]) { problems.push('invoice ' + inv.invoiceNumber + ' is already in the app — skipped'); return; }
+            invoices.push(inv); batch.created.invoices.push(inv.id);
+            M.invByCode[__msImpCode(inv.invoiceNumber)] = inv;
+        });
+        // the consultants' payments
+        var seqByFy = {};
+        consultantPayments.forEach(function (p) { var m = String(p.paymentNumber || '').match(/^MS-CON-(\d{6})-I(\d{3})$/); if (m) seqByFy[m[1]] = Math.max(seqByFy[m[1]] || 0, parseInt(m[2], 10)); });
+        S.vendors.sort(function (a, b) { return String(a.v.date).localeCompare(String(b.v.date)); }).forEach(function (vt) {
+            var cid = vt.consultant.id || conIds[vt.consultant.partyKey];
+            if (!cid) { problems.push('no consultant for ' + vt.v.party + ' — ' + vt.v.raw_no + ' skipped'); return; }
+            var fyk = vt.v.fy.replace('-', ''); seqByFy[fyk] = (seqByFy[fyk] || 0) + 1;
+            var rec = __msImpConPayRecord(vt, cid, seqByFy[fyk], batch.id, at);
+            consultantPayments.push(rec); batch.created.conPays.push(rec.id);
+        });
+        // the document links (before the opt-in bills: a cycle's own bill that goes into its list carries the link just filled in)
+        S.links.forEach(function (L) {
+            var refs = __msImpFieldRefs(L);
+            if (!refs.length) { problems.push('link not written: ' + L.label); return; }
+            if (String(refs[0].o[refs[0].k] || '') !== String(L.before || '') || (L.entity === 'contract' && JSON.stringify(__msImpLinkIdent(L)) !== JSON.stringify(L.ident0))) { problems.push('link left as it is (it changed meanwhile): ' + L.label); return; }
+            var prior = refs.map(function (r) { return { had: Object.prototype.hasOwnProperty.call(r.o, r.k), v: r.o[r.k] }; });
+            var ident = L.entity === 'contract' ? __msImpLinkIdent(L) : null;
+            if (__msImpSetField(L, L.after)) batch.links.push({ entity: L.entity, ci: L.ci, yi: L.yi, ar: L.ar, ap: L.ap, pi: L.pi, field: L.field, invId: L.invId, payId: L.payId, alsoPrimary: !!L.alsoPrimary, before: L.before, after: L.after, prior: prior, ident: ident });
+            else problems.push('link not written: ' + L.label);
+        });
+        // the opt-in bills on contracts already entered
+        S.optIn.forEach(function (bt) {
+            var c = contracts[bt.home.ci], y = c && c.billingYears && c.billingYears[bt.home.yi];
+            if (!y) { problems.push('bill ' + bt.p.number + ': its cycle is gone — skipped'); return; }
+            var p = bt.p, usd = p.usd > 0 && (c.costCurrency || 'USD') !== 'INR';
+            var pay = p.payment || null;
+            var ap = { invNo: p.number, date: p.date, amount: usd ? __msImpNum(p.usd) : __msImpNum(p.base), fx: usd ? ((pay && pay.fx) || __msImpNum(p.usd_rate) || '') : 1, payDate: pay && pay.date ? pay.date : '', link: '', localPath: p.file ? __msImpAbs(p.file.rel) : '',
+                       apId: __msImpNewId('apinv'), uploadAttId: '', gstAmount: null, tdsAmount: p.tds ? __msImpR2(p.tds) : null, imported: { batch: batch.id, at: at } };
+            if (pay && pay.fx) ap.payFx = __msImpNum(pay.fx);
+            if (pay && pay.source === 'remittance' && pay.ref) ap.payRef = pay.ref;
+            var hadAp = Array.isArray(y.apInvoices), promoted = null;
+            if ((!hadAp || !y.apInvoices.length) && y.oemInvoiceNo) {
+                // the cycle names its bill in its own (older) fields, which the app shows only while the bill list is empty:
+                // that bill goes into the list first, as the app does itself when a bill is added
+                var bc = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
+                var inrCost = String(c.costCurrency || 'USD').toUpperCase() === 'INR';
+                promoted = { invNo: String(y.oemInvoiceNo), date: y.oemInvoiceDate || '', amount: __msImpR2(__msImpNum(bc) * (__msImpNum(y.ratio) || 1)), fx: inrCost ? 1 : (__msImpNum(y.settlementFX) || __msImpNum(y.fx) || __msImpNum(c.baseFX) || ''),
+                             payDate: y.oemPaymentDate || '', link: y.oemInvoiceLink || '', localPath: y.oemInvoiceLocalPath || '', apId: __msImpNewId('apinv'), uploadAttId: '' };
+            }
+            if (!hadAp) y.apInvoices = [];
+            if (promoted) y.apInvoices.push(promoted);
+            y.apInvoices.push(ap);
+            batch.optIn.push({ ci: bt.home.ci, yi: bt.home.yi, apId: ap.apId, promotedApId: promoted ? promoted.apId : '', hadAp: hadAp, ident: { con: __msImpConIdent(c), bill: y.billDate || '' } });
+        });
+        batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
+        var errs = __msImpSaveAll({ clients: batch.created.clients.length > 0, consultants: batch.created.consultants.length > 0, contracts: batch.created.contracts.length > 0 || batch.optIn.length > 0 || batch.links.some(function (l) { return l.entity === 'contract'; }),
+                                    invoices: batch.created.invoices.length > 0 || batch.links.some(function (l) { return l.entity === 'invoice'; }), conPays: batch.created.conPays.length > 0 || batch.links.some(function (l) { return l.entity === 'conpay'; }) });
+        errs.forEach(function (e) { problems.push('save failed — ' + e); });
+        __msImp.batches = (__msImp.batches || []).concat([batch]);
+        await __msImpBatchesSave();
+        __msImp.ticks = {}; __msImp.rev++; __msImp.plan = null;
+        var c = batch.counts;
+        var summary = [c.contracts ? c.contracts + ' contract' + (c.contracts === 1 ? '' : 's') : '', c.invoices ? c.invoices + ' invoice' + (c.invoices === 1 ? '' : 's') : '', c.optIn ? c.optIn + ' bill' + (c.optIn === 1 ? '' : 's') + ' on contracts' : '', c.conPays ? c.conPays + ' consultant payment' + (c.conPays === 1 ? '' : 's') : '', c.clients ? c.clients + ' client' + (c.clients === 1 ? '' : 's') : '', c.consultants ? c.consultants + ' consultant' + (c.consultants === 1 ? '' : 's') : '', c.links ? c.links + ' link' + (c.links === 1 ? '' : 's') : ''].filter(Boolean).join(', ');
+        __msImp.lastResult = '<i class="fas fa-check-circle" style="color:var(--success);"></i> Added: ' + __msImpEsc(summary || 'nothing') + '.' + (problems.length ? ' <span class="ms-imp-warn">' + problems.length + ' note' + (problems.length === 1 ? '' : 's') + ': ' + __msImpEsc(problems.join('; ')) + '</span>' : '');
+        __msImpLog(problems.length ? 'WARN' : 'INFO', 'import added', { batch: batch.id, counts: batch.counts, problems: problems });
+        __msImpToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Import done — ' + __msImpEsc(summary || 'nothing added') + '.', 5000);
+    } catch (e) {
+        __msImp.lastResult = '<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> The import stopped: ' + __msImpEsc(String((e && e.message) || e)) + '. What was added before it stopped is in the app; check the Imports done list.</span>';
+        __msImpLog('CRITICAL', 'import failed', { error: String((e && e.message) || e), batch: batch });
+        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true }); } catch (e2) {}
+        __msImp.batches = (__msImp.batches || []).concat([batch]); batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
+        try { await __msImpBatchesSave(); } catch (e3) {}
+        __msImp.rev++; __msImp.plan = null;
+    } finally {
+        __msImp.working = false;
+        renderImportPage();
+        try { if (typeof renderBusinessSnapshot === 'function' && !document.getElementById('businessSnapshotTab').classList.contains('hidden')) renderBusinessSnapshot(); } catch (e) {}
+    }
+}
+
+// ---- Undo the last import ---------------------------------------------------------------------
+async function __msImpUndo(batchId) {
+    var b = (__msImp.batches || []).find(function (x) { return x.id === batchId; });
+    if (!b || __msImp.working) return;
+    if (!__msImpCanUndo(b)) { __msImpToast('<i class="fas fa-circle-info"></i> Only the latest import can be undone, and only while nothing was added after it.', 5000); return; }
+    var c = b.counts || {};
+    if (!(await __msAsk('Undo the import of ' + __msImpWhen(b.at) + '?\n\nTakes out: ' + [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : ''].filter(Boolean).join(', ') + (c.links ? '; puts back ' + c.links + ' document links' : '') + '.\nAnything you edited in them since is lost.', { ok: 'Undo', danger: 'ok' }))) return;
+    __msImp.working = true; renderImportPage();
+    var problems = [];
+    var chk = __msImpUndoCheck(b), keep = {};
+    chk.changed.forEach(function (i) { keep[i] = true; });
+    try {
+        var invIds = {}; (b.created.invoices || []).forEach(function (id) { invIds[id] = true; });
+        for (var i = invoices.length - 1; i >= 0; i--) if (invoices[i] && invIds[invoices[i].id]) invoices.splice(i, 1);
+        var cpIds = {}; (b.created.conPays || []).forEach(function (id) { cpIds[id] = true; });
+        for (var j = consultantPayments.length - 1; j >= 0; j--) if (consultantPayments[j] && cpIds[consultantPayments[j].id]) consultantPayments.splice(j, 1);
+        (b.created.consultants || []).forEach(function (id) {
+            if (consultantPayments.some(function (p) { return p && p.consultantId === id; })) { problems.push('consultant kept: payments were added to it since'); return; }
+            for (var k = consultants.length - 1; k >= 0; k--) if (consultants[k] && consultants[k].id === id) consultants.splice(k, 1);
+        });
+        (b.optIn || []).forEach(function (o) {
+            var cc = contracts[o.ci], y = cc && cc.billingYears && cc.billingYears[o.yi];
+            if (!y || !Array.isArray(y.apInvoices)) return;
+            for (var m = y.apInvoices.length - 1; m >= 0; m--) if (y.apInvoices[m] && (y.apInvoices[m].apId === o.apId || (o.promotedApId && y.apInvoices[m].apId === o.promotedApId))) y.apInvoices.splice(m, 1);
+            if (o.hadAp === false && !y.apInvoices.length) delete y.apInvoices;          // there was no list before
+        });
+        (b.links || []).forEach(function (L, i) {
+            if (keep[i]) {
+                var refsK = __msImpFieldRefs(L), curK = refsK.length ? refsK[0].o[refsK[0].k] : '';
+                var priorEmpty = !(L.prior && L.prior[0] && L.prior[0].had && L.prior[0].v);
+                if (!(priorEmpty && !curK)) problems.push('kept the link you changed since (' + L.field + ')');
+                return;
+            }
+            if (!__msImpPutBack(L)) { problems.push('a link could not be put back (' + L.field + ')'); return; }
+            if (L.entity === 'contract' && L.field === 'clientPOLocalPath') {
+                var cc0 = contracts[L.ci];
+                if (cc0 && Array.isArray(cc0.clientPOs)) cc0.clientPOs.forEach(function (po) { if (po && po.localPath === L.after && String(po.poNo || '') === String(cc0.clientPO || '')) po.localPath = (L.prior && L.prior[0] && L.prior[0].had) ? (L.prior[0].v || '') : ''; });
+            }
+        });
+        var made = (b.created.contracts || []).slice().sort(function (a, z) { return a - z; });
+        if (made.length) contracts.splice(made[0], made.length);
+        (b.created.clients || []).forEach(function (name) {
+            if (contracts.some(function (cc) { return cc && cc.client === name; }) || invoices.some(function (inv) { return inv && inv.clientName === name; })) { problems.push('client ' + name + ' kept: still in use'); return; }
+            if (typeof clientMaster === 'object' && clientMaster && clientMaster[name] && clientMaster[name].imported) delete clientMaster[name];
+        });
+        var errs = __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true });
+        errs.forEach(function (e) { problems.push('save failed — ' + e); });
+        b.undone = new Date().toISOString();
+        await __msImpBatchesSave();
+        __msImp.ticks = {}; __msImp.rev++; __msImp.plan = null;
+        __msImp.lastResult = '<i class="fas fa-undo"></i> The import of ' + __msImpEsc(__msImpWhen(b.at)) + ' was undone.' + (problems.length ? ' <span class="ms-imp-warn">' + __msImpEsc(problems.join('; ')) + '</span>' : '');
+        __msImpLog('INFO', 'import undone', { batch: b.id, problems: problems });
+        __msImpToast('<i class="fas fa-undo"></i> Import undone.', 4000);
+    } catch (e) {
+        __msImp.lastResult = '<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> The undo stopped: ' + __msImpEsc(String((e && e.message) || e)) + '.</span>';
+        __msImpLog('CRITICAL', 'undo failed', { error: String((e && e.message) || e) });
+        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true }); } catch (e2) {}
+        __msImp.rev++; __msImp.plan = null;
+    } finally {
+        __msImp.working = false;
+        renderImportPage();
+    }
+}
+// =================== /Phase 8FD — Import from the Masters (Tools › Import) ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
