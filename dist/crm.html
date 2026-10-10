@@ -10741,6 +10741,10 @@ window.__msRenderMissingOneDriveLinks = function () {
       </div>
     </div>
 
+    <!-- 8FC — Remittances abroad: the bank's debits abroad with the papers filed in Files/Payments, and the FIRC / e-BRC
+         credits, from the engine's list (_engine/app_remittances/index.json). Drawn by __msRmtRender(). -->
+    <div id="msRmtCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--accent-cyan);"></div>
+
     <div id="apAgingClientCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--warning);">
       <h3 style="margin:0 0 16px 0; border:none; padding:0;"><i class="fas fa-table" style="color:var(--warning);"></i> AP Aging by Client / Contract</h3>
       <div class="table-scroll-wrap table-scroll-wrap-sm">
@@ -22892,6 +22896,7 @@ function addApInvoiceRow(invNo='', date='', amount='', fx='', payDate='', link='
     `;
     container.appendChild(row);
     try { __msApTaxInit(row, taxRec); } catch (e) { console.error('8ET bill GST/TDS line failed:', e); }
+    try { __msRmtRowInit(row, taxRec); } catch (e) { console.error('8FC remittance note failed:', e); }   // 8FC: the recorded rate, with Clear
     if (localPath && localPath.trim()) {
         var lp = row.querySelector('.ap-localpath');
         if (lp) window.__msUpdateLocalToggleState(lp);
@@ -23271,7 +23276,7 @@ function submitUnifiedModal() {
         let uploadAttId = row.getAttribute('data-upload-attid') || '';
 
         if (no || dt || amt > 0) {
-            apInvoices.push(__msApTaxRead(row, { invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp, apId: apId, uploadAttId: uploadAttId }));   // 8ET — + GST/TDS
+            apInvoices.push(__msRmtRowRead(row, __msApTaxRead(row, { invNo: no, date: dt, amount: amt, fx: fx, payDate: pd, link: lk, localPath: lp, apId: apId, uploadAttId: uploadAttId })));   // 8ET — + GST/TDS; 8FC — + the recorded remittance
             apSumUSD += amt;
             apWeightedFXSum += (amt * fx);
         }
@@ -43575,8 +43580,8 @@ function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
                         'TOTAL GST': igst + cgst + sgst,
                         'PAYMENT VALUE': inrComputed + igst + cgst + sgst,
                         'TERMS (DAYS)': '',
-                        'USD:INR PAYMNT DATE RATE': '',
-                        'AMOUNT PAID': ap.payDate ? (inrComputed + igst + cgst + sgst) : 0,
+                        'USD:INR PAYMNT DATE RATE': __msRmtPayRate(ap, isUSD),   // 8FC
+                        'AMOUNT PAID': ap.payDate ? ((isUSD && Number(ap.payFx) > 0 ? Math.round(usdValue * Number(ap.payFx) * 100) / 100 : inrComputed) + igst + cgst + sgst) : 0,   // 8FC — at the recorded rate when there is one
                         'TDS': 0,
                         'RCM GST': isForeign ? igst : 0,
                         'DISCREPANCY': 0,
@@ -43956,8 +43961,8 @@ async function generateCaExport() {
                             'TOTAL GST': totalGst,
                             'PAYMENT VALUE': paymentValue,
                             'TERMS (DAYS)': '',
-                            'USD:INR PAYMNT DATE RATE': '',
-                            'AMOUNT PAID': ap.payDate ? (paymentValue - amt.tds) : 0,   // 8ET — less TDS kept back
+                            'USD:INR PAYMNT DATE RATE': __msRmtPayRate(ap, amt.isUSDcontract),   // 8FC — the bank's rate recorded from the Payables page
+                            'AMOUNT PAID': ap.payDate ? (__msRmtPaidInr(ap, amt) + totalGst - amt.tds) : 0,   // 8ET — less TDS kept back; 8FC — at the recorded rate when there is one
                             'TDS': amt.tds,
                             'RCM GST': amt.isForeignOem ? amt.igst : 0,
                             'DISCREPANCY': 0,
@@ -45233,7 +45238,7 @@ function renderARApPage() {
                 } else {
                     apInvs.forEach((inv, invIdx) => {
                         const invAmtOrig = (inv.amount !== undefined && inv.amount !== null && inv.amount !== '') ? Number(inv.amount) || 0 : 0;
-                        const invFx = isINRCost ? 1 : (inv.fx ? Number(inv.fx) || effFX : effFX);
+                        const invFx = isINRCost ? 1 : ((Number(inv.payFx) > 0) ? Number(inv.payFx) : (inv.fx ? Number(inv.fx) || effFX : effFX));   // 8FC: the bank's rate, once the remittance is recorded in the bill
                         const invINR = invAmtOrig * invFx;
                         // Per-invoice realized FX P&L (booked cost − actual cost).
                         // Only meaningful for foreign-currency cycles; INR cycles have zero FX exposure.
@@ -45637,10 +45642,12 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11.5px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}${__msRemitBtnHtml(r)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(_apTax(r.cycleCostINR))}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}${__msRemitBtnHtml(r)}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${apDispAmt}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td style="text-align:right; font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(_apTax(r.cycleCostINR))}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}${__msRmtApMark(inv)}</td><td>${statusBadge}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${poCellHtml}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="13" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
     }
+    // 8FC — the Remittances section under the register (read from the engine's list when first looked at, or stale).
+    try { __msRmtOnPayables(); } catch (e) { console.warn('8FC remittances:', e); }
     // Phase 8BH — re-assert the analytics collapse state on every Payables render.
     if (typeof applyApAnalyticsCollapsed === 'function') applyApAnalyticsCollapsed();
     // Phase 8BI — same for the Receivables analytics collapse.
@@ -50257,6 +50264,7 @@ async function __msBsLoad(opts) {
         __msBs.reading = false;
         __msBsRefreshIfOpen();
         if (first && typeof __msExpRefreshIfOpen === 'function') __msExpRefreshIfOpen();   // the Expenses page gets its statement pins
+        if (first && typeof __msRmtRefreshIfOpen === 'function') __msRmtRefreshIfOpen(false);   // 8FC: the Remittances section too
         if (!opts.indexOnly || __msBsTabOpen()) await __msBsLoadMonths();
         __msBsProbeFiles();
     } catch (e) {
@@ -51118,6 +51126,645 @@ function __msExpPickerDraw() {
     box.innerHTML = html;
 }
 // =================== /Phase 8FB — Expense bills on their statement lines ===================
+
+// =================== Phase 8FC — Remittances abroad on the Payables page (10 Oct 2026) ===================
+// The engine (app_remittances.py, run at the end of every CA pack and on its own) lists every bank line
+// that is money sent abroad with the papers Chintan filed in Files/Payments — the bank's advice (USD,
+// rate, rupees, charges, reference), the SWIFT, the CA certificate (15CB), the 15CA, Form A2, the
+// declaration, the third-country letter, the OEM invoices it paid — and every FIRC / e-BRC on its
+// credit line. This page reads that list (_engine/app_remittances/index.json; nothing in it is saved)
+// and shows it under the AP register with the page's year and client filters; ties each remittance's
+// invoices to the bills in the register by their numbers; marks those bills "remitted <date> @ rate";
+// and records the bank's rate and date in a bill at one click — inv.payDate, inv.payFx, inv.payRef on
+// the bill in contracts[].billingYears[].apInvoices[], saved as the Manage modal saves. That is the
+// only thing this phase writes. The register and the CA export use payFx when it is there.
+var MS_RMT_APP_DIR = '/_engine/app_remittances';
+var MS_RMT_FRESH_MS = 120000;            // the list is read again after this long (and on Refresh)
+var MS_RMT_MAX = 3000;                   // records kept per list
+var MS_RMT_MAX_PAPERS = 60;              // papers kept per record
+var MS_RMT_KINDS = ['advice', 'swift', 'oem_invoice', 'ca_cert', 'form15ca', 'a2', 'declaration', 'third_country', 'boe_ack', 'agreement', 'po', 'sales_invoice', 'client_doc', 'firc', 'other'];
+var MS_RMT_ID_RE = /^[A-Za-z0-9:_-]{1,48}$/;
+var __msRmt = {
+    idx: null,                           // the engine's list, checked: { outward, inward, untied, unread, by_fy, made, sig }
+    at: 0,                               // when it was last read (ms); 0 = never
+    error: '',                           // why the last read failed ('' = it did not)
+    missing: false,                      // the engine has not written the list yet
+    reading: false, again: false, retries: 0,
+    root: '',                            // the CA Pack folder the list was read from
+    rev: 0,                              // bumped when the list changes (memos)
+    memo: { rev: -1, byInv: null },
+    ui: { limit: 150 }
+};
+
+// ---- small helpers -------------------------------------------------------------------------
+function __msRmtEsc(s) { return (typeof pEsc === 'function') ? pEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function __msRmtLog(level, msg, data) { try { if (typeof diag === 'function') diag(level, 'Remittances: ' + msg, data || {}); } catch (e) {} }
+function __msRmtToast(html, ms) { if (typeof showProspectToast === 'function') showProspectToast(html, ms || 4000); }
+function __msRmtTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
+function __msRmtNum(v) { var n = Number(v); return (v === null || v === undefined || v === '' || !isFinite(n)) ? null : Math.round(n * 10000) / 10000; }
+function __msRmtStr(v, n) { return String(v == null ? '' : v).slice(0, n || 200); }
+function __msRmtPathOk(p) { p = String(p || ''); return !!(p && p.length <= 500 && p.charAt(0) !== '/' && !/(^|\/)\.\.(\/|$)/.test(p)); }
+function __msRmtIso(s) { s = String(s || ''); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; }
+function __msRmtDate(iso) { return iso ? ((typeof formatDateReadable === 'function') ? formatDateReadable(iso) : iso) : '—'; }
+function __msRmtInr(n) { return (typeof __msInr === 'function') ? __msInr(n) : ('₹' + String(n)); }
+function __msRmtUsd(n, cur) { return (n === null || n === undefined) ? '—' : ((cur && cur !== 'USD') ? cur + ' ' : '$') + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function __msRmtRate(n) { return (n === null || n === undefined) ? '—' : Number(n).toFixed(2); }
+function __msRmtJsArg(s) { return __msRmtEsc(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
+// a bill number as the register and the engine may each write it: without the OEM's prefix, letters and digits only
+function __msRmtNorm(no) { return String(no == null ? '' : no).toUpperCase().replace(/^DTGBR01[_ ]?/, '').replace(/[^0-9A-Z]/g, ''); }
+function __msRmtKey(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function __msRmtFyLabelOfFilter(v) { var m = /^(\d{4})-(\d{4})$/.exec(String(v || '')); return m ? ('FY ' + m[1] + '-' + m[2].slice(2)) : ''; }
+function __msRmtAcctLabel(id) { return (typeof __msBsAcctLabel === 'function') ? __msBsAcctLabel(id) : String(id || ''); }
+function __msRmtTabOpen() { var tab = document.getElementById('purchaseInvoicesTab'); return !!(tab && !tab.classList.contains('hidden')); }
+function __msRmtStyles() {
+    if (document.getElementById('msRmtStyles')) return;
+    var st = document.createElement('style');
+    st.id = 'msRmtStyles';
+    st.textContent = '.ms-rmt-pin{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;border:1px solid var(--glass-border);border-radius:10px;font-size:10.5px;color:var(--text-main);text-decoration:none;white-space:nowrap;}'
+        + '.ms-rmt-pin i{font-size:9px;margin-right:3px;opacity:0.7;}.ms-rmt-pin:hover{border-color:var(--accent-cyan);color:var(--accent-cyan);}'
+        + '#msRmtTable td,#msRmtInTable td{vertical-align:top;font-size:12px;white-space:normal;}#msRmtTable th,#msRmtInTable th{white-space:nowrap;}'
+        + '.ms-rmt-warn{font-size:10.5px;color:var(--warning);line-height:1.35;}.ms-rmt-dim{font-size:10.5px;color:var(--text-dim);}'
+        + '.ms-rmt-mark{font-size:10.5px;color:var(--text-dim);margin-top:2px;white-space:nowrap;}.ms-rmt-mark a{color:var(--accent-cyan);text-decoration:none;}';
+    document.head.appendChild(st);
+}
+
+// ---- the engine's list, checked on the way in ---------------------------------------------
+function __msRmtLineOk(l) {
+    if (!l || typeof l !== 'object' || !MS_RMT_ID_RE.test(String(l.id || ''))) return null;
+    return { id: String(l.id), sm: /^\d{4}-\d{2}$/.test(String(l.sm || '')) ? String(l.sm) : '', m: __msRmtNum(l.m), t: __msRmtStr(l.t, 80), r: __msRmtStr(l.r, 60) };
+}
+function __msRmtOutOk(o) {
+    if (!o || typeof o !== 'object' || !MS_RMT_ID_RE.test(String(o.id || ''))) return null;
+    var charges = [], invoices = [], papers = [], warnings = [], folders = [];
+    (Array.isArray(o.charges) ? o.charges : []).slice(0, 12).forEach(function (c) { var a = c && __msRmtNum(c.amount); if (a !== null) charges.push({ label: __msRmtStr(c.label, 40), amount: a }); });
+    (Array.isArray(o.invoices) ? o.invoices : []).slice(0, 40).forEach(function (i) {
+        if (!i || typeof i !== 'object') return;
+        invoices.push({ no: __msRmtStr(i.no, 30), usd: __msRmtNum(i.usd), date: __msRmtIso(i.date), client: __msRmtStr(i.client, 60), vendor: __msRmtStr(i.vendor, 40), file: __msRmtPathOk(i.file) ? String(i.file) : '' });
+    });
+    (Array.isArray(o.papers) ? o.papers : []).slice(0, MS_RMT_MAX_PAPERS).forEach(function (p) {
+        if (!p || typeof p !== 'object' || !__msRmtPathOk(p.file)) return;
+        var kind = MS_RMT_KINDS.indexOf(p.kind) !== -1 ? p.kind : 'other';
+        papers.push({ kind: kind, label: __msRmtStr(p.label, 20) || 'Paper', file: String(p.file) });
+    });
+    (Array.isArray(o.warnings) ? o.warnings : []).slice(0, 10).forEach(function (w) { if (typeof w === 'string' && w) warnings.push(w.slice(0, 240)); });
+    (Array.isArray(o.folders) ? o.folders : []).slice(0, 10).forEach(function (f) { if (__msRmtPathOk(f)) folders.push(String(f)); });
+    return { id: String(o.id), fy: /^FY \d{4}-\d{2}$/.test(String(o.fy || '')) ? String(o.fy) : '', date: __msRmtIso(o.date), pending: !!o.pending,
+             acct: __msRmtStr(o.acct, 20), bank: __msRmtStr(o.bank, 10), line: __msRmtLineOk(o.line), cur: __msRmtStr(o.cur, 3) || 'USD',
+             usd: __msRmtNum(o.usd), rate: (__msRmtNum(o.rate) !== null && __msRmtNum(o.rate) >= 20 && __msRmtNum(o.rate) <= 200) ? __msRmtNum(o.rate) : null,
+             rate_src: (o.rate_src === 'advice' || o.rate_src === 'derived') && __msRmtNum(o.rate) !== null && __msRmtNum(o.rate) >= 20 && __msRmtNum(o.rate) <= 200 ? o.rate_src : '', inr: __msRmtNum(o.inr),
+             charges: charges, net: __msRmtNum(o.net), ref: __msRmtStr(o.ref, 40), beneficiary: __msRmtStr(o.beneficiary, 80),
+             source: /^(advice|swift|papers|line)$/.test(String(o.source || '')) ? String(o.source) : 'line',
+             invoices: invoices, papers: papers, folders: folders, warnings: warnings };
+}
+function __msRmtInOk(o) {
+    if (!o || typeof o !== 'object' || !MS_RMT_ID_RE.test(String(o.id || ''))) return null;
+    var refs = [], warnings = [];
+    (Array.isArray(o.refs) ? o.refs : []).slice(0, 20).forEach(function (r) { if (typeof r === 'string' || typeof r === 'number') refs.push(String(r).slice(0, 20)); });
+    (Array.isArray(o.warnings) ? o.warnings : []).slice(0, 10).forEach(function (w) { if (typeof w === 'string' && w) warnings.push(w.slice(0, 240)); });
+    return { id: String(o.id), fy: /^FY \d{4}-\d{2}$/.test(String(o.fy || '')) ? String(o.fy) : '', date: __msRmtIso(o.date), value_date: __msRmtIso(o.value_date),
+             acct: __msRmtStr(o.acct, 20), bank: __msRmtStr(o.bank, 10), line: __msRmtLineOk(o.line), cur: __msRmtStr(o.cur, 3) || 'USD',
+             usd: __msRmtNum(o.usd), rate: __msRmtNum(o.rate), inr: __msRmtNum(o.inr), remitter: __msRmtStr(o.remitter, 80), refs: refs,
+             purpose: __msRmtStr(o.purpose, 80), inward_no: __msRmtStr(o.inward_no, 30), file: __msRmtPathOk(o.file) ? String(o.file) : '',
+             kind: __msRmtStr(o.kind, 12) || 'firc', warnings: warnings };
+}
+function __msRmtIndexOk(d) {
+    if (!d || typeof d !== 'object' || d.kind !== 'masterstone-remittances-index' || !Array.isArray(d.outward) || !Array.isArray(d.inward)) return null;
+    var outward = [], inward = [], untied = [], unread = [], seen = {};
+    d.outward.slice(0, MS_RMT_MAX).forEach(function (o) { var x = __msRmtOutOk(o); if (x && !seen[x.id]) { seen[x.id] = true; outward.push(x); } });
+    d.inward.slice(0, MS_RMT_MAX).forEach(function (o) { var x = __msRmtInOk(o); if (x) inward.push(x); });
+    (Array.isArray(d.untied) ? d.untied : []).slice(0, 200).forEach(function (u) {
+        if (!u || typeof u !== 'object' || !__msRmtPathOk(u.folder)) return;
+        untied.push({ folder: String(u.folder), files: (Array.isArray(u.files) ? u.files : []).slice(0, 40).map(function (f) { return __msRmtStr(f, 120); }), usd: __msRmtNum(u.usd) });
+    });
+    (Array.isArray(d.unread) ? d.unread : []).slice(0, 200).forEach(function (p) { if (__msRmtPathOk(p)) unread.push(String(p)); });
+    return { outward: outward, inward: inward, untied: untied, unread: unread, by_fy: (d.by_fy && typeof d.by_fy === 'object') ? d.by_fy : {},
+             made: __msRmtStr(d.made, 30), sig: __msRmtStr(d.sig, 40) };
+}
+
+// ---- reading it ------------------------------------------------------------------------------
+async function __msRmtRead(force) {
+    if (__msRmt.reading) { __msRmt.again = __msRmt.again || !!force; return; }
+    if (!force && __msRmt.at && Date.now() - __msRmt.at < MS_RMT_FRESH_MS) return;
+    var t = __msRmtTauri();
+    if (!t || typeof __msExpCaPackPath !== 'function' || typeof __msExpReadJson !== 'function') {
+        __msRmt.idx = null; __msRmt.error = ''; __msRmt.missing = true; __msRmt.at = Date.now();   // the browser: nothing to read
+        __msRmtRefreshIfOpen(false);
+        return;
+    }
+    __msRmt.reading = true;
+    __msRmtRefreshIfOpen(false);
+    var changed = false;
+    try {
+        var root = await __msExpCaPackPath();
+        __msRmt.root = root || '';
+        if (!root) { __msRmt.error = 'The app could not work out where your CA Pack folder is.'; __msRmt.missing = false; return; }
+        var r = await __msExpReadJson(root + MS_RMT_APP_DIR + '/index.json');
+        if (!r.ok) {
+            if (r.missing && typeof __msExp !== 'undefined' && __msExp && __msExp.state !== 'ready' && __msRmt.retries < 3) {
+                __msRmt.retries++;                                   // the folder he chose is not known yet: look again in a moment
+                setTimeout(function () { __msRmt.at = 0; __msRmtRefreshIfOpen(false); if (__msRmtTabOpen()) __msRmtRead(false); }, 3000);
+            }
+            if (r.missing) { if (!__msRmt.idx) __msRmt.missing = true; __msRmt.error = __msRmt.idx ? 'The engine\'s list of remittances is no longer at ' + root + MS_RMT_APP_DIR + ' — what was read before is shown.' : ''; }
+            else { __msRmt.missing = false; __msRmt.error = 'The engine\'s list of remittances ' + r.error + '.' + (__msRmt.idx ? ' What was read before is shown.' : ''); }
+            return;
+        }
+        var idx = __msRmtIndexOk(r.data);
+        if (!idx) { __msRmt.missing = false; __msRmt.error = 'The engine\'s list of remittances is not in the expected shape.' + (__msRmt.idx ? ' What was read before is shown.' : ''); return; }
+        changed = !__msRmt.idx || __msRmt.idx.sig !== idx.sig || __msRmt.idx.made !== idx.made;
+        __msRmt.idx = idx; __msRmt.error = ''; __msRmt.missing = false;
+        if (changed) __msRmt.rev++;
+        __msRmtLog('INFO', changed ? 'remittances listed' : 'remittances listed again (unchanged)', { outward: idx.outward.length, inward: idx.inward.length, untied: idx.untied.length, unread: idx.unread.length, made: idx.made });
+    } catch (e) {
+        __msRmt.error = 'The engine\'s list of remittances could not be read (' + String((e && e.message) || e) + ').';
+        __msRmtLog('WARN', 'the list could not be read', { error: __msRmt.error });
+    } finally {
+        __msRmt.reading = false;
+        __msRmt.at = Date.now();
+        var again = __msRmt.again;
+        __msRmt.again = false;
+        __msRmtRefreshIfOpen(changed);
+        if (again) __msRmtRead(true);
+    }
+}
+// Redraw what is open: the section alone, or the whole Payables page when the list changed (the
+// register's marks come from it).
+function __msRmtRefreshIfOpen(whole) {
+    if (!__msRmtTabOpen()) return;
+    try {
+        if (whole && typeof renderARApPage === 'function') renderARApPage();
+        else __msRmtRender();
+    } catch (e) { __msRmtLog('WARN', 'redraw failed', { error: String((e && e.message) || e) }); }
+}
+// Called at the end of every Payables render: a first look (or a stale list) starts a read; the section is drawn from what is known.
+function __msRmtOnPayables() {
+    if (!document.getElementById('msRmtCard')) return;
+    __msRmtStyles();
+    if (!__msRmt.reading && (!__msRmt.at || Date.now() - __msRmt.at >= MS_RMT_FRESH_MS)) __msRmtRead(false);
+    __msRmtRender();
+}
+
+// ---- the bills in the register, by number ---------------------------------------------------
+// Every bill in the contracts (the Manage modal's apInvoices rows, and the older single-bill cycle
+// fields as the register shows them), keyed by its number as the engine would write it.
+var __msRmtBillsMemo = { at: 0, map: null };     // one map per redraw: the register asks once per row
+function __msRmtBills() {
+    if (__msRmtBillsMemo.map && Date.now() - __msRmtBillsMemo.at < 250) return __msRmtBillsMemo.map;
+    var map = {};
+    __msRmtBillsMemo.at = Date.now(); __msRmtBillsMemo.map = map;
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return map;
+    contracts.forEach(function (c, ci) {
+        if (!c || !Array.isArray(c.billingYears)) return;
+        c.billingYears.forEach(function (y, yi) {
+            if (!y) return;
+            var aps = Array.isArray(y.apInvoices) ? y.apInvoices : [];
+            aps.forEach(function (inv, ai) {
+                var k = inv && __msRmtNorm(inv.invNo);
+                if (!k || (!inv.date && !inv.payDate)) return;          // a placeholder row (no dates) is not a bill the register shows
+                (map[k] = map[k] || []).push({ c: c, y: y, inv: inv, cIdx: ci, yIdx: yi, apIdx: ai, client: String(c.client || ''), oem: String(c.oem || ''), legacy: false });
+            });
+            if (!aps.length && y.oemInvoiceDate && y.oemInvoiceNo) {
+                var k2 = __msRmtNorm(y.oemInvoiceNo);
+                if (k2) (map[k2] = map[k2] || []).push({ c: c, y: y, inv: null, cIdx: ci, yIdx: yi, apIdx: -1, client: String(c.client || ''), oem: String(c.oem || ''), legacy: true });
+            }
+        });
+    });
+    return map;
+}
+// The remittance that paid a bill number: the one with a bank line first, then the newest.
+function __msRmtByInvoice() {
+    var M = __msRmt.memo;
+    if (M.rev === __msRmt.rev && M.byInv) return M.byInv;
+    var by = {}, vendor = {};
+    ((__msRmt.idx && __msRmt.idx.outward) || []).forEach(function (o) {
+        o.invoices.forEach(function (i) {
+            var k = __msRmtNorm(i.no);
+            if (!k) return;
+            var have = by[k];
+            if (!have || (have.pending && !o.pending) || (have.pending === o.pending && (o.date || '') > (have.date || ''))) { by[k] = o; vendor[k] = i.vendor || ''; }
+        });
+    });
+    by.__vendor = vendor;
+    M.rev = __msRmt.rev; M.byInv = by;
+    return by;
+}
+function __msRmtFind(id) {
+    var list = (__msRmt.idx && __msRmt.idx.outward) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+}
+// A remittance's invoices with the bills they are in the register: [{ inv (the engine's), bills: [...] }]
+function __msRmtLinks(o, bills) {
+    bills = bills || __msRmtBills();
+    return o.invoices.map(function (i) {
+        var vk = __msRmtKey(i.vendor);
+        var mine = (bills[__msRmtNorm(i.no)] || []).filter(function (b) {
+            var ok = __msRmtKey(b.oem);
+            return !vk || !ok || ok.indexOf(vk) !== -1 || vk.indexOf(ok) !== -1;   // the same number at another OEM is another bill
+        });
+        return { inv: i, bills: mine };
+    });
+}
+// Is this remittance recorded in the bill (its rate and date, by its id)?
+function __msRmtRecorded(inv, o) {
+    return !!(inv && o && o.rate && Number(inv.payFx) > 0 && Math.abs(Number(inv.payFx) - Number(o.rate)) < 0.00001 && String(inv.payDate || '') === o.date);
+}
+function __msRmtClientsOf(links) {
+    var names = [];
+    links.forEach(function (l) {
+        if (l.bills.length) l.bills.forEach(function (b) { if (b.client && names.indexOf(b.client) === -1) names.push(b.client); });
+        else if (l.inv.client && names.indexOf(l.inv.client) === -1) names.push(l.inv.client);
+    });
+    return names;
+}
+
+// ---- the page's filters ------------------------------------------------------------------------
+function __msRmtFilters() {
+    var g = function (id) { var el = document.getElementById(id); return el ? String(el.value || 'ALL') : 'ALL'; };
+    var q = document.getElementById('apSearch');
+    return { fy: g('apFyFilter'), client: g('apClientFilter'), oem: g('apOemFilter'), q: q ? String(q.value || '').trim().toLowerCase() : '' };
+}
+function __msRmtOutMatches(o, f, links) {
+    if (f.fy !== 'ALL' && o.fy !== __msRmtFyLabelOfFilter(f.fy)) return false;
+    if (f.client !== 'ALL') {
+        var ck = __msRmtKey(f.client), hit = false;
+        links.forEach(function (l) {
+            if (l.bills.some(function (b) { return b.client === f.client; })) hit = true;
+            else if (!l.bills.length && l.inv.client && (ck.indexOf(__msRmtKey(l.inv.client)) === 0 || __msRmtKey(l.inv.client).indexOf(ck) === 0)) hit = true;   // the engine's word from the file name
+        });
+        if (!hit) return false;
+    }
+    if (f.oem !== 'ALL' && !links.some(function (l) { return l.bills.some(function (b) { return b.oem === f.oem; }); })) return false;
+    if (f.q) {
+        var hay = [o.date, o.bank, __msRmtAcctLabel(o.acct), o.ref, o.beneficiary, String(o.usd || ''), String(o.net || ''), o.line ? o.line.t : '', o.line ? o.line.r : ''].concat(
+            o.invoices.map(function (i) { return i.no + ' ' + i.client; }), __msRmtClientsOf(links), o.warnings, o.folders).join(' ').toLowerCase();
+        if (hay.indexOf(f.q) === -1) return false;
+    }
+    return true;
+}
+function __msRmtInMatches(o, f) {
+    if (f.fy !== 'ALL' && o.fy !== __msRmtFyLabelOfFilter(f.fy)) return false;
+    if (f.q) {
+        var hay = [o.date, o.bank, __msRmtAcctLabel(o.acct), o.remitter, o.inward_no, o.purpose, String(o.usd || ''), String(o.inr || '')].concat(o.refs, o.warnings).join(' ').toLowerCase();
+        if (hay.indexOf(f.q) === -1) return false;
+    }
+    return true;
+}
+// The outward records shown, with their links; and the inward ones.
+function __msRmtShown() {
+    var idx = __msRmt.idx, f = __msRmtFilters(), bills = __msRmtBills(), out = [], inn = [];
+    if (!idx) return { out: out, inn: inn, f: f, bills: bills };
+    idx.outward.forEach(function (o) { var links = __msRmtLinks(o, bills); if (__msRmtOutMatches(o, f, links)) out.push({ o: o, links: links }); });
+    idx.inward.forEach(function (o) { if (__msRmtInMatches(o, f)) inn.push(o); });
+    return { out: out, inn: inn, f: f, bills: bills };
+}
+
+// ---- opening a paper -----------------------------------------------------------------------------
+async function __msRmtOpen(path) {
+    if (!__msRmtPathOk(path)) return;
+    var root = __msRmt.root || (typeof __msExpCaPackPath === 'function' ? await __msExpCaPackPath() : '');
+    var cands = (typeof __msExpBillCandidates === 'function') ? __msExpBillCandidates({ file: path }, root) : [];
+    if (!cands.length) { __msRmtToast('The app could not work out where the Files folder is.', 3500); return; }
+    var t = __msRmtTauri(), hit = cands[0];
+    if (t) {
+        hit = '';
+        for (var i = 0; i < cands.length && !hit; i++) {
+            var ex = null;
+            try { ex = await t.invoke('check_file_exists', { path: cands[i] }); } catch (e) {}
+            if (!ex || !ex.ok || ex.exists) hit = cands[i];
+        }
+        if (!hit) { __msRmtToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> The paper isn\'t on the Mac at ' + __msRmtEsc(cands[0]) + '. Moved or renamed?', 6000); return; }
+    }
+    if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(hit);
+}
+function __msRmtPaperIcon(kind) {
+    return kind === 'oem_invoice' ? 'fa-file-invoice' : (kind === 'swift' ? 'fa-paper-plane' : (kind === 'advice' ? 'fa-receipt' : (kind === 'firc' ? 'fa-certificate' : 'fa-paperclip')));
+}
+function __msRmtPaperHtml(p, label) {
+    var name = String(p.file).split('/').pop();
+    return '<a href="#" class="ms-rmt-pin" onclick="__msRmtOpen(\'' + __msRmtJsArg(p.file) + '\'); return false;" title="Open ' + __msRmtEsc(name) + '"><i class="fas ' + __msRmtPaperIcon(p.kind) + '"></i>' + __msRmtEsc(label || p.label) + '</a>';
+}
+function __msRmtPapersHtml(o) {
+    if (!o.papers.length) return '<span class="ms-rmt-dim">' + (o.pending ? '' : 'none filed') + '</span>';
+    var by = {};
+    o.papers.forEach(function (p) { by[p.file] = p; });
+    var invFiles = {};
+    o.invoices.forEach(function (i) { if (i.file) invFiles[i.file] = i.no; });
+    return o.papers.map(function (p) {
+        var label = p.label;
+        if (p.kind === 'oem_invoice' && invFiles[p.file]) label = 'Inv ' + invFiles[p.file];
+        return __msRmtPaperHtml(p, label);
+    }).join('');
+}
+// The statement the line came from (the Bank Statements page's pin), when the statements are listed.
+function __msRmtStatementPin(o) {
+    if (!o.line || !o.line.sm || !o.acct || typeof __msBsPinForExpense !== 'function') return '';
+    try { return __msBsPinForExpense({ a: o.acct, f: o.line.sm, s: 'file' }); } catch (e) { return ''; }
+}
+
+// ---- the section ---------------------------------------------------------------------------------
+function __msRmtBillsCellHtml(o, links) {
+    if (!links.length) return '<span class="ms-rmt-dim">' + (o.source === 'line' ? '—' : 'no invoice among the papers') + '</span>';
+    var parts = links.map(function (l) {
+        var i = l.inv, who;
+        if (l.bills.length) {
+            who = l.bills.map(function (b) {
+                var name = (typeof getClientDisplayHtml === 'function') ? getClientDisplayHtml(b.client) : __msRmtEsc(b.client);
+                var rec = (!b.legacy && __msRmtRecorded(b.inv, o)) ? ' <i class="fas fa-check" style="color:var(--success); font-size:10px;" title="Recorded in the bill: paid ' + __msRmtEsc(__msRmtDate(o.date)) + ' at ' + __msRmtEsc(__msRmtRate(o.rate)) + '"></i>' : '';
+                return '<a href="#" onclick="jumpToContract(' + b.cIdx + '); setTimeout(function () { openUnifiedModal(' + b.cIdx + ',' + b.yIdx + '); }, 600); return false;" style="color:var(--text-main); text-decoration:none;" title="Open the bill in Manage Cycle">' + name + '</a>' + rec;
+            }).join(', ');
+        } else {
+            who = '<span class="ms-rmt-dim" title="No bill with this number in the register' + (i.client ? ' — the file name says ' + __msRmtEsc(i.client) : '') + '">' + (i.client ? __msRmtEsc(i.client) + ' · ' : '') + 'not in the register</span>';
+        }
+        return '<div style="white-space:nowrap;"><span style="font-family:monospace; font-size:11.5px; color:var(--warning);">' + __msRmtEsc(i.no || '?') + '</span>' + (i.usd !== null ? ' <span class="ms-rmt-dim">' + __msRmtEsc(__msRmtUsd(i.usd)) + '</span>' : '') + ' · ' + who + '</div>';
+    });
+    var todo = __msRmtToRecord(o, links);
+    if (todo.length && o.rate && o.date && !o.pending) {
+        parts.push('<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px; font-size:10.5px; margin-top:3px; color:var(--accent-cyan);" onclick="__msRmtRecord(\'' + __msRmtJsArg(o.id) + '\')" title="Write the bank\'s rate and this date into the bill' + (todo.length > 1 ? 's' : '') + ' — you see the change first">'
+            + '<i class="fas fa-pen"></i> Record in ' + (todo.length === 1 ? 'the bill' : todo.length + ' bills') + '</button>');
+    }
+    return parts.join('');
+}
+// The bills of a remittance that do not carry it yet (never the older single-bill cycle fields, nor a rupee contract).
+function __msRmtToRecord(o, links) {
+    var todo = [];
+    links.forEach(function (l) {
+        l.bills.forEach(function (b) {
+            if (b.legacy || !b.inv || String(b.c.costCurrency || 'USD').toUpperCase() === 'INR') return;
+            if (!__msRmtRecorded(b.inv, o)) todo.push(b);
+        });
+    });
+    return todo;
+}
+function __msRmtChargesText(o) {
+    if (!o.charges.length) return { sum: '', detail: '' };
+    var s = 0;
+    o.charges.forEach(function (c) { s += c.amount; });
+    return { sum: 'charges ' + __msRmtInr(Math.round(s * 100) / 100), detail: o.charges.map(function (c) { return c.label + ' ' + __msRmtInr(c.amount); }).join(', ') };
+}
+function __msRmtRowHtml(x) {
+    var o = x.o, links = x.links;
+    var dateCell = '<strong>' + __msRmtEsc(__msRmtDate(o.date)) + '</strong>' + (o.pending ? '<div class="ms-rmt-warn" style="white-space:normal; max-width:110px;">papers filed, not in the statements yet</div>' : '') + (o.fy ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.fy) + '</div>' : '');
+    var bankCell = __msRmtEsc(o.bank || (o.acct ? __msRmtAcctLabel(o.acct) : '—')) + (o.acct ? '<div class="ms-rmt-dim">' + __msRmtEsc(__msRmtAcctLabel(o.acct)) + '</div>' : '') + (o.ref ? '<div class="ms-rmt-dim" style="font-family:monospace;" title="The bank\'s reference">' + __msRmtEsc(o.ref) + '</div>' : '');
+    var rateCell = o.rate === null ? '<span class="ms-rmt-dim">—</span>' : ('<span title="' + (o.rate_src === 'advice' ? 'From the bank\'s advice' : 'Worked out from the rupees sent and the invoices') + '">' + __msRmtEsc(__msRmtRate(o.rate)) + (o.rate_src === 'derived' ? '<span class="ms-rmt-dim">*</span>' : '') + '</span>');
+    var net = o.net !== null ? __msRmtInr(o.net) : '—';
+    var ch = __msRmtChargesText(o);
+    var inrCell = '<strong style="white-space:nowrap;">' + __msRmtEsc(net) + '</strong>' + (o.inr !== null && o.net !== null && Math.abs(o.inr - o.net) > 0.5 ? '<div class="ms-rmt-dim" style="white-space:nowrap;" title="The rupees sent, before the bank\'s charges">sent ' + __msRmtEsc(__msRmtInr(o.inr)) + '</div>' : '') + (o.charges.length ? '<div class="ms-rmt-dim" style="white-space:nowrap;" title="' + __msRmtEsc(ch.detail) + '">' + __msRmtEsc(ch.sum) + '</div>' : '');
+    var notes = o.warnings.map(function (w) { return '<div class="ms-rmt-warn"><i class="fas fa-exclamation-triangle" style="font-size:9px;"></i> ' + __msRmtEsc(w) + '</div>'; }).join('');
+    if (o.line && o.line.t) notes += '<div class="ms-rmt-dim" title="' + __msRmtEsc((o.line.t || '') + (o.line.r ? ' — ' + o.line.r : '')) + '">' + __msRmtEsc((o.line.r || o.line.t).slice(0, 48)) + '</div>';
+    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap; min-width:96px;">' + dateCell + '</td><td style="white-space:nowrap;">' + bankCell + '</td><td style="text-align:right; font-weight:600; white-space:nowrap;">' + __msRmtEsc(__msRmtUsd(o.usd, o.cur)) + '</td><td style="text-align:right; white-space:nowrap;">' + rateCell + '</td><td style="text-align:right;">' + inrCell + '</td><td style="white-space:nowrap;">' + __msRmtBillsCellHtml(o, links) + '</td><td style="max-width:280px; min-width:200px;">' + __msRmtPapersHtml(o) + '</td><td style="text-align:center;">' + (__msRmtStatementPin(o) || '<span class="ms-rmt-dim">—</span>') + '</td><td style="max-width:260px;">' + (notes || '') + '</td></tr>';
+}
+function __msRmtInRowHtml(o) {
+    var refs = o.refs.length ? o.refs.map(function (r) {
+        var inv = __msRmtInvoiceByRef(r);
+        var label = __msRmtEsc(/^\d+$/.test(r) ? 'EXP' + r : r);
+        return inv ? '<a href="#" onclick="openInvoiceDetail(\'' + __msRmtJsArg(inv.id) + '\'); return false;" style="color:var(--accent-cyan); font-family:monospace; font-size:11.5px; text-decoration:none;" title="' + __msRmtEsc(inv.invoiceNumber + (inv.clientName ? ' · ' + inv.clientName : '')) + '">' + label + '</a>' : '<span style="font-family:monospace; font-size:11.5px;">' + label + '</span>';
+    }).join(', ') : '<span class="ms-rmt-dim">—</span>';
+    var notes = o.warnings.map(function (w) { return '<div class="ms-rmt-warn"><i class="fas fa-exclamation-triangle" style="font-size:9px;"></i> ' + __msRmtEsc(w) + '</div>'; }).join('');
+    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap;"><strong>' + __msRmtEsc(__msRmtDate(o.date)) + '</strong>' + (o.value_date && o.value_date !== o.date ? '<div class="ms-rmt-dim">value ' + __msRmtEsc(__msRmtDate(o.value_date)) + '</div>' : '') + (o.fy ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.fy) + '</div>' : '') + '</td>'
+        + '<td style="white-space:nowrap;">' + __msRmtEsc(o.bank || '—') + (o.acct ? '<div class="ms-rmt-dim">' + __msRmtEsc(__msRmtAcctLabel(o.acct)) + '</div>' : '') + (o.inward_no ? '<div class="ms-rmt-dim" style="font-family:monospace;">' + __msRmtEsc(o.inward_no) + '</div>' : '') + '</td>'
+        + '<td style="text-align:right; font-weight:600;">' + __msRmtEsc(__msRmtUsd(o.usd, o.cur)) + '</td><td style="text-align:right;">' + __msRmtEsc(__msRmtRate(o.rate)) + '</td><td style="text-align:right;"><strong>' + __msRmtEsc(o.inr !== null ? __msRmtInr(o.inr) : '—') + '</strong></td>'
+        + '<td>' + __msRmtEsc(o.remitter || '—') + (o.purpose ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.purpose) + '</div>' : '') + '</td><td>' + refs + '</td>'
+        + '<td>' + (o.file ? __msRmtPaperHtml({ kind: 'firc', file: o.file, label: 'FIRC' }) : '') + '</td><td style="text-align:center;">' + (__msRmtStatementPin(o) || '<span class="ms-rmt-dim">—</span>') + '</td><td style="max-width:220px;">' + notes + '</td></tr>';
+}
+// An export invoice named on a FIRC, in the Invoices module: the number ends with the reference (EXP134, 134).
+function __msRmtInvoiceByRef(ref) {
+    if (typeof invoices === 'undefined' || !Array.isArray(invoices)) return null;
+    var k = __msRmtNorm(ref);
+    if (!k) return null;
+    if (/^\d+$/.test(k)) k = 'EXP' + k;
+    var hit = null;
+    invoices.forEach(function (inv) {
+        if (!inv || inv.status === 'Cancelled' || hit) return;
+        var n = __msRmtNorm(inv.invoiceNumber);
+        if (n && (n === k || (n.length > k.length && n.slice(-k.length) === k && (/^[A-Z]/.test(k) || !/[0-9]/.test(n.charAt(n.length - k.length - 1)))))) hit = inv;
+    });
+    return hit;
+}
+function __msRmtTotals(rows) {
+    var t = { n: rows.length, usd: 0, usdN: 0, net: 0, netN: 0, charges: 0, pending: 0, warn: 0 };
+    rows.forEach(function (x) {
+        var o = x.o || x;
+        if (o.usd !== null && (o.cur || 'USD') === 'USD') { t.usd += o.usd; t.usdN++; }
+        var rupees = (o.net !== undefined) ? o.net : o.inr;          // outward: debited; inward: credited
+        if (rupees !== null && rupees !== undefined) { t.net += rupees; t.netN++; }
+        (o.charges || []).forEach(function (c) { t.charges += c.amount; });
+        if (o.pending) t.pending++;
+        if (o.warnings && o.warnings.length) t.warn++;
+    });
+    return t;
+}
+function __msRmtStatusHtml() {
+    var R = __msRmt;
+    if (R.reading && !R.idx) return '<span class="ms-rmt-dim"><i class="fas fa-circle-notch fa-spin"></i> Reading the engine\'s list of remittances…</span>';
+    if (R.error) return '<span class="ms-rmt-warn"><i class="fas fa-exclamation-triangle"></i> ' + __msRmtEsc(R.error) + '</span>';
+    if (!R.idx) {
+        if (!R.at) return '';
+        if (!R.missing || !__msRmtTauri()) return '<span class="ms-rmt-dim">The remittances are read from the CA pack on your Mac; nothing to show here.</span>';
+        return '<span class="ms-rmt-dim">The CA pack has not listed the remittances yet — they appear after the next CA pack run (or <code>python3 app_remittances.py "&lt;CA Pack&gt;"</code> in the engine folder).</span>';
+    }
+    return '';
+}
+function __msRmtRender() {
+    var card = document.getElementById('msRmtCard');
+    if (!card) return;
+    __msRmtStyles();
+    var R = __msRmt, S = __msRmtShown(), t = __msRmtTotals(S.out);
+    var head = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:12px; flex-wrap:wrap;">'
+        + '<h3 style="margin:0; border:none; padding:0;"><i class="fas fa-globe" style="color:var(--accent-cyan);"></i> Remittances abroad'
+        + (R.idx ? ' <span style="font-size:12px; font-weight:400; color:var(--text-dim);">' + t.n + (S.f.fy !== 'ALL' || S.f.client !== 'ALL' || S.f.oem !== 'ALL' || S.f.q ? ' shown' : '') + (R.idx.outward.length !== t.n ? ' of ' + R.idx.outward.length : '') + '</span>' : '') + '</h3>'
+        + '<div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">'
+        + (R.idx && t.n ? '<div id="msRmtTotals" style="padding:6px 12px; border:1px solid var(--glass-border-strong); border-radius:4px; background:var(--detail-bg); font-size:11.5px; line-height:1.3;"><div style="font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:0.10em; color:var(--text-subtle);">' + (S.f.fy !== 'ALL' ? __msRmtEsc(__msRmtFyLabelOfFilter(S.f.fy)) : 'All years') + (S.f.client !== 'ALL' ? ' · ' + __msRmtEsc(S.f.client) : '') + '</div>'
+            + '<div style="margin-top:2px; color:var(--text-main); font-weight:600;">' + __msRmtEsc(__msRmtUsd(Math.round(t.usd * 100) / 100)) + (t.usdN < t.n ? ' <span style="font-weight:400; color:var(--text-dim);">(' + t.usdN + ' of ' + t.n + ' in dollars)</span>' : '') + ' · ' + __msRmtEsc(__msRmtInr(Math.round(t.net * 100) / 100)) + ' debited' + (t.charges ? ' <span style="font-weight:400; color:var(--text-dim);">incl. charges ' + __msRmtEsc(__msRmtInr(Math.round(t.charges * 100) / 100)) + '</span>' : '') + (t.pending ? ' <span style="font-weight:400; color:var(--warning);">· ' + t.pending + ' pending</span>' : '') + '</div></div>' : '')
+        + '<button type="button" class="btn btn-ghost btn-sm" onclick="__msRmtRead(true)" title="Read the engine\'s list again"' + (R.reading ? ' disabled' : '') + '><i class="fas fa-sync-alt' + (R.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" onclick="exportRemittancesExcel()" title="The remittances shown, with their papers, and the FIRCs — two sheets"' + (R.idx ? '' : ' disabled') + '><i class="fas fa-file-excel"></i> Excel</button>'
+        + '</div></div>';
+    var status = __msRmtStatusHtml();
+    var html = head + (status ? '<div id="msRmtStatus" style="margin-bottom:10px; font-size:12px;">' + status + '</div>' : '');
+    if (R.idx) {
+        var byFy = '';
+        if (S.f.fy === 'ALL' && S.out.length) {
+            var fys = {};
+            S.out.forEach(function (x) { (fys[x.o.fy || '?'] = fys[x.o.fy || '?'] || []).push(x); });
+            byFy = '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">' + Object.keys(fys).sort().reverse().map(function (fy) {
+                var tt = __msRmtTotals(fys[fy]);
+                return '<span class="ms-rmt-dim" style="padding:2px 8px; border:1px solid var(--glass-border); border-radius:10px;" title="' + tt.n + ' remittance' + (tt.n === 1 ? '' : 's') + '">' + __msRmtEsc(fy) + ': ' + tt.n + ' · ' + __msRmtEsc(__msRmtUsd(Math.round(tt.usd * 100) / 100)) + ' · ' + __msRmtEsc(__msRmtInr(Math.round(tt.net))) + '</span>';
+            }).join('') + '</div>';
+        }
+        var rows = S.out.slice(0, R.ui.limit).map(__msRmtRowHtml).join('');
+        html += byFy + '<div class="table-scroll-wrap"><table id="msRmtTable"><thead><tr><th>Date</th><th>Bank</th><th style="text-align:right;">Sent</th><th style="text-align:right;" title="USD:INR — from the bank\'s advice, or * worked out from the rupees and the invoices">Rate</th><th style="text-align:right;">Debited (₹)</th><th>Bills paid</th><th>Papers</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
+            + (rows || '<tr><td colspan="9" style="text-align:center; padding:20px; color:var(--text-dim);">' + (R.idx.outward.length ? 'No remittances for the filters chosen.' : 'The engine found no remittances abroad in the statements.') + '</td></tr>') + '</tbody></table></div>'
+            + (S.out.length > R.ui.limit ? '<div style="margin-top:8px;"><button type="button" class="btn btn-ghost btn-sm" onclick="__msRmt.ui.limit += 150; __msRmtRender();">Show more (' + (S.out.length - R.ui.limit) + ' left)</button></div>' : '');
+        var tin = __msRmtTotals(S.inn);
+        html += '<h4 style="margin:22px 0 10px 0; font-size:13.5px; color:var(--text-main);"><i class="fas fa-arrow-down" style="color:var(--success);"></i> Received from abroad — FIRC / e-BRC'
+            + ' <span style="font-size:12px; font-weight:400; color:var(--text-dim);">' + tin.n + (S.f.fy !== 'ALL' ? ' in ' + __msRmtEsc(__msRmtFyLabelOfFilter(S.f.fy)) : '') + (tin.n ? ' · ' + __msRmtEsc(__msRmtUsd(Math.round(tin.usd * 100) / 100)) + ' · ' + __msRmtEsc(__msRmtInr(Math.round(tin.net * 100) / 100)) : '') + (S.f.client !== 'ALL' ? ' · all clients' : '') + '</span></h4>';
+        if (S.inn.length) {
+            html += '<div class="table-scroll-wrap table-scroll-wrap-sm"><table id="msRmtInTable"><thead><tr><th>Credited</th><th>Bank</th><th style="text-align:right;">Received</th><th style="text-align:right;">Rate</th><th style="text-align:right;">Amount (₹)</th><th>From</th><th>Export invoices</th><th>Certificate</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
+                + S.inn.slice(0, R.ui.limit).map(__msRmtInRowHtml).join('') + '</tbody></table></div>';
+        } else html += '<div class="ms-rmt-dim" style="padding:6px 0 2px 0;">' + (R.idx.inward.length ? 'No certificates for the year chosen.' : 'No FIRC / e-BRC certificates in Files/FIRC &amp; e-BRC yet.') + '</div>';
+        var foot = [];
+        if (R.idx.untied.length) foot.push('<div class="ms-rmt-warn" style="margin-top:10px;"><i class="fas fa-folder-open"></i> Papers the engine could not tie to any payment: ' + R.idx.untied.map(function (u) { return '<span title="' + __msRmtEsc(u.files.join(', ')) + '">' + __msRmtEsc(u.folder.replace(/^Payments\//, '')) + (u.usd !== null ? ' (' + __msRmtEsc(__msRmtUsd(u.usd)) + ')' : '') + '</span>'; }).join('; ') + '</div>');
+        if (R.idx.unread.length) foot.push('<div class="ms-rmt-warn" style="margin-top:6px;"><i class="fas fa-file-circle-question"></i> PDFs the engine could not read: ' + R.idx.unread.map(function (p) { return __msRmtEsc(p.replace(/^Payments\//, '')); }).join('; ') + '</div>');
+        foot.push('<div class="ms-rmt-dim" style="margin-top:10px;">Read from the CA pack' + (R.idx.made ? ' (list made ' + __msRmtEsc(R.idx.made.replace('T', ' ').slice(0, 16)) + ')' : '') + '. Rates marked * are worked out from the rupees sent and the invoices, not from an advice. The papers open from Files/Payments; nothing on this list is saved in the app until you record a remittance in a bill.</div>');
+        html += foot.join('');
+    }
+    card.innerHTML = html;
+}
+
+// ---- the register's mark on a bill, and recording the remittance in it -----------------------------
+// Under the bill's payment date: "remitted <date> @ rate" from the engine's list, a tick when the
+// bill carries it, "Record" when it does not (or "papers filed" while the statement is not in).
+function __msRmtApMark(inv) {
+    try {
+        if (!inv || !__msRmt.idx) return '';
+        var k = __msRmtNorm(inv.invNo);
+        if (!k) return '';
+        var by = __msRmtByInvoice(), o = by[k];
+        if (!o) return '';
+        var vk = __msRmtKey(by.__vendor[k]), mine = (__msRmtBills()[k] || []).filter(function (b) { return b.inv === inv; })[0];
+        if (vk && mine && __msRmtKey(mine.oem) && __msRmtKey(mine.oem).indexOf(vk) === -1 && vk.indexOf(__msRmtKey(mine.oem)) === -1) return '';   // another OEM's bill with the same number
+        if (o.pending) return '<div class="ms-rmt-mark" title="The papers of a remittance are filed under Files/Payments (' + __msRmtEsc(o.folders.join(', ')) + '); the bank statement of that month is not in the CA pack yet">papers filed, remittance not in the statements yet</div>';
+        var rec = __msRmtRecorded(inv, o);
+        var can = !rec && o.rate && o.date && (__msRmtBills()[k] || []).some(function (b) { return !b.legacy && b.inv === inv && String(b.c.costCurrency || 'USD').toUpperCase() !== 'INR'; });
+        var title = 'Remitted ' + __msRmtDate(o.date) + (o.bank ? ' by ' + o.bank : '') + (o.usd !== null ? ' — ' + __msRmtUsd(o.usd, o.cur) : '') + (o.rate ? ' at ' + __msRmtRate(o.rate) + (o.rate_src === 'advice' ? ' (the bank\'s advice)' : ' (worked out)') : '') + (o.net !== null ? ', ' + __msRmtInr(o.net) + ' debited' : '') + (o.invoices.length > 1 ? ' — with ' + (o.invoices.length - 1) + ' other bill' + (o.invoices.length > 2 ? 's' : '') : '');
+        return '<div class="ms-rmt-mark" title="' + __msRmtEsc(title) + '">remitted ' + __msRmtEsc(__msRmtDate(o.date)) + (o.rate ? ' @ ' + __msRmtEsc(__msRmtRate(o.rate)) : '')
+            + (rec ? ' <i class="fas fa-check" style="color:var(--success);" title="Recorded in the bill"></i> <a href="#" onclick="__msRmtClear(' + '\'' + __msRmtJsArg(inv.apId || '') + '\',\'' + __msRmtJsArg(inv.invNo) + '\',\'' + __msRmtJsArg(o.id) + '\'); return false;" title="Take the recorded rate and date off the bill (the bill\'s own FX rate stays)" style="color:var(--text-dim);">×</a>' : (can ? ' · <a href="#" onclick="__msRmtRecord(\'' + __msRmtJsArg(o.id) + '\'); return false;" title="Write the bank\'s rate and this date into the bill — you see the change first">Record</a>' : '')) + '</div>';
+    } catch (e) { return ''; }
+}
+function __msRmtEffFx(b) {
+    if (Number(b.inv.payFx) > 0) return { fx: Number(b.inv.payFx), src: 'recorded' };
+    if (Number(b.inv.fx) > 0) return { fx: Number(b.inv.fx), src: 'the bill' };
+    var e = (typeof getEffectiveFX === 'function') ? getEffectiveFX(b.c, b.y, b.yIdx) : (Number(b.c.baseFX) || 83.5);
+    return { fx: Number(e) || 0, src: 'the cycle' };
+}
+// One click: the bank's rate and date into every bill of the remittance that does not carry them yet,
+// after the before/after is shown and agreed. inv.fx (the rate typed on the bill) is left alone.
+async function __msRmtRecord(id) {
+    var o = __msRmtFind(id);
+    if (!o) { __msRmtToast('That remittance is not on the list any more — refresh.', 3500); return; }
+    if (o.pending || !o.rate || !o.date) { __msRmtToast('This remittance has no rate or date to record yet.', 3500); return; }
+    var todo = __msRmtToRecord(o, __msRmtLinks(o));
+    if (!todo.length) { __msRmtToast('The remittance is already recorded in ' + (o.invoices.length === 1 ? 'the bill' : 'the bills') + '.', 3500); return; }
+    var lines = ['Record this remittance in ' + (todo.length === 1 ? 'the bill' : todo.length + ' bills') + '?', '',
+        'Sent ' + __msRmtDate(o.date) + (o.bank ? ' by ' + o.bank : '') + ' — ' + __msRmtUsd(o.usd, o.cur) + ' at ' + __msRmtRate(o.rate) + (o.rate_src === 'advice' ? ' (the bank\'s advice)' : ' (worked out from the rupees debited and the invoices — the bank\'s charges are in it)') + (o.net !== null ? ', ' + __msRmtInr(o.net) + ' debited' : '') + (o.ref ? ', ref ' + o.ref : '') + '.', ''];
+    todo.forEach(function (b) {
+        var cur = __msRmtEffFx(b), amt = Number(b.inv.amount) || 0;
+        var eng = null;
+        o.invoices.forEach(function (i) { if (__msRmtNorm(i.no) === __msRmtNorm(b.inv.invNo) && i.usd !== null) eng = i.usd; });
+        lines.push('Bill ' + (b.inv.invNo || '?') + ' — ' + b.client + (b.oem ? ' (' + b.oem + ')' : '') + ', ' + __msRmtUsd(amt, b.c.costCurrency));
+        lines.push('    payment date   ' + (b.inv.payDate ? __msRmtDate(b.inv.payDate) : '—') + '  →  ' + __msRmtDate(o.date));
+        lines.push('    rate           ' + cur.fx.toFixed(2) + ' (' + cur.src + ')  →  ' + __msRmtRate(o.rate) + (o.rate_src === 'advice' ? ' (advice)' : ' (worked out)'));
+        lines.push('    amount (₹)     ' + __msRmtInr(Math.round(amt * cur.fx)) + '  →  ' + __msRmtInr(Math.round(amt * o.rate)));
+        if (eng !== null && amt > 0 && Math.abs(eng - amt) > Math.max(1, amt * 0.01)) lines.push('    ⚠ the invoice among the papers says ' + __msRmtUsd(eng) + '; the bill says ' + __msRmtUsd(amt));
+        lines.push('');
+    });
+    lines.push('The FX rate typed on the bill stays as it is; the register and the CA export use the recorded rate. "×" by the mark takes it off again.');
+    if (!(await __msAsk(lines.join('\n'), { ok: 'Record' }))) return;
+    todo.forEach(function (b) { b.inv.payDate = o.date; b.inv.payFx = o.rate; b.inv.payRef = o.id; });
+    try { persistData(); } catch (e) { __msRmtLog('WARN', 'save failed after recording', { error: String((e && e.message) || e) }); }
+    __msRmtLog('INFO', 'remittance recorded in bills', { id: o.id, date: o.date, rate: o.rate, bills: todo.map(function (b) { return b.inv.invNo; }) });
+    __msRmtToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Recorded in ' + (todo.length === 1 ? 'the bill' : todo.length + ' bills') + ': paid ' + __msRmtEsc(__msRmtDate(o.date)) + ' at ' + __msRmtEsc(__msRmtRate(o.rate)) + '.', 4000);
+    if (typeof renderARApPage === 'function') renderARApPage();
+    if (typeof debouncedCalcDashboard === 'function') debouncedCalcDashboard();
+}
+// Takes the recorded rate and date off a bill (found by its id, else its number); the payment date stays.
+function __msRmtClear(apId, invNo, recId) {
+    var hit = null, k = __msRmtNorm(invNo);
+    (typeof contracts !== 'undefined' && Array.isArray(contracts) ? contracts : []).forEach(function (c) {
+        (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (y) {
+            (y && Array.isArray(y.apInvoices) ? y.apInvoices : []).forEach(function (inv) {
+                if (hit || !inv || !(Number(inv.payFx) > 0)) return;
+                if (apId ? String(inv.apId || '') === apId : (k && __msRmtNorm(inv.invNo) === k && (!recId || inv.payRef === recId))) hit = inv;
+            });
+        });
+    });
+    if (!hit) { __msRmtToast('Nothing recorded on that bill.', 3000); return; }
+    delete hit.payFx; delete hit.payRef;
+    try { persistData(); } catch (e) {}
+    __msRmtLog('INFO', 'remittance cleared from a bill', { invNo: hit.invNo });
+    __msRmtToast('The recorded rate was taken off bill ' + __msRmtEsc(hit.invNo || '') + '; its payment date stays.', 3500);
+    if (typeof renderARApPage === 'function') renderARApPage();
+}
+
+// ---- the Manage modal: the recorded remittance travels with the bill's row ---------------------------
+function __msRmtRowInit(row, rec) {
+    if (!row || !rec || !(Number(rec.payFx) > 0)) return;
+    row.setAttribute('data-payfx', String(Number(rec.payFx)));
+    row.setAttribute('data-payref', String(rec.payRef || ''));
+    var note = document.createElement('div');
+    note.className = 'ms-rmt-rownote';
+    note.style.cssText = 'font-size:11px; color:var(--text-dim); margin:3px 0 0 2px;';
+    note.innerHTML = '<i class="fas fa-globe" style="color:var(--accent-cyan); font-size:10px;"></i> Remitted at ' + __msRmtEsc(Number(rec.payFx).toFixed(2)) + ' (the bank\'s rate, recorded from the Payables page) — the register and the CA export use it; the FX rate box is what you typed. '
+        + '<a href="#" onclick="__msRmtRowClear(this); return false;" style="color:var(--text-dim);" title="Take the recorded rate off this bill when it is saved">Clear</a>';
+    var status = row.querySelector('.ap-upload-status');
+    if (status && status.parentNode === row) row.insertBefore(note, status); else row.appendChild(note);
+    // the recorded rate belongs to this bill as it was: another number or another date paid is another bill
+    var no = row.querySelector('.ap-no'), pd = row.querySelector('.ap-paydate');
+    var was = { no: no ? no.value : '', pd: pd ? pd.value : '' };
+    var watch = function () {
+        if ((no && no.value.trim() !== was.no.trim()) || (pd && pd.value !== was.pd)) { __msRmtRowClear(row); __msRmtToast('The recorded remittance rate was taken off this bill: its number or date paid changed.', 4000); }
+    };
+    if (no) no.addEventListener('input', watch);
+    if (pd) pd.addEventListener('input', watch);
+    if (pd) pd.addEventListener('change', watch);
+}
+function __msRmtRowClear(el) {
+    var row = el && el.closest ? el.closest('.ap-row') : null;
+    if (!row) return;
+    row.removeAttribute('data-payfx'); row.removeAttribute('data-payref');
+    var note = row.querySelector('.ms-rmt-rownote');
+    if (note) note.parentNode.removeChild(note);
+}
+function __msRmtRowRead(row, rec) {
+    var fx = parseFloat(row.getAttribute('data-payfx') || '');
+    if (fx > 0) { rec.payFx = fx; var ref = row.getAttribute('data-payref') || ''; if (ref) rec.payRef = ref; }
+    return rec;
+}
+
+// ---- the CA export: what was paid, in rupees, at the recorded rate when there is one -------------------
+function __msRmtPaidInr(ap, amt) {
+    return (amt && amt.isUSDcontract && ap && Number(ap.payFx) > 0) ? Math.round((Number(amt.usdValue) || 0) * Number(ap.payFx) * 100) / 100 : ((amt && Number(amt.inrValue)) || 0);
+}
+function __msRmtPayRate(ap, isUSD) { return (isUSD && ap && Number(ap.payFx) > 0) ? Number(ap.payFx) : ''; }
+
+// ---- Excel ---------------------------------------------------------------------------------------
+function exportRemittancesExcel() {
+    if (typeof XLSX === 'undefined') { __msRmtToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Excel library not loaded — refresh and retry.', 4000); return; }
+    if (!__msRmt.idx) return;
+    var S = __msRmtShown(), r2 = function (n) { return n === null || n === undefined ? '' : Math.round(Number(n) * 100) / 100; };
+    var head1 = ['Date', 'Year', 'Bank', 'Account', 'Reference', 'Currency', 'Sent', 'Rate', 'Rate from', 'Rupees sent', 'Charges', 'Debited (₹)', 'Bills', 'Clients', 'Recorded in the bills', 'Papers', 'Folders', 'Notes', 'Bank text', 'Your remark'];
+    var rows1 = [head1];
+    S.out.forEach(function (x) {
+        var o = x.o, links = x.links;
+        var recorded = links.map(function (l) { return l.bills.filter(function (b) { return !b.legacy && __msRmtRecorded(b.inv, o); }).length ? l.inv.no : ''; }).filter(Boolean);
+        rows1.push([o.date, o.fy, o.bank, __msRmtAcctLabel(o.acct), o.ref, o.cur, r2(o.usd), o.rate === null ? '' : o.rate, o.rate_src === 'advice' ? 'advice' : (o.rate === null ? '' : 'worked out'), r2(o.inr),
+            o.charges.map(function (c) { return c.label + ' ' + c.amount; }).join('; '), r2(o.net), o.invoices.map(function (i) { return i.no + (i.usd !== null ? ' (USD ' + i.usd + ')' : ''); }).join(', '),
+            __msRmtClientsOf(links).join(', '), recorded.join(', '), o.papers.map(function (p) { return p.label + ': ' + p.file.split('/').pop(); }).join('; '), o.folders.join('; '),
+            (o.pending ? 'papers filed, not in the statements yet; ' : '') + o.warnings.join('; '), o.line ? o.line.t : '', o.line ? o.line.r : '']);
+    });
+    var ws1 = XLSX.utils.aoa_to_sheet(rows1);
+    ws1['!cols'] = [11, 11, 7, 13, 18, 8, 13, 8, 10, 15, 30, 15, 36, 30, 20, 60, 40, 50, 40, 30].map(function (w) { return { wch: w }; });
+    for (var r = 1; r < rows1.length; r++) [6, 9, 11].forEach(function (c) { var cell = ws1[XLSX.utils.encode_cell({ r: r, c: c })]; if (cell && cell.t === 'n') cell.z = '#,##0.00'; });
+    for (var c = 0; c < head1.length; c++) { var hc = ws1[XLSX.utils.encode_cell({ r: 0, c: c })]; if (hc) hc.s = { font: { bold: true } }; }
+    ws1['!view'] = [{ state: 'frozen', ySplit: 1, xSplit: 0, topLeftCell: 'A2', activePane: 'bottomLeft' }];
+    var head2 = ['Credited', 'Value date', 'Year', 'Bank', 'Account', 'Inward no.', 'Currency', 'Received', 'Rate', 'Amount (₹)', 'From', 'Purpose', 'Export invoices', 'Certificate', 'Notes', 'Bank text'];
+    var rows2 = [head2];
+    S.inn.forEach(function (o) {
+        rows2.push([o.date, o.value_date, o.fy, o.bank, __msRmtAcctLabel(o.acct), o.inward_no, o.cur, r2(o.usd), o.rate === null ? '' : o.rate, r2(o.inr), o.remitter, o.purpose,
+            o.refs.map(function (x) { return /^\d+$/.test(x) ? 'EXP' + x : x; }).join(', '), o.file ? o.file.split('/').pop() : '', o.warnings.join('; '), o.line ? o.line.t : '']);
+    });
+    var ws2 = XLSX.utils.aoa_to_sheet(rows2);
+    ws2['!cols'] = [11, 11, 11, 7, 13, 18, 8, 13, 9, 15, 34, 26, 24, 40, 40, 40].map(function (w) { return { wch: w }; });
+    for (var r2i = 1; r2i < rows2.length; r2i++) [7, 9].forEach(function (c) { var cell = ws2[XLSX.utils.encode_cell({ r: r2i, c: c })]; if (cell && cell.t === 'n') cell.z = '#,##0.00'; });
+    for (var c2 = 0; c2 < head2.length; c2++) { var hc2 = ws2[XLSX.utils.encode_cell({ r: 0, c: c2 })]; if (hc2) hc2.s = { font: { bold: true } }; }
+    ws2['!view'] = [{ state: 'frozen', ySplit: 1, xSplit: 0, topLeftCell: 'A2', activePane: 'bottomLeft' }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, 'Sent abroad');
+    XLSX.utils.book_append_sheet(wb, ws2, 'Received (FIRC)');
+    var fname = 'Masterstone_Remittances_' + (S.f.fy !== 'ALL' ? __msRmtFyLabelOfFilter(S.f.fy).replace(' ', '') : 'all') + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    __msRmtToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Remittances exported — <strong>' + __msRmtEsc(fname) + '</strong>', 4000);
+}
+// =================== /Phase 8FC — Remittances abroad on the Payables page ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
