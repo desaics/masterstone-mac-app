@@ -11300,25 +11300,22 @@ window.__msRenderMissingOneDriveLinks = function () {
     <!-- Filter row -->
     <div class="card" style="padding:14px 18px; margin-bottom:14px;">
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-        <input type="text" id="conSearch" placeholder="Search payment #, consultant, period, invoice #..." style="flex:1; min-width:220px; max-width:340px;" oninput="renderConsultantPayments()">
-        <select id="conStatusFilter" onchange="renderConsultantPayments()" style="width:160px;">
-          <option value="ALL" selected>All Statuses</option>
-          <option value="Pending">Pending</option>
-          <option value="Paid">Paid</option>
-        </select>
-        <select id="conConsultantFilter" onchange="renderConsultantPayments()" style="width:220px;">
-          <option value="ALL">All Consultants</option>
-        </select>
-        <select id="conPeriodFilter" onchange="__msConPeriodChanged()" style="width:170px;">
-          <option value="ALL" selected>All Time</option>
-          <option value="CURRENT_MONTH">Current Month</option>
-          <option value="LAST_MONTH">Last Month</option>
-          <option value="CURRENT_FY">Current FY</option>
-        </select>
-        <!-- 8FE — the financial year (April–March) of the consultant's invoice date; filled from the payments -->
-        <select id="conFyFilter" onchange="__msConFyChanged()" style="width:170px;" aria-label="Financial year">
+        <!-- 8FE.2 — the boxes depend on each other: each offers only the choices with payments under the other boxes, with
+             the count beside each (filled by __msConSyncFilters when the register is drawn); the search narrows the list on top -->
+        <select id="conFyFilter" onchange="renderConsultantPayments()" onkeyup="__msConBoxKey(this)" style="width:160px;" aria-label="Financial year">
           <option value="ALL" selected>All Fiscal Years</option>
         </select>
+        <select id="conConsultantFilter" onchange="renderConsultantPayments()" onkeyup="__msConBoxKey(this)" style="width:240px;" aria-label="Consultant">
+          <option value="ALL" selected>All Consultants</option>
+        </select>
+        <select id="conStatusFilter" onchange="renderConsultantPayments()" onkeyup="__msConBoxKey(this)" style="width:150px;" aria-label="Status">
+          <option value="ALL" selected>All Statuses</option>
+        </select>
+        <select id="conPeriodFilter" onchange="renderConsultantPayments()" onkeyup="__msConBoxKey(this)" style="width:160px;" aria-label="Period">
+          <option value="ALL" selected>All Time</option>
+        </select>
+        <input type="text" id="conSearch" placeholder="Search payment #, consultant, period, invoice #..." style="flex:1; min-width:220px; max-width:340px;" oninput="renderConsultantPayments()">
+        <a id="conFilterClear" href="javascript:void(0)" onclick="__msConClearFilters()" title="Every box back to All, the search emptied" style="visibility:hidden; font-size:12px; white-space:nowrap;"><i class="fas fa-xmark"></i> Clear</a>
       </div>
     </div>
 
@@ -41938,19 +41935,8 @@ function recomputeConsultantKPIs(filteredPayments) {
 }
 
 // ----- Filter dropdown population -----
-function populateConsultantFilterDropdown() {
-    const sel = document.getElementById('conConsultantFilter');
-    if (!sel) return;
-    const current = sel.value || 'ALL';
-    const opts = ['<option value="ALL">All Consultants</option>'];
-    consultants
-        .filter(c => !c.archived)
-        .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-        .forEach(c => {
-            opts.push(`<option value="${pEsc(c.id)}"${current === c.id ? ' selected' : ''}>${pEsc(c.name || '(unnamed)')}</option>`);
-        });
-    sel.innerHTML = opts.join('');
-}
+// 8FE.2: the register's boxes (year, consultant, status, period) are filled by __msConSyncFilters, each from the
+// payments the other boxes leave; the Consultant box lists every consultant who has payments, archived ones marked.
 
 function populateConPayConsultantDropdown(selectedId) {
     const sel = document.getElementById('conPayConsultantId');
@@ -41994,8 +41980,8 @@ function isPaymentInPeriod(payment, periodKey) {
 // ===== Phase 8FE — Consultants: the financial year, the Selected Total, Consultant Master as Grid or List =====
 // The Payment Register gets an "All Fiscal Years" box: the years that have payments, newest first. A payment's
 // year is the Indian financial year (April–March) of the consultant's invoice date — the date the Period box
-// already counts by — labelled as on the Invoices page ("FY 25-26"). A year and a period never narrow the list
-// together: picking one sets the other back to all, so the two cannot leave the list empty between them.
+// already counts by — labelled as on the Invoices page ("FY 25-26"). (8FE.2: the boxes depend on each other — each offers
+// only the choices with payments under the other boxes — which replaces 8FE's year / period reset.)
 // The Selected Total (as on Receivables and Payables) adds up the payments on screen whenever anything narrows
 // the list — year, period, status, consultant or search — on the cards' Incl / Excl GST basis, and hides when
 // every payment is shown. The cards above stay totals of everything, as before.
@@ -42026,36 +42012,8 @@ function __msConFyOf(d) {
     return 'FY ' + String(start).slice(-2) + '-' + String(start + 1).slice(-2);
 }
 
-// Fill the year box from the payments (newest first) and return the year chosen — kept while it still has
-// payments, else back to all.
-function populateConsultantFyDropdown() {
-    var sel = document.getElementById('conFyFilter');
-    if (!sel) return 'ALL';
-    var cur = sel.value || 'ALL';
-    var starts = {};
-    (consultantPayments || []).forEach(function (p) {
-        var st = __msConFyStart(p && p.invoiceDate);
-        if (st !== null) starts[__msConFyOf(p.invoiceDate)] = st;
-    });
-    var list = Object.keys(starts).sort(function (a, b) { return starts[b] - starts[a]; });
-    if (cur !== 'ALL' && list.indexOf(cur) === -1) cur = 'ALL';
-    sel.innerHTML = '<option value="ALL">All Fiscal Years</option>'
-        + list.map(function (fy) { return '<option value="' + pEsc(fy) + '">' + pEsc(fy) + '</option>'; }).join('');
-    sel.value = cur;
-    return cur;
-}
-
-// A year and a period never narrow the list together.
-function __msConFyChanged() {
-    var fy = document.getElementById('conFyFilter'), pp = document.getElementById('conPeriodFilter');
-    if (fy && pp && fy.value !== 'ALL' && pp.value !== 'ALL') pp.value = 'ALL';
-    renderConsultantPayments();
-}
-function __msConPeriodChanged() {
-    var fy = document.getElementById('conFyFilter'), pp = document.getElementById('conPeriodFilter');
-    if (fy && pp && pp.value !== 'ALL' && fy.value !== 'ALL') fy.value = 'ALL';
-    renderConsultantPayments();
-}
+// (8FE's year-box filler and its year / period reset went in 8FE.2: __msConSyncFilters fills all four boxes, each
+// from the payments the other boxes leave, and a choice left with nothing goes back to All.)
 
 // The Selected Total. Called by the register with the rows on screen and whether anything narrowed them;
 // called with no arguments by the Incl / Excl GST switch (the same rows, the other basis).
@@ -42106,7 +42064,7 @@ function __msConMasterListHtml(list) {
             { html: c.panNumber ? '<span class="cm-row-mono">' + pEsc(c.panNumber) + '</span>' : '<span class="cm-row-muted">—</span>', style: dim },
             { html: gst, style: dim },
             { html: place ? pEsc(place) : '<span class="cm-row-muted">—</span>', style: dim },
-            { html: String(pays), style: 'text-align:center;' + dim },
+            { html: __msConPayCountHtml(c.id, pays, 'list'), style: 'text-align:center;' + dim },
             { html: String(docs), style: 'text-align:center;' + dim },
             { html: status, style: 'white-space:nowrap;' + dim },
             { html: '<button class="btn btn-ghost btn-sm" onclick="' + pEsc(payJs) + '" onkeydown="event.stopPropagation()" title="New payment for this consultant"><i class="fas fa-plus"></i> Payment</button>', style: 'text-align:right; white-space:nowrap;' + dim }
@@ -42139,10 +42097,138 @@ function __msConExportSelection() {
 }
 // ===== /Phase 8FE.1 =====
 
+// ===== Phase 8FE.2 — Consultants: the filters depend on each other =====
+// The Payment Register's boxes, in the order Fiscal Year · Consultant · Status · Period (then the search): each
+// box offers only the choices that have payments under what the OTHER boxes say, with the number of payments
+// beside each choice — pick a year and the Consultant box lists only the consultants paid that year; pick a
+// consultant and the Year box lists only the years with their payments; Status offers Pending / Paid only where
+// they exist; Period offers Current Month, Last Month and Current FY only when they would show something. A
+// choice that stops making sense after another box changes goes back to All (so the boxes can never, between
+// them, leave the list empty — this replaces 8FE's rule that a year and a period reset each other). The search
+// narrows the list on top of the boxes and never changes what they offer. The Consultant box lists every
+// consultant who has payments (archived ones marked), not the consultant master. A "Clear" link shows while
+// anything narrows the list. On Consultant Master, a consultant's payments count opens the register on them.
+var MS_CON_BOXES = ['conFyFilter', 'conConsultantFilter', 'conStatusFilter', 'conPeriodFilter'];
+var MS_CON_BOX_ALL = { conFyFilter: 'All Fiscal Years', conConsultantFilter: 'All Consultants', conStatusFilter: 'All Statuses', conPeriodFilter: 'All Time' };
+var MS_CON_PERIODS = [['CURRENT_MONTH', 'Current Month'], ['LAST_MONTH', 'Last Month'], ['CURRENT_FY', 'Current FY']];
+
+// What the boxes say now ('ALL' for a box that is not there).
+function __msConFilterValues() {
+    var v = {};
+    MS_CON_BOXES.forEach(function (id) { var e = document.getElementById(id); v[id] = (e && e.value) || 'ALL'; });
+    return v;
+}
+// Does a payment satisfy one box's choice?
+function __msConBoxMatch(id, value, p) {
+    if (!value || value === 'ALL') return true;
+    if (id === 'conFyFilter') return __msConFyOf(p.invoiceDate) === value;
+    if (id === 'conConsultantFilter') return p.consultantId === value;
+    if (id === 'conStatusFilter') return p.status === value;
+    if (id === 'conPeriodFilter') return isPaymentInPeriod(p, value);
+    return true;
+}
+// The payments the OTHER boxes leave for one box to choose from.
+function __msConLeftFor(id, values) {
+    return (consultantPayments || []).filter(function (p) {
+        return !!p && MS_CON_BOXES.every(function (b) { return b === id || __msConBoxMatch(b, values[b], p); });
+    });
+}
+// One box's choices from the payments left to it: [{ value, label, n }] in the box's own order.
+function __msConChoices(id, left) {
+    var n = {};
+    if (id === 'conFyFilter') {
+        var starts = {};
+        left.forEach(function (p) { var st = __msConFyStart(p.invoiceDate); if (st === null) return; var k = __msConFyOf(p.invoiceDate); starts[k] = st; n[k] = (n[k] || 0) + 1; });
+        return Object.keys(starts).sort(function (a, b) { return starts[b] - starts[a]; }).map(function (k) { return { value: k, label: k, n: n[k] }; });
+    }
+    if (id === 'conConsultantFilter') {
+        left.forEach(function (p) { var k = p.consultantId; if (!k) return; n[k] = (n[k] || 0) + 1; });
+        return Object.keys(n).map(function (k) {
+            var c = (typeof getConsultantById === 'function') ? getConsultantById(k) : null;
+            return { value: k, label: c ? ((c.name || '(unnamed)') + (c.archived ? ' — archived' : '')) : '(unknown consultant)', n: n[k], sort: c ? (c.name || '') : '', last: c ? 0 : 1 };
+        }).sort(function (a, b) { return (a.last - b.last) || a.sort.localeCompare(b.sort); });   // unknown consultants last
+    }
+    if (id === 'conStatusFilter') {
+        left.forEach(function (p) { var k = p.status || ''; if (!k) return; n[k] = (n[k] || 0) + 1; });
+        var order = ['Pending', 'Paid'];
+        return Object.keys(n).sort(function (a, b) {
+            var ia = order.indexOf(a), ib = order.indexOf(b); if (ia === -1) ia = 99; if (ib === -1) ib = 99;
+            return (ia - ib) || a.localeCompare(b);
+        }).map(function (k) { return { value: k, label: k, n: n[k] }; });
+    }
+    if (id === 'conPeriodFilter') {
+        return MS_CON_PERIODS.map(function (pr) { return { value: pr[0], label: pr[1], n: left.filter(function (p) { return isPaymentInPeriod(p, pr[0]); }).length }; })
+            .filter(function (c) { return c.n > 0; });
+    }
+    return [];
+}
+// Fill one box with its choices, the count beside each, and keep its value (All when it is not offered).
+function __msConFillBox(id, values) {
+    var sel = document.getElementById(id);
+    if (!sel) return;
+    var choices = __msConChoices(id, __msConLeftFor(id, values));
+    sel.innerHTML = '<option value="ALL">' + pEsc(MS_CON_BOX_ALL[id]) + '</option>'
+        + choices.map(function (c) { return '<option value="' + pEsc(c.value) + '">' + pEsc(c.label + ' (' + c.n + ')') + '</option>'; }).join('');
+    sel.value = values[id];
+    if (sel.value !== values[id]) { sel.value = 'ALL'; values[id] = 'ALL'; }
+    sel.setAttribute('data-ms-val', values[id]);   // what the register was last drawn with (see __msConBoxKey)
+}
+// A box changed from the keyboard without a change event (WebKit fires none when a type-ahead lands on the index
+// it last reported, which the rebuilt list may have moved): draw the register when the box and it disagree.
+function __msConBoxKey(sel) { if (sel && sel.value !== sel.getAttribute('data-ms-val')) renderConsultantPayments(); }
+// Settle the boxes: a box whose choice has no payments under the other boxes goes back to All (looked at again
+// until nothing moves), then every box is filled. Returns the values settled on.
+function __msConSyncFilters() {
+    var values = __msConFilterValues();
+    // (Only the data changing under a choice can make two boxes disagree — what the UI offers always has rows —
+    // and then the earlier box in the row yields: the year before the consultant, the consultant before the status.)
+    for (var round = 0; round < 8; round++) {
+        var moved = false;
+        MS_CON_BOXES.forEach(function (id) {
+            if (values[id] === 'ALL') return;
+            var left = __msConLeftFor(id, values);
+            if (!left.some(function (p) { return __msConBoxMatch(id, values[id], p); })) { values[id] = 'ALL'; moved = true; }
+        });
+        if (!moved) break;
+    }
+    MS_CON_BOXES.forEach(function (id) { __msConFillBox(id, values); });
+    return values;
+}
+// The Clear link: shown while anything narrows the list; a click puts every box back to All and empties the search.
+function __msConClearLink(on) { var a = document.getElementById('conFilterClear'); if (a) a.style.visibility = on ? 'visible' : 'hidden'; }   // keeps its place, so nothing moves
+function __msConClearFilters() {
+    MS_CON_BOXES.forEach(function (id) { var e = document.getElementById(id); if (e) e.value = 'ALL'; });
+    var s = document.getElementById('conSearch'); if (s) s.value = '';
+    renderConsultantPayments();
+}
+// Consultant Master → the register, on one consultant (every year, status and period; no search).
+function __msConShowPayments(id) {
+    ['conFyFilter', 'conStatusFilter', 'conPeriodFilter'].forEach(function (b) { var e = document.getElementById(b); if (e) e.value = 'ALL'; });
+    var s = document.getElementById('conSearch'); if (s) s.value = '';
+    var sel = document.getElementById('conConsultantFilter');
+    if (sel) {
+        var has = false;
+        for (var i = 0; i < sel.options.length; i++) if (sel.options[i].value === id) has = true;
+        if (!has) { var o = document.createElement('option'); o.value = id; o.textContent = (typeof getConsultantName === 'function') ? getConsultantName(id) : String(id); sel.appendChild(o); }
+        sel.value = id;
+    }
+    if (typeof showConsultantsSubtab === 'function') showConsultantsSubtab('register'); else renderConsultantPayments();
+}
+// A consultant's payments count on Consultant Master: a link to their payments when there are any.
+function __msConPayCountHtml(id, n, where) {
+    var text = where === 'list' ? String(n) : (n + ' payment' + (n === 1 ? '' : 's'));
+    var icon = where === 'list' ? '' : '<i class="fas fa-file-invoice-dollar"></i> ';
+    if (!n) return where === 'list' ? text : '<span>' + icon + text + '</span>';
+    var js = 'event.stopPropagation(); ' + __msMasterOnclick('__msConShowPayments', id);
+    var a = '<a href="javascript:void(0)" class="con-pay-link" onclick="' + pEsc(js) + '" onkeydown="event.stopPropagation()" title="Show these payments in the register" style="color:inherit; text-decoration:underline dotted; text-underline-offset:3px;">' + icon + text + '</a>';
+    return where === 'list' ? a : '<span>' + a + '</span>';
+}
+// ===== /Phase 8FE.2 =====
+
 // ----- Payment Register render -----
 function renderConsultantPayments() {
-    populateConsultantFilterDropdown();
-    const fyF = populateConsultantFyDropdown();   // 8FE — the years that have payments; the choice kept while it still has some
+    const fv = __msConSyncFilters();   // 8FE.2 — each box offers what the other boxes leave; a choice left with nothing goes back to All
+    const fyF = fv.conFyFilter;
     const tbody = document.getElementById('conPaymentsBody');
     if (!tbody) return;
 
@@ -42179,7 +42265,9 @@ function renderConsultantPayments() {
     });
 
     recomputeConsultantKPIs(rows);
-    __msConFilterTotal(rows, !!search || statusF !== 'ALL' || consultantF !== 'ALL' || periodF !== 'ALL' || fyF !== 'ALL');   // 8FE — Selected Total
+    const narrowed = !!search || statusF !== 'ALL' || consultantF !== 'ALL' || periodF !== 'ALL' || fyF !== 'ALL';
+    __msConFilterTotal(rows, narrowed);   // 8FE — Selected Total
+    __msConClearLink(narrowed);           // 8FE.2 — the Clear link shows while anything narrows the list
 
     if (rows.length === 0) {
         const msg = consultantPayments.length === 0
@@ -42284,7 +42372,7 @@ function renderConsultantMaster() {
                 </div>
             </div>
             <div style="display:flex; gap:14px; font-size:11.5px; color:var(--text-dim); margin-top:8px; padding-top:8px; border-top:1px solid var(--glass-border);">
-                <span><i class="fas fa-file-invoice-dollar"></i> ${paymentCount} payment${paymentCount === 1 ? '' : 's'}</span>
+                ${__msConPayCountHtml(c.id, paymentCount, 'card')}
                 <span><i class="fas fa-paperclip"></i> ${attCount} doc${attCount === 1 ? '' : 's'}</span>
             </div>
             <div style="margin-top:12px; display:flex; gap:6px;">
