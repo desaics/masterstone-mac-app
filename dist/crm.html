@@ -21832,6 +21832,10 @@ async function saveContract() {
         servicePaymentTerms: ((((document.getElementById('ctrServicePaymentTerms') || {}).value || '')).trim())
     };
 
+    // 8FF — the contract's pin before this save: a contract carries several PO records (one per PO file), each pinned to
+    // its own file; the cascade below moves the contract's pin only onto its own PO (the number it carries), a PO linked by
+    // index with no pin, or one that carried the contract's old pin.
+    const _prevIpo = (idx > -1 && contracts[idx]) ? { link: contracts[idx].internalPOLink || '', local: contracts[idx].internalPOLocalPath || '' } : { link: '', local: '' };
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
     // Phase 8P — Contract → PO path cascade (hardened). Two complementary
     // matching strategies, applied together so any matching PO gets updated:
@@ -21854,7 +21858,10 @@ async function saveContract() {
                 let _matched = false;
                 if (_ipoNum && ((p.poNumber || '').trim()) === _ipoNum) _matched = true;
                 const _lci = parseInt(p.linkedContractIdx);
-                if (!isNaN(_lci) && _lci === _ctrIdxAfterSave) _matched = true;
+                if (!isNaN(_lci) && _lci === _ctrIdxAfterSave) {
+                    const _ownLocal = p.externalLinkLocalPath || '', _ownLink = p.externalLink || '';   // 8FF: a PO's own pin to another file stays
+                    if ((!_ownLocal && !_ownLink) || (_ownLocal === _prevIpo.local && _ownLink === _prevIpo.link)) _matched = true;
+                }
                 if (_matched && !_matchedPos.includes(p)) _matchedPos.push(p);
             });
             let _changed = false;
@@ -29729,6 +29736,7 @@ async function savePOFromForm() {
     rec.showGstOnPdf = !!(document.getElementById('poShowGstOnPdf') || {}).checked;
     rec.showFxOnPdf = !!(document.getElementById('poShowFxOnPdf') || {}).checked;
     rec.instructionsToVendor = ((document.getElementById('poInstructionsToVendor') || {}).value || '').trim();
+    const _prevPoPin = { link: rec.externalLink || '', local: rec.externalLinkLocalPath || '' };   // 8FF: the PO's pin before this save (see the cascade below)
     rec.externalLink = (document.getElementById('poExternalLink').value || '').trim();
     rec.externalLinkLocalPath = ((document.getElementById('poExternalLink__local') || {}).value || '').trim();
     rec.isForeignOem = isOemForeign(oem);
@@ -29756,7 +29764,12 @@ async function savePOFromForm() {
                 if (!c) return;
                 let _matched = false;
                 if (_poNum && ((c.internalPO || '').trim()) === _poNum) _matched = true;
-                if (_hasLci && i === _lci) _matched = true;
+                if (_hasLci && i === _lci) {
+                    // 8FF — a contract carries several PO records (one per PO file): a PO linked by index moves the contract's pin
+                    // only when the contract has none or carries this PO's old pin (the contract's own PO is matched by number above)
+                    const _cLocal = c.internalPOLocalPath || '', _cLink = c.internalPOLink || '';
+                    if ((!_cLocal && !_cLink) || (_cLocal === _prevPoPin.local && _cLink === _prevPoPin.link)) _matched = true;
+                }
                 if (_matched && !_matchedCtrs.includes(c)) _matchedCtrs.push(c);
             });
             let _anyChanged = false;
@@ -38212,7 +38225,11 @@ function resolvePOPath(po) {
         const _cTime = linkedContract.updatedAt ? new Date(linkedContract.updatedAt).getTime() : 0;
         const _pTime = po.updatedAt ? new Date(po.updatedAt).getTime() : 0;
         const _cHasPath = !!(linkedContract.internalPOLink || linkedContract.internalPOLocalPath);
-        if (_cTime > _pTime && _cHasPath) {
+        // 8FF — a PO pinned to a file of its own (another PO file of the same contract) shows that file; the contract's own
+        // PO (the number it carries) and a PO with no pin follow the contract's fresher pin as before
+        const _own = !!(po.externalLink || po.externalLinkLocalPath);
+        const _isOwn = !!(po.poNumber || '').trim() && (linkedContract.internalPO || '').trim() === (po.poNumber || '').trim();
+        if (_cTime > _pTime && _cHasPath && (!_own || _isOwn)) {
             return {
                 link:      linkedContract.internalPOLink      || '',
                 localPath: linkedContract.internalPOLocalPath || ''
@@ -52095,7 +52112,7 @@ var MS_IMP_BATCH_KEY = 'ms_app__import_batches_v1';
 var MS_IMP_MAX_ROWS = 400;
 var __msImp = { idx: null, at: 0, error: '', missing: false, reading: false, again: false, retries: 0, root: '', filesRoot: '', rev: 0, known: null, dropped: 0,
                 exists: {}, toCheck: {}, checking: false,
-                ui: { fy: null, q: '', open: { sales: true, bills: true, vendors: true, contracts: true, links: false, batches: false } },
+                ui: { fy: null, q: '', open: { sales: true, bills: true, vendors: true, pos: true, contracts: true, quotes: true, links: false, batches: false } },
                 ticks: {}, plan: null, planKey: '', batches: null, batchesState: 'idle', batchesError: '', working: false, lastResult: null };
 var MS_IMP_ALIASES = [
     ['63MOONS', /63 ?MOONS/i], ['CAMS', /(^|[^A-Z0-9])CAMS([^A-Z0-9]|$)|COMPUTER AGE/i], ['CARE', /(^|[^A-Z0-9])CARE([^A-Z0-9]|$)|QUALITY CARE/i],
@@ -52212,7 +52229,7 @@ function __msImpRowOk(r, kind) {
     return true;
 }
 function __msImpIndexOk(d) {
-    if (!d || typeof d !== 'object' || d.kind !== 'masterstone-import-index' || d.format !== 1 || typeof d.root !== 'string' || !d.root) return null;
+    if (!d || typeof d !== 'object' || d.kind !== 'masterstone-import-index' || (d.format !== 1 && d.format !== 2) || typeof d.root !== 'string' || !d.root) return null;   // 8FF: format 2 adds the PO files and OEM quotes
     if (!Array.isArray(d.sales) || !Array.isArray(d.payments) || !Array.isArray(d.pairs) || !d.docs || typeof d.docs !== 'object') return null;
     var dropped = 0;
     var sales = d.sales.filter(function (r) { var o = __msImpRowOk(r, 'sale'); if (!o) dropped++; return o; });
@@ -52220,12 +52237,15 @@ function __msImpIndexOk(d) {
     var ids = {}; sales.concat(payments).forEach(function (r) { ids[r.id] = r; });
     var pairs = d.pairs.filter(function (p) { var o = p && ids[p.bill] && ids[p.sale]; if (!o) dropped++; return o; });
     var docs = {};
-    ['sales', 'purchase', 'internal_po', 'client_po'].forEach(function (k) {
+    ['sales', 'purchase', 'internal_po', 'client_po', 'oem_quote'].forEach(function (k) {
         docs[k] = (Array.isArray(d.docs[k]) ? d.docs[k] : []).filter(function (x) { return x && typeof x.rel === 'string' && typeof x.name === 'string'; });
     });
-    return { kind: d.kind, format: 1, sig: String(d.sig || ''), made: String(d.made || ''), root: d.root.replace(/\/+$/, ''), masters: Array.isArray(d.masters) ? d.masters : [],
+    // 8FF — the PO files and OEM quotes (format 2); an older list has none
+    var pos = (d.format === 2 && Array.isArray(d.pos) ? d.pos : []).filter(function (r) { var o = __msImpPoRowOk(r); if (!o) dropped++; return o; });
+    var quotes = (d.format === 2 && Array.isArray(d.quotes) ? d.quotes : []).filter(function (q) { var o = __msImpQuoteRowOk(q); if (!o) dropped++; return o; });
+    return { kind: d.kind, format: d.format, sig: String(d.sig || ''), made: String(d.made || ''), root: d.root.replace(/\/+$/, ''), masters: Array.isArray(d.masters) ? d.masters : [],
              sales: sales, payments: payments, pairs: pairs, clients: (d.clients && typeof d.clients === 'object') ? d.clients : {}, parties: (d.parties && typeof d.parties === 'object') ? d.parties : {},
-             docs: docs, unmatched_docs: d.unmatched_docs || {}, unread: Array.isArray(d.unread) ? d.unread : [], errors: Array.isArray(d.errors) ? d.errors : [], by_fy: d.by_fy || {}, stats: d.stats || {}, dropped: dropped };
+             docs: docs, pos: pos, quotes: quotes, unmatched_docs: d.unmatched_docs || {}, unread: Array.isArray(d.unread) ? d.unread : [], errors: Array.isArray(d.errors) ? d.errors : [], by_fy: d.by_fy || {}, stats: d.stats || {}, dropped: dropped };
 }
 async function __msImpRead(force) {
     if (__msImp.reading) { __msImp.again = __msImp.again || !!force; return; }
@@ -52260,7 +52280,7 @@ async function __msImpRead(force) {
         var changed = !__msImp.idx || __msImp.idx.sig !== idx.sig || __msImp.idx.made !== idx.made;
         __msImp.idx = idx; __msImp.error = ''; __msImp.missing = false; __msImp.dropped = idx.dropped;
         if (changed) { __msImp.rev++; __msImp.known = null; __msImp.plan = null; }
-        __msImpLog('INFO', changed ? 'the list was read' : 'the list was read again (unchanged)', { sales: idx.sales.length, payments: idx.payments.length, pairs: idx.pairs.length, made: idx.made, dropped: idx.dropped });
+        __msImpLog('INFO', changed ? 'the list was read' : 'the list was read again (unchanged)', { sales: idx.sales.length, payments: idx.payments.length, pairs: idx.pairs.length, pos: idx.pos.length, quotes: idx.quotes.length, format: idx.format, made: idx.made, dropped: idx.dropped });
     } catch (e) {
         __msImp.error = 'The engine\'s list could not be read (' + String((e && e.message) || e) + ').';
         __msImpLog('WARN', 'the list could not be read', { error: __msImp.error });
@@ -52285,15 +52305,17 @@ function __msImpOnTab() {
 // The files the engine listed, by absolute path (what "on the Mac" means here), and by number.
 function __msImpKnown() {
     if (__msImp.known) return __msImp.known;
-    var idx = __msImp.idx, K = { paths: {}, salesByCode: {}, salesBySerial: {}, purchByNo: [], ipo: [], cpo: [] };
+    var idx = __msImp.idx, K = { paths: {}, salesByCode: {}, salesBySerial: {}, purchByNo: [], ipo: [], cpo: [], posById: {}, poByNo: {}, copyIds: {}, quoteByNo: {} };
     if (!idx) return K;
-    ['sales', 'purchase', 'internal_po', 'client_po'].forEach(function (k) { idx.docs[k].forEach(function (d) { K.paths[__msImpAbs(d.rel)] = d; }); });
+    ['sales', 'purchase', 'internal_po', 'client_po', 'oem_quote'].forEach(function (k) { idx.docs[k].forEach(function (d) { K.paths[__msImpAbs(d.rel)] = d; }); });
     idx.docs.sales.forEach(function (d) {
         if (d.doc_kind === 'credit_note' || d.doc_kind === 'proforma' || d.cancelled) return;
         if (d.code) { K.salesByCode[__msImpCode(d.code)] = K.salesByCode[__msImpCode(d.code)] || []; K.salesByCode[__msImpCode(d.code)].push(d); }
     });
     idx.docs.purchase.forEach(function (d) { K.purchByNo.push(d); });
-    K.ipo = idx.docs.internal_po.filter(function (d) { return d.ext === '.pdf'; });
+    (idx.pos || []).forEach(function (r) { K.posById[r.id] = r; if (r.same_as) K.copyIds[r.id] = r.same_as; var nk = __msImpLoose(r.number); if (nk && !r.same_as) (K.poByNo[nk] = K.poByNo[nk] || []).push(r); });   // 8FF
+    (idx.quotes || []).forEach(function (q) { var qk = __msImpLoose(q.quote); if (qk) (K.quoteByNo[qk] = K.quoteByNo[qk] || []).push(q); });
+    K.ipo = idx.docs.internal_po.filter(function (d) { return d.ext === '.pdf' && !d.draft_of && !K.copyIds[d.id]; });   // 8FF: a PO's own file — never a copy, an amendment or a Word draft
     K.cpo = idx.docs.client_po.filter(function (d) { return d.ext === '.pdf'; });
     __msImp.known = K;
     return K;
@@ -52309,7 +52331,7 @@ function __msImpPathStale(p) {
     if (K.paths[p]) return '';
     if (!root || p.indexOf(root + '/') !== 0) return 'outside';
     var sub = p.slice(root.length + 1);
-    var four = ['Sales Invoices/', 'Purchase Invoices/', 'Internal POs/', 'Client POs/'];
+    var four = ['Sales Invoices/', 'Purchase Invoices/', 'Internal POs/', 'Client POs/', 'OEM Quotes/'];   // 8FF: and the quotes
     if (!four.some(function (f) { return sub.indexOf(f) === 0; })) return '';
     if (p in __msImp.exists) return __msImp.exists[p] === false ? 'moved' : '';
     if (!__msImpTauri()) return 'moved';
@@ -52376,6 +52398,7 @@ function __msImpPoDoc(kind, number, clientAlias, product, date) {
 // ---- what the app has -------------------------------------------------------------------------
 function __msImpMaps() {
     var M = { invByCode: {}, invByLoose: {}, cyclesBySale: {}, bySerial: {}, apByNo: {}, cycByNo: {}, conByPan: {}, conByName: {}, conPay: {}, clientByPan: {}, clientByName: {}, clientByAlias: {}, resellerByPan: {}, resellerByName: {},
+              conByIpo: {}, conByIpoPath: {}, conByQuote: {}, conByQuotePath: {}, poByNo: {}, poByPath: {},   // 8FF
               companyState: String((typeof companyProfile === 'object' && companyProfile && companyProfile.stateCode) || '') };
     if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (inv) {
         if (!inv || !inv.invoiceNumber || inv.status === 'Cancelled') return;
@@ -52423,6 +52446,19 @@ function __msImpMaps() {
         if (r.pan) M.resellerByPan[String(r.pan).toUpperCase()] = k;
         M.resellerByName[__msImpLoose(r.companyName || r.legalName || k)] = k;
     });
+    // 8FF — the contracts' internal PO and OEM quote (number and pinned file), the PO records (number and pinned file)
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c, ci) {
+        if (!c) return;
+        var ik = __msImpLoose(c.internalPO); if (ik) (M.conByIpo[ik] = M.conByIpo[ik] || []).push(ci);
+        if (c.internalPOLocalPath && M.conByIpoPath[String(c.internalPOLocalPath)] === undefined) M.conByIpoPath[String(c.internalPOLocalPath)] = ci;
+        var qk = __msImpLoose(c.oemQuote); if (qk) (M.conByQuote[qk] = M.conByQuote[qk] || []).push(ci);
+        if (c.oemQuoteLocalPath && M.conByQuotePath[String(c.oemQuoteLocalPath)] === undefined) M.conByQuotePath[String(c.oemQuoteLocalPath)] = ci;
+    });
+    if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) purchaseOrders.forEach(function (po) {
+        if (!po || !po.id) return;
+        var pk = __msImpLoose(po.poNumber); if (pk) (M.poByNo[pk] = M.poByNo[pk] || []).push(po);
+        if (po.externalLinkLocalPath && !M.poByPath[String(po.externalLinkLocalPath)]) M.poByPath[String(po.externalLinkLocalPath)] = po;
+    });
     return M;
 }
 // The app's client for a Master row: by PAN, by name, by its short name; else a new one from the Master's particulars.
@@ -52465,13 +52501,14 @@ function __msImpRecordsSig() {
     var parts = [];
     if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c) {
         if (!c) { parts.push('-'); return; }
-        parts.push(JSON.stringify([__msImpConIdent(c), c.internalPO, c.internalPOLocalPath, c.internalPODate, c.clientPO, c.clientPOLocalPath, (c.clientPOs || []).map(function (po) { return po ? [po.poNo, po.localPath, po.poDate] : null; }),
+        parts.push(JSON.stringify([__msImpConIdent(c), c.internalPO, c.internalPOLocalPath, c.internalPODate, c.clientPO, c.clientPOLocalPath, c.oemQuote, c.oemQuoteLocalPath, c.endDate, c.costCurrency, c.baseFX, (c.clientPOs || []).map(function (po) { return po ? [po.poNo, po.localPath, po.poDate] : null; }),
             (c.billingYears || []).map(function (y) { return y ? [y.billDate, y.duration, y.clientInvoiceNo, y.clientInvoiceLocalPath, y.oemInvoiceNo, y.oemInvoiceLocalPath, (y.arInvoices || []).map(function (a) { return a ? [a.invNo, a.localPath, a.date, a.amount] : null; }), (y.apInvoices || []).map(function (a) { return a ? [a.invNo, a.localPath, a.apId] : null; })] : null; })]));
     });
     if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (i) { parts.push(i ? [i.id, i.invoiceNumber, i.status, i.localPdfPath, i.grandTotal, i.invoiceDate, i.linkedContractIdx, i.linkedCycleYearIdx, i.signedPdfAttachmentId].join('|') : '-'); });
     if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) { parts.push(p ? [p.id, p.consultantId, p.invoiceNumber, p.localPath].join('|') : '-'); });
     if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (c) { parts.push(c ? [c.id, c.name, c.panNumber].join('|') : '-'); });
     if (typeof clientMaster === 'object' && clientMaster) Object.keys(clientMaster).forEach(function (k) { var r = clientMaster[k]; parts.push(k + '|' + (r ? (r.pan || '') + '|' + (r.gstin || '') : '')); });
+    if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) purchaseOrders.forEach(function (po) { parts.push(po ? [po.id, po.poNumber, po.externalLinkLocalPath, po.oemRefDocNo, po.linkedContractIdx, po.status].join('|') : '-'); });   // 8FF
     return __msImpHash(parts.join('\n'));
 }
 function __msImpPlanKey() {
@@ -52486,7 +52523,7 @@ function __msImpPlan() {
     if (!idx) { __msImp.plan = null; return null; }
 
     var M = __msImpMaps();
-    var P = { key: key, fys: [], sales: [], bills: [], vendors: [], proposals: [], links: [], clients: {}, consultants: {}, byFy: {}, byId: {} };
+    var P = { key: key, fys: [], sales: [], bills: [], vendors: [], proposals: [], links: [], pos: [], quotes: [], quoteByCi: {}, clients: {}, consultants: {}, byFy: {}, byId: {} };
     var saleById = {}, billById = {};
     var pairBySale = {}, pairByBill = {};
     idx.pairs.forEach(function (p) { pairBySale[p.sale] = p; pairByBill[p.bill] = p; });
@@ -52496,7 +52533,7 @@ function __msImpPlan() {
         L.id = 'L:' + L.key;
         if (P.byId[L.id]) return null;                                  // one field, one file: '124864_65' names two bills, its bill field holds the first
         if (L.entity === 'contract') L.ident0 = __msImpLinkIdent(L);
-        L.tickKey = 'L|' + (L.entity === 'invoice' ? 'inv|' + L.invId : L.entity === 'conpay' ? 'cp|' + L.payId : JSON.stringify(L.ident0) + '|' + L.field) + '|' + L.after;
+        L.tickKey = 'L|' + (L.entity === 'invoice' ? 'inv|' + L.invId : L.entity === 'conpay' ? 'cp|' + L.payId : L.entity === 'po' ? 'po|' + L.poId + '|' + L.field : JSON.stringify(L.ident0) + '|' + L.field) + '|' + L.after;
         P.links.push(L); P.byId[L.id] = L;
         return L.id;
     };
@@ -52681,17 +52718,21 @@ function __msImpPlan() {
             addLink(L);
         });
     });
+    // --- 8FF: the OEM quotes, then the PO files (a PO record made for a contract carries its quote's number)
+    __msImpPlanQuotes(P, M, addLink);
+    __msImpPlanPos(P, M, addLink, fyset);
     // --- the clients and consultants the ticked rows would need
     P.sales.forEach(function (it) { if (it.state === 'new' && it.client && it.client.isNew) P.clients[it.client.key] = it.client; });
     P.proposals.forEach(function (pr) { if (pr.client && pr.client.isNew) P.clients[pr.client.key] = pr.client; });
     P.vendors.forEach(function (vt) { if (vt.state === 'new' && vt.consultant && vt.consultant.isNew) P.consultants[vt.consultant.partyKey] = vt.consultant; });
     P.fys = Object.keys(fyset).sort().reverse();
     P.fys.forEach(function (fy) {
-        var s = P.sales.filter(function (x) { return x.fy === fy; }), b = P.bills.filter(function (x) { return x.fy === fy; }), v = P.vendors.filter(function (x) { return x.fy === fy; });
+        var s = P.sales.filter(function (x) { return x.fy === fy; }), b = P.bills.filter(function (x) { return x.fy === fy; }), v = P.vendors.filter(function (x) { return x.fy === fy; }), o = P.pos.filter(function (x) { return x.fy === fy; });
         var cnt = function (list, st) { return list.filter(function (x) { return x.state === st; }).length; };
-        P.byFy[fy] = { sales: s.length, salesTotal: s.reduce(function (t, x) { return t + __msImpNum(x.r.total); }, 0), salesApp: cnt(s, 'app'), salesCycle: cnt(s, 'cycle'), salesNew: cnt(s, 'new'),
+        P.byFy[fy] = { pos: o.length, posApp: cnt(o, 'module'), posContract: cnt(o, 'contract'), posProposal: cnt(o, 'proposal'), posNew: cnt(o, 'new'), posSkip: cnt(o, 'skip') };   // 8FF (the rest below)
+        Object.assign(P.byFy[fy], { sales: s.length, salesTotal: s.reduce(function (t, x) { return t + __msImpNum(x.r.total); }, 0), salesApp: cnt(s, 'app'), salesCycle: cnt(s, 'cycle'), salesNew: cnt(s, 'new'),
                        bills: b.length, billsTotal: b.reduce(function (t, x) { return t + __msImpNum(x.p.total); }, 0), billsApp: cnt(b, 'app'), billsCycle: cnt(b, 'cycle'), billsNew: cnt(b, 'new'),
-                       vendors: v.length, vendorsTotal: v.reduce(function (t, x) { return t + __msImpNum(x.v.total); }, 0), vendorsApp: cnt(v, 'app'), vendorsNew: cnt(v, 'new') };
+                       vendors: v.length, vendorsTotal: v.reduce(function (t, x) { return t + __msImpNum(x.v.total); }, 0), vendorsApp: cnt(v, 'app'), vendorsNew: cnt(v, 'new') });
     });
     __msImp.plan = P; __msImp.planKey = key;
     if (Object.keys(__msImp.toCheck).length && !__msImp.checking) setTimeout(__msImpCheckPaths, 0);
@@ -52779,6 +52820,8 @@ function __msImpDefaultTick(item) {
     if (!item) return false;
     if (item.id.indexOf('L:') === 0) return true;
     if (item.id.indexOf('C:') === 0) return !!item.defaultOn;
+    if (item.id.indexOf('O:') === 0) return (item.state === 'contract' || item.state === 'new') && !!item.tickable;   // 8FF: a PO file to add is ticked
+    if (item.id.indexOf('Q:') === 0) return false;                                                                   // 8FF: a quote goes by its links
     if (item.r) return item.state === 'new' && item.tickable && !item.proposal && !!item.r.receipt;   // no receipt found: unticked — added, it would show as owed
     if (item.p) return false;                                   // a bill inside a proposal goes with it; an opt-in starts off
     if (item.v) return item.state === 'new' && item.tickable;
@@ -52789,9 +52832,10 @@ function __msImpTicked(id) { var P = __msImpCurPlan(); if (!P || !P.byId[id]) re
 function __msImpTick(id, on) { var P = __msImpCurPlan(); var it = P && P.byId[id]; __msImp.ticks[it ? __msImpTickKey(it) : id] = !!on; renderImportPage(); }
 function __msImpTickAll(kind, fy, on) {
     var P = __msImpPlan(); if (!P) return;
-    var list = kind === 'sales' ? P.sales : kind === 'bills' ? P.bills : kind === 'vendors' ? P.vendors : kind === 'contracts' ? P.proposals : P.links;
+    var list = kind === 'sales' ? P.sales : kind === 'bills' ? P.bills : kind === 'vendors' ? P.vendors : kind === 'contracts' ? P.proposals : kind === 'pos' ? P.pos : P.links;
     list.forEach(function (it) {
         if (fy && it.fy && it.fy !== fy) return;
+        if (kind === 'pos') { if ((it.state === 'contract' || it.state === 'new') && it.tickable) __msImp.ticks[__msImpTickKey(it)] = !!on; return; }   // 8FF
         if (kind === 'bills') { if (it.state === 'new' && it.tickable && it.home.kind === 'cycle') __msImp.ticks[__msImpTickKey(it)] = !!on; return; }
         if (kind === 'sales' || kind === 'vendors') { if (it.state === 'new' && it.tickable && !it.proposal) __msImp.ticks[__msImpTickKey(it)] = !!on; return; }
         if (it.unknownClient) return;
@@ -52801,7 +52845,7 @@ function __msImpTickAll(kind, fy, on) {
 }
 // Everything ticked, resolved to what gets made.
 function __msImpSelection(P) {
-    var S = { sales: [], proposals: [], optIn: [], vendors: [], links: [], clients: {}, consultants: {} };
+    var S = { sales: [], proposals: [], optIn: [], vendors: [], links: [], pos: [], posWith: [], clients: {}, consultants: {} };
     P.proposals.forEach(function (pr) { if (__msImpTicked(pr.id)) { S.proposals.push(pr); if (pr.client.isNew) S.clients[pr.client.key] = pr.client; } });
     P.sales.forEach(function (it) {
         if (it.state !== 'new' || !it.tickable) return;
@@ -52812,7 +52856,12 @@ function __msImpSelection(P) {
     P.bills.forEach(function (bt) { if (bt.state === 'new' && bt.tickable && bt.home.kind === 'cycle' && __msImpTicked(bt.id)) S.optIn.push(bt); });
     P.vendors.forEach(function (vt) { if (vt.state === 'new' && vt.tickable && __msImpTicked(vt.id)) { S.vendors.push(vt); if (vt.consultant.isNew) S.consultants[vt.consultant.partyKey] = vt.consultant; } });
     P.links.forEach(function (L) { if (__msImpTicked(L.id)) S.links.push(L); });
-    S.count = S.sales.length + S.proposals.length + S.optIn.length + S.vendors.length + S.links.length;
+    // 8FF — the PO files ticked, and those that go with a ticked proposed contract
+    (P.pos || []).forEach(function (it) {
+        if ((it.state === 'contract' || it.state === 'new') && it.tickable && __msImpTicked(it.id)) S.pos.push(it);
+        else if (it.state === 'proposal' && it.prop && S.proposals.some(function (pr) { return pr.id === it.prop; })) S.posWith.push(it);
+    });
+    S.count = S.sales.length + S.proposals.length + S.optIn.length + S.vendors.length + S.links.length + S.pos.length + S.posWith.length;
     return S;
 }
 
@@ -52827,7 +52876,7 @@ function renderImportPage() {
         + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
         + '<button class="btn btn-ghost" id="msImpRefreshBtn" onclick="__msImpRead(true)"' + (S.reading || S.missing ? ' disabled' : '') + ' title="Read the engine\'s list again (after a CA pack run)"><i class="fas fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
         + '</div></div>'
-        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack reads every Sales and Payments row of <b>Files › Masters</b> from FY 2021-22 and ties each to its PDF, its receipt or payment and (for OEM bills) the sale it was bought for. Tick what should go into the app and click <b>Add the selected</b>. Rows already in the app are shown but never changed — only their document links are filled in.</p>';
+        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack reads every Sales and Payments row of <b>Files › Masters</b> from FY 2021-22 and ties each to its PDF, its receipt or payment and (for OEM bills) the sale it was bought for; it reads the PO files under <b>Files › Internal POs</b> and the quotes under <b>Files › OEM Quotes</b> too. Tick what should go into the app and click <b>Add the selected</b>. Rows already in the app are shown but never changed — only their document links are filled in.</p>';
     if (S.missing && !S.idx) {
         root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (__msImpTauri() ? '<i class="fas fa-circle-info"></i> The engine\'s list is not there yet. Run the CA pack once (it writes <code>_engine/app_import/index.json</code>), then click Refresh.' + (S.error ? ' ' + __msImpEsc(S.error) : '') : '<i class="fas fa-circle-info"></i> The Masters live on the Mac; open this page in the Masterstone app.') + '</div>';
         return;
@@ -52840,7 +52889,7 @@ function renderImportPage() {
     if (!P) { root.innerHTML = head; return; }
     if (S.ui.fy === null || P.fys.indexOf(S.ui.fy) === -1) S.ui.fy = P.fys[0] || null;
     var html = head + __msImpStatusHtml(P);
-    html += '<div class="ms-imp-fy">' + P.fys.map(function (fy) { var c = P.byFy[fy]; return '<div class="arap-subtab' + (fy === S.ui.fy ? ' active' : '') + '" onclick="__msImpSetFy(\'' + fy + '\')">' + __msImpFyLabel(fy) + ' <span class="n" style="font-size:10.5px; color:var(--text-dim);">' + (c.salesNew + c.billsNew + c.vendorsNew) + ' new</span></div>'; }).join('') + '</div>';
+    html += '<div class="ms-imp-fy">' + P.fys.map(function (fy) { var c = P.byFy[fy]; return '<div class="arap-subtab' + (fy === S.ui.fy ? ' active' : '') + '" onclick="__msImpSetFy(\'' + fy + '\')">' + __msImpFyLabel(fy) + ' <span class="n" style="font-size:10.5px; color:var(--text-dim);">' + (c.salesNew + c.billsNew + c.vendorsNew + c.posContract + c.posNew) + ' new</span></div>'; }).join('') + '</div>';
     html += '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
         + '<input type="text" id="msImpQ" value="' + __msImpEsc(S.ui.q) + '" placeholder="Search number, client, party, amount…" style="flex:1; min-width:220px; max-width:380px;" oninput="__msImpSearch(this.value)">'
         + '<span class="ms-imp-note">Tick-boxes: ticked rows are added; untick what should stay out. Nothing is written until you click Add.</span></div></div>';
@@ -52848,7 +52897,9 @@ function renderImportPage() {
     html += __msImpSalesHtml(P, S.ui.fy);
     html += __msImpBillsHtml(P, S.ui.fy);
     html += __msImpVendorsHtml(P, S.ui.fy);
+    html += __msImpPosHtml(P, S.ui.fy);          // 8FF
     html += __msImpProposalsHtml(P);
+    html += __msImpQuotesHtml(P);                // 8FF
     html += __msImpLinksHtml(P);
     html += __msImpAddHtml(P);
     html += __msImpBatchesHtml();
@@ -52860,7 +52911,8 @@ function __msImpToggle(sec) { __msImp.ui.open[sec] = !__msImp.ui.open[sec]; rend
 function __msImpMatches(text) { var q = __msImp.ui.q.trim().toLowerCase(); return !q || String(text || '').toLowerCase().indexOf(q) !== -1; }
 function __msImpStatusHtml(P) {
     var idx = __msImp.idx, parts = [];
-    parts.push(idx.sales.length + ' sales rows, ' + idx.payments.length + ' payment rows in ' + (idx.stats.masters || P.fys.length) + ' Masters');
+    parts.push(idx.sales.length + ' sales rows, ' + idx.payments.length + ' payment rows in ' + (idx.stats.masters || P.fys.length) + ' Masters' + (idx.format >= 2 ? ', ' + idx.pos.length + ' PO file' + (idx.pos.length === 1 ? '' : 's') + ', ' + idx.quotes.length + ' OEM quote' + (idx.quotes.length === 1 ? '' : 's') : ''));
+    if (idx.format < 2) parts.push('<span class="ms-imp-warn">the list is from the older CA pack — run the CA pack again for the PO files and OEM quotes</span>');   // 8FF
     if (idx.made) parts.push('read by the CA pack ' + __msImpEsc(typeof __msExpAgo === 'function' ? __msExpAgo(idx.made) : idx.made));
     if (__msImp.error) parts.push('<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msImpEsc(__msImp.error) + '</span>');
     if (__msImp.dropped) parts.push('<span class="ms-imp-warn">' + __msImp.dropped + ' odd record' + (__msImp.dropped === 1 ? '' : 's') + ' in the list dropped</span>');
@@ -52876,6 +52928,7 @@ function __msImpStripHtml(P, fy) {
         + cell('Sales invoices in the Master', c.sales + ' · ' + __msImpInr(c.salesTotal), c.salesApp + ' in the Invoices module · ' + c.salesCycle + ' on a contract cycle · <b>' + c.salesNew + ' not in the app</b>')
         + cell('OEM bills', c.bills + ' · ' + __msImpInr(c.billsTotal), c.billsApp + ' on a cycle\'s bills · ' + c.billsCycle + ' on an older cycle · <b>' + c.billsNew + ' not in the app</b>')
         + cell('Consultants & vendors', c.vendors + ' · ' + __msImpInr(c.vendorsTotal), c.vendorsApp + ' in the Consultants module · <b>' + c.vendorsNew + ' not in the app</b>')
+        + cell('Purchase orders', c.pos + ' file' + (c.pos === 1 ? '' : 's'), c.posApp + ' in the module · <b>' + (c.posContract + c.posProposal + c.posNew) + ' to add as PO records</b>' + (c.posSkip ? ' · ' + c.posSkip + ' unread' : ''))
         + '</div></div>';
 }
 function __msImpPin(path, title) { if (!path) return '<span class="ms-imp-note">no file</span>'; return '<a href="javascript:void(0)" class="ms-imp-pin" data-path="' + __msImpEsc(path) + '" onclick="__msImpOpen(this.dataset.path); return false;" title="' + __msImpEsc(title || path) + '"><i class="fas fa-paperclip"></i></a>'; }
@@ -53014,14 +53067,14 @@ function __msImpLinksHtml(P) {
     var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('links', 'Document links on what is already entered', list.length + ' to fill in · ' + list.filter(function (L) { return __msImpTicked(L.id); }).length + ' ticked',
         list.length ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'links\', null, true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'links\', null, false)">none</a></span>' : '');
     if (!__msImp.ui.open.links) return html + '</div>';
-    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Invoices, bills and POs already in the app whose PDF link is empty, points at a folder since renamed, or at the old personal OneDrive. Only the link is written — never a figure.</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Invoices, bills, POs and OEM quotes already in the app whose PDF link is empty, points at a folder since renamed, or at the old personal OneDrive; and an OEM quote\'s number where the contract\'s field (or its PO record\'s OEM reference) is empty. Only the link or the number is written — never a figure.</div>';
     if (!list.length) html += '<div class="ms-imp-note">Every document link is in place.</div>';
     else {
         html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpLinks"><thead><tr><th></th><th>Where</th><th>Now</th><th>Will be</th></tr></thead><tbody>';
         list.slice(0, MS_IMP_MAX_ROWS).forEach(function (L) {
             var on = __msImpTicked(L.id);
-            html += '<tr data-id="' + L.id + '"' + (on ? '' : ' class="ms-imp-off"') + '><td><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="__msImpTick(\'' + L.id + '\', this.checked)" aria-label="' + __msImpEsc(L.label) + '"></td><td class="wrap" style="min-width:260px;">' + __msImpEsc(L.label) + (L.how === 'client+date' ? ' <span class="ms-imp-warn" title="No number matched: the client\'s PO file nearest the date">by date</span>' : '') + '</td>'
-                + '<td class="ms-imp-note wrap" style="min-width:140px; overflow-wrap:anywhere;" title="' + __msImpEsc(L.before) + '">' + (L.before ? __msImpEsc(__msImpBase(L.before)) + (__msImpPathStale(L.before) === 'outside' ? ' (old folder)' : ' (not there)') : 'empty') + '</td><td class="wrap" style="min-width:180px; overflow-wrap:anywhere;">' + __msImpPin(L.after, L.after) + ' ' + __msImpEsc(__msImpBase(L.after)) + '</td></tr>';
+            html += '<tr data-id="' + L.id + '"' + (on ? '' : ' class="ms-imp-off"') + '><td><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="__msImpTick(\'' + L.id + '\', this.checked)" aria-label="' + __msImpEsc(L.label) + '"></td><td class="wrap" style="min-width:260px;">' + __msImpEsc(L.label) + (L.how === 'client+date' ? ' <span class="ms-imp-warn" title="No number matched: the client\'s file nearest the date">by date</span>' : '') + '</td>'
+                + '<td class="ms-imp-note wrap" style="min-width:140px; overflow-wrap:anywhere;" title="' + __msImpEsc(L.before) + '">' + (L.before ? __msImpEsc(__msImpBase(L.before)) + (__msImpPathStale(L.before) === 'outside' ? ' (old folder)' : ' (not there)') : 'empty') + '</td><td class="wrap" style="min-width:180px; overflow-wrap:anywhere;">' + (L.kind === 'number' ? '<b>' + __msImpEsc(L.after) + '</b> <span class="ms-imp-note">(the number)</span>' : __msImpPin(L.after, L.after) + ' ' + __msImpEsc(__msImpBase(L.after))) + '</td></tr>';
         });
         html += '</tbody></table></div>';
     }
@@ -53034,6 +53087,7 @@ function __msImpAddHtml(P) {
     if (S.sales.length) parts.push(S.sales.length + ' invoice record' + (S.sales.length === 1 ? '' : 's'));
     if (S.optIn.length) parts.push(S.optIn.length + ' bill' + (S.optIn.length === 1 ? '' : 's') + ' added to contracts you entered');
     if (S.vendors.length) parts.push(S.vendors.length + ' consultant payment' + (S.vendors.length === 1 ? '' : 's'));
+    if (S.pos.length + S.posWith.length) parts.push((S.pos.length + S.posWith.length) + ' purchase order record' + (S.pos.length + S.posWith.length === 1 ? '' : 's') + (S.posWith.length ? ' (' + S.posWith.length + ' with the new contracts)' : ''));   // 8FF
     var nc = Object.keys(S.clients).length, nk = Object.keys(S.consultants).length;
     if (nc) parts.push(nc + ' new client' + (nc === 1 ? '' : 's'));
     if (nk) parts.push(nk + ' new consultant' + (nk === 1 ? '' : 's'));
@@ -53053,7 +53107,7 @@ function __msImpBatchesHtml() {
         html += '<table class="ms-imp-table"><thead><tr><th>When</th><th>What went in</th><th></th></tr></thead><tbody>';
         b.slice().reverse().forEach(function (x) {
             var c = x.counts || {};
-            var what = [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills on contracts' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : '', c.links ? c.links + ' links' : ''].filter(Boolean).join(', ');
+            var what = [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills on contracts' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.pos ? c.pos + ' purchase orders' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : '', c.links ? c.links + ' links' : ''].filter(Boolean).join(', ');
             html += '<tr><td style="white-space:nowrap;">' + __msImpEsc(__msImpWhen(x.at)) + (x.undone ? ' <span class="ms-imp-st skip">undone ' + __msImpEsc(__msImpWhen(x.undone)) + '</span>' : '') + '</td><td>' + __msImpEsc(what || '—') + '</td><td>' + (!x.undone && __msImpCanUndo(x) ? '<button class="btn btn-ghost btn-sm" onclick="__msImpUndo(\'' + __msImpEsc(x.id) + '\')"><i class="fas fa-undo"></i> Undo this import</button>' : (__msImpUndoWhyNot(x) ? '<span class="ms-imp-note">' + __msImpEsc(__msImpUndoWhyNot(x)) + '</span>' : '')) + '</td></tr>';
         });
         html += '</tbody></table>';
@@ -53134,7 +53188,7 @@ function __msImpUndoWhyNot(b) {
         var first = Math.min.apply(null, made);
         if (first + made.length !== contracts.length) return 'Contracts were added or removed since — the snapshot taken before this import can put everything back.';
     }
-    if (typeof contracts !== 'undefined' && !__msImpUndoCheck(b).ok) return 'Contracts were changed (removed or re-ordered) since — the snapshot taken before this import can put everything back.';
+    if (typeof contracts !== 'undefined' && !__msImpUndoCheck(b).ok) return 'Records this import touched were changed since (contracts removed or re-ordered, a PO record deleted) — the snapshot taken before this import can put everything back.';
     return '';
 }
 
@@ -53274,6 +53328,7 @@ function __msImpContractRecord(pr, M, batch, at) {
 function __msImpLinkNo(L) {
     var c = contracts[L.ci]; if (!c) return null;
     if (L.field === 'internalPOLocalPath') return String(c.internalPO || '');
+    if (L.field === 'oemQuoteLocalPath' || L.field === 'oemQuote') return String(c.internalPO || '');   // 8FF: the quote fields are told apart by the contract's own PO (the number itself may be what is written)
     if (L.field === 'clientPOLocalPath') return String(c.clientPO || '');
     if (L.field === 'clientPOs[].localPath') return (Array.isArray(c.clientPOs) && c.clientPOs[L.pi]) ? String(c.clientPOs[L.pi].poNo || '') : null;
     var y = c.billingYears && c.billingYears[L.yi]; if (!y) return null;
@@ -53310,8 +53365,9 @@ function __msImpUndoCheck(b) {
 function __msImpFieldRefs(L) {
     if (L.entity === 'invoice') { var inv = (typeof invoices !== 'undefined' ? invoices : []).find(function (x) { return x && x.id === L.invId; }); return inv ? [{ o: inv, k: 'localPdfPath' }] : []; }
     if (L.entity === 'conpay') { var cp = (typeof consultantPayments !== 'undefined' ? consultantPayments : []).find(function (x) { return x && x.id === L.payId; }); return cp ? [{ o: cp, k: 'localPath' }] : []; }
+    if (L.entity === 'po') { var po = (typeof purchaseOrders !== 'undefined' ? purchaseOrders : []).find(function (x) { return x && x.id === L.poId; }); return (po && (L.field === 'externalLinkLocalPath' || L.field === 'oemRefDocNo')) ? [{ o: po, k: L.field }] : []; }   // 8FF
     var c = contracts[L.ci]; if (!c) return [];
-    if (L.field === 'internalPOLocalPath' || L.field === 'clientPOLocalPath') return [{ o: c, k: L.field }];
+    if (L.field === 'internalPOLocalPath' || L.field === 'clientPOLocalPath' || L.field === 'oemQuoteLocalPath' || L.field === 'oemQuote') return [{ o: c, k: L.field }];
     if (L.field === 'clientPOs[].localPath') return (Array.isArray(c.clientPOs) && c.clientPOs[L.pi]) ? [{ o: c.clientPOs[L.pi], k: 'localPath' }].concat(L.alsoPrimary ? [{ o: c, k: 'clientPOLocalPath' }] : []) : [];
     var y = c.billingYears && c.billingYears[L.yi]; if (!y) return [];
     if (L.field === 'clientInvoiceLocalPath' || L.field === 'oemInvoiceLocalPath') return [{ o: y, k: L.field }];
@@ -53336,6 +53392,7 @@ function __msImpSaveAll(which) {
     if (which.contracts && typeof persistData === 'function') tryIt('contracts', persistData);
     if (which.invoices && typeof saveInvoices === 'function') tryIt('invoices', saveInvoices);
     if (which.conPays && typeof saveConsultantPayments === 'function') tryIt('consultant payments', saveConsultantPayments);
+    if (which.pos && typeof savePurchaseOrders === 'function') tryIt('purchase orders', savePurchaseOrders);   // 8FF
     return errs;
 }
 
@@ -53359,6 +53416,7 @@ async function __msImpApply() {
     if (S.sales.length) lines.push('  ' + S.sales.length + ' invoice record' + (S.sales.length === 1 ? '' : 's') + ' in the Invoices module (' + __msImpInr(S.sales.reduce(function (t, it) { return t + __msImpNum(it.r.total); }, 0)) + ')');
     if (S.optIn.length) lines.push('  ' + S.optIn.length + ' bill' + (S.optIn.length === 1 ? '' : 's') + ' added to the cycles of contracts you entered');
     if (S.vendors.length) lines.push('  ' + S.vendors.length + ' consultant payment' + (S.vendors.length === 1 ? '' : 's') + ' (' + __msImpInr(S.vendors.reduce(function (t, vt) { return t + __msImpNum(vt.v.total); }, 0)) + ')');
+    if (S.pos.length + S.posWith.length) lines.push('  ' + (S.pos.length + S.posWith.length) + ' purchase order record' + (S.pos.length + S.posWith.length === 1 ? '' : 's') + ' in the Purchase Orders module' + (S.posWith.length ? ' (' + S.posWith.length + ' with the new contracts)' : ''));
     var nc = Object.keys(S.clients).length, nk = Object.keys(S.consultants).length;
     if (nc) lines.push('  ' + nc + ' new client' + (nc === 1 ? '' : 's') + ': ' + Object.keys(S.clients).map(function (k) { return S.clients[k].name; }).join(', '));
     if (nk) lines.push('  ' + nk + ' new consultant' + (nk === 1 ? '' : 's') + ': ' + Object.keys(S.consultants).map(function (k) { return S.consultants[k].name; }).join(', '));
@@ -53367,7 +53425,7 @@ async function __msImpApply() {
     lines.push('Nothing already in the app is changed except those links. ' + (__msImpTauri() && typeof window.__msSnapshot === 'function' ? 'A snapshot is taken first; this import can be undone from this page' : 'This import can be undone from this page') + (__msImp.batchesState === 'error' ? ' until the app is closed (the list of imports done does not read).' : '.'));
     if (!(await __msAsk(lines.join('\n'), { ok: 'Add to the app' }))) return;
     __msImp.working = true; __msImp.lastResult = ''; renderImportPage();
-    var at = new Date().toISOString(), batch = { id: 'imp_' + Date.now().toString(36), at: at, counts: {}, created: { contracts: [], invoices: [], consultants: [], conPays: [], clients: [] }, optIn: [], links: [] };
+    var at = new Date().toISOString(), batch = { id: 'imp_' + Date.now().toString(36), at: at, counts: {}, created: { contracts: [], invoices: [], consultants: [], conPays: [], clients: [], pos: [] }, optIn: [], links: [] };
     var M = __msImpMaps();
     var problems = [];
     try {
@@ -53387,12 +53445,12 @@ async function __msImpApply() {
             consultants.push(c); batch.created.consultants.push(c.id); conIds[k] = c.id;
         });
         // the contracts
-        var firstCycleOf = {};
+        var firstCycleOf = {}, ciOfProp = {};
         S.proposals.forEach(function (pr) {
             var c = __msImpContractRecord(pr, M, batch.id, at);
             contracts.push(c);
             var ci = contracts.length - 1;
-            batch.created.contracts.push(ci);
+            batch.created.contracts.push(ci); ciOfProp[pr.id] = ci;
             pr.cycles.forEach(function (cy, yi) { if (cy.sale) firstCycleOf[cy.sale.id] = { ci: ci, yi: yi }; });
         });
         // the invoice records: the plain ones, and those that go with the new contracts (linked to their cycle)
@@ -53421,7 +53479,7 @@ async function __msImpApply() {
             if (String(refs[0].o[refs[0].k] || '') !== String(L.before || '') || (L.entity === 'contract' && JSON.stringify(__msImpLinkIdent(L)) !== JSON.stringify(L.ident0))) { problems.push('link left as it is (it changed meanwhile): ' + L.label); return; }
             var prior = refs.map(function (r) { return { had: Object.prototype.hasOwnProperty.call(r.o, r.k), v: r.o[r.k] }; });
             var ident = L.entity === 'contract' ? __msImpLinkIdent(L) : null;
-            if (__msImpSetField(L, L.after)) batch.links.push({ entity: L.entity, ci: L.ci, yi: L.yi, ar: L.ar, ap: L.ap, pi: L.pi, field: L.field, invId: L.invId, payId: L.payId, alsoPrimary: !!L.alsoPrimary, before: L.before, after: L.after, prior: prior, ident: ident });
+            if (__msImpSetField(L, L.after)) batch.links.push({ entity: L.entity, ci: L.ci, yi: L.yi, ar: L.ar, ap: L.ap, pi: L.pi, field: L.field, invId: L.invId, payId: L.payId, poId: L.poId, kind: L.kind || '', alsoPrimary: !!L.alsoPrimary, before: L.before, after: L.after, prior: prior, ident: ident });
             else problems.push('link not written: ' + L.label);
         });
         // the opt-in bills on contracts already entered
@@ -53448,23 +53506,38 @@ async function __msImpApply() {
             y.apInvoices.push(ap);
             batch.optIn.push({ ci: bt.home.ci, yi: bt.home.yi, apId: ap.apId, promotedApId: promoted ? promoted.apId : '', hadAp: hadAp, ident: { con: __msImpConIdent(c), bill: y.billDate || '' } });
         });
-        batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
+        // 8FF — the purchase orders, last: from the contracts (the new ones included, their places known) and the files no contract names
+        var poRows = S.pos.slice();
+        S.posWith.forEach(function (it) { if (ciOfProp[it.prop] !== undefined) poRows.push(it); });
+        poRows.forEach(function (it) {
+            var rec;
+            if (it.state === 'contract') { if (!contracts[it.ci]) { problems.push('PO ' + it.r.number + ': its contract is gone — skipped'); return; } rec = __msImpPoFromContract(it, it.ci, batch.id, at); }
+            else if (it.state === 'proposal') rec = __msImpPoFromContract(it, ciOfProp[it.prop], batch.id, at);
+            else rec = __msImpPoFromFile(it, batch.id, at, M);
+            delete rec.__differs;
+            var pk = __msImpLoose(rec.poNumber);
+            if (pk && M.poByNo[pk] && M.poByNo[pk].length) { problems.push('PO ' + rec.poNumber + ' is already in the module — skipped'); return; }
+            purchaseOrders.push(rec); batch.created.pos.push(rec.id);
+            if (pk) (M.poByNo[pk] = M.poByNo[pk] || []).push(rec);
+        });
+        batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, pos: batch.created.pos.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
         var errs = __msImpSaveAll({ clients: batch.created.clients.length > 0, consultants: batch.created.consultants.length > 0, contracts: batch.created.contracts.length > 0 || batch.optIn.length > 0 || batch.links.some(function (l) { return l.entity === 'contract'; }),
-                                    invoices: batch.created.invoices.length > 0 || batch.links.some(function (l) { return l.entity === 'invoice'; }), conPays: batch.created.conPays.length > 0 || batch.links.some(function (l) { return l.entity === 'conpay'; }) });
+                                    invoices: batch.created.invoices.length > 0 || batch.links.some(function (l) { return l.entity === 'invoice'; }), conPays: batch.created.conPays.length > 0 || batch.links.some(function (l) { return l.entity === 'conpay'; }),
+                                    pos: batch.created.pos.length > 0 || batch.links.some(function (l) { return l.entity === 'po'; }) });
         errs.forEach(function (e) { problems.push('save failed — ' + e); });
         __msImp.batches = (__msImp.batches || []).concat([batch]);
         await __msImpBatchesSave();
         __msImp.ticks = {}; __msImp.rev++; __msImp.plan = null;
         var c = batch.counts;
-        var summary = [c.contracts ? c.contracts + ' contract' + (c.contracts === 1 ? '' : 's') : '', c.invoices ? c.invoices + ' invoice' + (c.invoices === 1 ? '' : 's') : '', c.optIn ? c.optIn + ' bill' + (c.optIn === 1 ? '' : 's') + ' on contracts' : '', c.conPays ? c.conPays + ' consultant payment' + (c.conPays === 1 ? '' : 's') : '', c.clients ? c.clients + ' client' + (c.clients === 1 ? '' : 's') : '', c.consultants ? c.consultants + ' consultant' + (c.consultants === 1 ? '' : 's') : '', c.links ? c.links + ' link' + (c.links === 1 ? '' : 's') : ''].filter(Boolean).join(', ');
+        var summary = [c.contracts ? c.contracts + ' contract' + (c.contracts === 1 ? '' : 's') : '', c.invoices ? c.invoices + ' invoice' + (c.invoices === 1 ? '' : 's') : '', c.optIn ? c.optIn + ' bill' + (c.optIn === 1 ? '' : 's') + ' on contracts' : '', c.conPays ? c.conPays + ' consultant payment' + (c.conPays === 1 ? '' : 's') : '', c.pos ? c.pos + ' purchase order' + (c.pos === 1 ? '' : 's') : '', c.clients ? c.clients + ' client' + (c.clients === 1 ? '' : 's') : '', c.consultants ? c.consultants + ' consultant' + (c.consultants === 1 ? '' : 's') : '', c.links ? c.links + ' link' + (c.links === 1 ? '' : 's') : ''].filter(Boolean).join(', ');
         __msImp.lastResult = '<i class="fas fa-check-circle" style="color:var(--success);"></i> Added: ' + __msImpEsc(summary || 'nothing') + '.' + (problems.length ? ' <span class="ms-imp-warn">' + problems.length + ' note' + (problems.length === 1 ? '' : 's') + ': ' + __msImpEsc(problems.join('; ')) + '</span>' : '');
         __msImpLog(problems.length ? 'WARN' : 'INFO', 'import added', { batch: batch.id, counts: batch.counts, problems: problems });
         __msImpToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Import done — ' + __msImpEsc(summary || 'nothing added') + '.', 5000);
     } catch (e) {
         __msImp.lastResult = '<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> The import stopped: ' + __msImpEsc(String((e && e.message) || e)) + '. What was added before it stopped is in the app; check the Imports done list.</span>';
         __msImpLog('CRITICAL', 'import failed', { error: String((e && e.message) || e), batch: batch });
-        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true }); } catch (e2) {}
-        __msImp.batches = (__msImp.batches || []).concat([batch]); batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
+        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true, pos: true }); } catch (e2) {}
+        __msImp.batches = (__msImp.batches || []).concat([batch]); batch.counts = { contracts: batch.created.contracts.length, invoices: batch.created.invoices.length, optIn: batch.optIn.length, conPays: batch.created.conPays.length, pos: batch.created.pos.length, clients: batch.created.clients.length, consultants: batch.created.consultants.length, links: batch.links.length };
         try { await __msImpBatchesSave(); } catch (e3) {}
         __msImp.rev++; __msImp.plan = null;
     } finally {
@@ -53480,7 +53553,7 @@ async function __msImpUndo(batchId) {
     if (!b || __msImp.working) return;
     if (!__msImpCanUndo(b)) { __msImpToast('<i class="fas fa-circle-info"></i> Only the latest import can be undone, and only while nothing was added after it.', 5000); return; }
     var c = b.counts || {};
-    if (!(await __msAsk('Undo the import of ' + __msImpWhen(b.at) + '?\n\nTakes out: ' + [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : ''].filter(Boolean).join(', ') + (c.links ? '; puts back ' + c.links + ' document links' : '') + '.\nAnything you edited in them since is lost.', { ok: 'Undo', danger: 'ok' }))) return;
+    if (!(await __msAsk('Undo the import of ' + __msImpWhen(b.at) + '?\n\nTakes out: ' + [c.contracts ? c.contracts + ' contracts' : '', c.invoices ? c.invoices + ' invoices' : '', c.optIn ? c.optIn + ' bills' : '', c.conPays ? c.conPays + ' consultant payments' : '', c.pos ? c.pos + ' purchase orders' : '', c.clients ? c.clients + ' clients' : '', c.consultants ? c.consultants + ' consultants' : ''].filter(Boolean).join(', ') + (c.links ? '; puts back ' + c.links + ' document links' : '') + '.\nAnything you edited in them since is lost.', { ok: 'Undo', danger: 'ok' }))) return;
     __msImp.working = true; renderImportPage();
     var problems = [];
     var chk = __msImpUndoCheck(b), keep = {};
@@ -53490,6 +53563,9 @@ async function __msImpUndo(batchId) {
         for (var i = invoices.length - 1; i >= 0; i--) if (invoices[i] && invIds[invoices[i].id]) invoices.splice(i, 1);
         var cpIds = {}; (b.created.conPays || []).forEach(function (id) { cpIds[id] = true; });
         for (var j = consultantPayments.length - 1; j >= 0; j--) if (consultantPayments[j] && cpIds[consultantPayments[j].id]) consultantPayments.splice(j, 1);
+        // 8FF — the purchase orders this import made (by id, and only those stamped with this batch)
+        var poIds = {}; (b.created.pos || []).forEach(function (id) { poIds[id] = true; });
+        if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) for (var q = purchaseOrders.length - 1; q >= 0; q--) if (purchaseOrders[q] && poIds[purchaseOrders[q].id] && purchaseOrders[q].imported && purchaseOrders[q].imported.batch === b.id) purchaseOrders.splice(q, 1);
         (b.created.consultants || []).forEach(function (id) {
             if (consultantPayments.some(function (p) { return p && p.consultantId === id; })) { problems.push('consultant kept: payments were added to it since'); return; }
             for (var k = consultants.length - 1; k >= 0; k--) if (consultants[k] && consultants[k].id === id) consultants.splice(k, 1);
@@ -53519,7 +53595,7 @@ async function __msImpUndo(batchId) {
             if (contracts.some(function (cc) { return cc && cc.client === name; }) || invoices.some(function (inv) { return inv && inv.clientName === name; })) { problems.push('client ' + name + ' kept: still in use'); return; }
             if (typeof clientMaster === 'object' && clientMaster && clientMaster[name] && clientMaster[name].imported) delete clientMaster[name];
         });
-        var errs = __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true });
+        var errs = __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true, pos: true });
         errs.forEach(function (e) { problems.push('save failed — ' + e); });
         b.undone = new Date().toISOString();
         await __msImpBatchesSave();
@@ -53530,7 +53606,7 @@ async function __msImpUndo(batchId) {
     } catch (e) {
         __msImp.lastResult = '<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> The undo stopped: ' + __msImpEsc(String((e && e.message) || e)) + '.</span>';
         __msImpLog('CRITICAL', 'undo failed', { error: String((e && e.message) || e) });
-        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true }); } catch (e2) {}
+        try { __msImpSaveAll({ clients: true, consultants: true, contracts: true, invoices: true, conPays: true, pos: true }); } catch (e2) {}
         __msImp.rev++; __msImp.plan = null;
     } finally {
         __msImp.working = false;
@@ -53538,6 +53614,455 @@ async function __msImpUndo(batchId) {
     }
 }
 // =================== /Phase 8FD — Import from the Masters (Tools › Import) ===================
+
+// =================== Phase 8FF — Purchase orders from the files (Tools › Import) (11 Oct 2026) ===================
+// The engine (format 2 of its list) reads every file under Files › Internal POs and Files › OEM Quotes: the PO's
+// number, date, supplier, end client, term, total and currency, the quote it names; a Word draft beside its PDF is
+// skipped, a copy or an amendment of a PO is listed under the PO's own file. This page adds a fourth table per
+// year, "Purchase orders", one row per PO file:
+//   - in the module: a PO record carries the number (or pins the file) — left as it is; an empty or stale pin is
+//     filled in (Document links);
+//   - on a contract: the number is the contract's internal PO (or the contract pins the file) — a PO record is made
+//     from the contract (OEM, end client, product, one line per cycle at the cycle's cost, currency and FX, term,
+//     linked to the contract and its cycles, the file pinned; Closed when the cycles' bills are paid or the
+//     contract has ended, Received when a bill is in and unpaid, Issued otherwise);
+//   - with a new contract: the file a proposed contract found — made with that contract, from it;
+//   - new: no contract names it — a record from the file's text (Closed, the file pinned; the total marked "check"
+//     when the file does not say);
+// and a section of OEM quotes: each pinned onto its contract (the PO file that names it, the contract that names
+// it, else the client's contract starting within four months of its date), its number written where the
+// contract's field is empty, and onto the contract's PO record in the module where its OEM reference is empty.
+// Client POs stay on the contracts (8FD). Contracts are not edited beyond those pins. "Add the selected" makes the
+// records with everything else; Undo takes them out again.
+function __msImpToday() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function __msImpMoney(n, cur) {
+    cur = String(cur || '').toUpperCase();
+    if (cur === 'INR' || !cur) return __msImpInr(n);
+    if (cur === 'USD') return __msImpUsd(n);
+    return (typeof fmtPoCcy === 'function') ? fmtPoCcy(n, cur) : cur + ' ' + __msImpNum(n).toFixed(2);
+}
+// A PO file's record in the engine's list, as the page needs it: the number and the dates are strings (ISO or empty).
+function __msImpPoRowOk(r) {
+    if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !r.id || typeof r.rel !== 'string' || !r.rel || typeof r.name !== 'string' || typeof r.fy !== 'string' || !/^\d{4}-\d{2}$/.test(r.fy)) return false;
+    if (typeof r.number !== 'string' || typeof r.kind !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(r.id)) return false;
+    if (r.months !== null && r.months !== undefined && !isFinite(Number(r.months))) return false;
+    if (r.date && !__msImpIsoOk(r.date)) return false;
+    if (r.start && !__msImpIsoOk(r.start)) return false;
+    if (r.end && !__msImpIsoOk(r.end)) return false;
+    if (r.total !== null && r.total !== undefined && !isFinite(Number(r.total))) return false;
+    if (r.copies !== undefined && r.copies !== null && !Array.isArray(r.copies)) return false;
+    if (r.same_as !== undefined && r.same_as !== null && typeof r.same_as !== 'string') return false;
+    r.copies = (r.copies || []).filter(function (cp) { return cp && typeof cp.id === 'string' && typeof cp.rel === 'string' && typeof cp.name === 'string'; });
+    r.same_as = r.same_as || '';
+    r.warnings = Array.isArray(r.warnings) ? r.warnings : [];
+    return true;
+}
+function __msImpQuoteRowOk(q) {
+    if (!q || typeof q !== 'object' || typeof q.id !== 'string' || !q.id || typeof q.rel !== 'string' || !q.rel || typeof q.name !== 'string' || typeof q.fy !== 'string' || !/^\d{4}-\d{2}$/.test(q.fy)) return false;
+    if (typeof q.quote !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(q.id)) return false;
+    if (q.date && !__msImpIsoOk(q.date)) return false;
+    if (q.total !== null && q.total !== undefined && !isFinite(Number(q.total))) return false;
+    return true;
+}
+// The contract nearest a date among several (two contracts carrying the same PO number).
+function __msImpNearestContract(cis, date) {
+    var best = cis[0], bg = null;
+    cis.forEach(function (ci) {
+        var c = contracts[ci]; if (!c) return;
+        var g = (date && __msImpIsoOk(c.start)) ? Math.abs(__msImpDays(c.start, date) || 0) : 0;
+        if (bg === null || g < bg) { bg = g; best = ci; }
+    });
+    return best;
+}
+// The OEM master's name for a contract's OEM (the record's own, the product's prefix, the OEM word), else the supplier the file names.
+function __msImpOemFor(c, supplier) {
+    var names = (typeof oemMasterData === 'object' && oemMasterData) ? Object.keys(oemMasterData) : [];
+    if (typeof oemMetadata === 'object' && oemMetadata) Object.keys(oemMetadata).forEach(function (k) { if (names.indexOf(k) === -1) names.push(k); });
+    var pick = function (s) { s = __msImpLoose(s); if (!s) return ''; for (var i = 0; i < names.length; i++) if (__msImpLoose(names[i]) === s) return names[i]; return ''; };
+    var within = function (s) { s = String(s || '').toLowerCase(); if (!s) return ''; for (var i = 0; i < names.length; i++) if (names[i] && s.indexOf(names[i].toLowerCase()) !== -1) return names[i]; return ''; };
+    var byWord = function (key) { if (!key) return ''; var w = key === 'rah' ? 'RAHINFOTECH' : key === 'gpn' ? 'GLOBALPAYMENT' : key.toUpperCase(); for (var i = 0; i < names.length; i++) if (__msImpLoose(names[i]).indexOf(w) !== -1) return names[i]; return ''; };
+    if (c) {
+        var k = __msImpContractOem(c);
+        var n = pick(c.oem) || within(c.product) || byWord(k) || pick(MS_IMP_OEM_NAMES[k]);
+        if (n) return n;
+        if (c.oem) return String(c.oem).trim();
+        if (MS_IMP_OEM_NAMES[k]) return MS_IMP_OEM_NAMES[k];
+        var m = String(c.product || '').match(/^(.+?)\s+[(—–]/);
+        if (m && m[1].trim()) return m[1].trim();
+    }
+    var sk = __msImpContractOem({ oem: '', product: supplier || '' });                                // 'RAH Infotech Pvt Ltd' → the master's Rah Infotech Private Limited
+    return pick(supplier) || within(supplier) || byWord(sk) || pick(MS_IMP_OEM_NAMES[sk]) || String(supplier || '').trim();
+}
+// The OEM's address as the PO form fills it in from the OEM master.
+function __msImpOemAddress(oem) {
+    var meta = (oem && typeof oemMetadata === 'object' && oemMetadata) ? oemMetadata[oem] : null;
+    if (!meta) return '';
+    var lines = [];
+    if (meta.addressLine1) lines.push(meta.addressLine1);
+    if (meta.addressLine2) lines.push(meta.addressLine2);
+    var st = meta.stateCode ? ((typeof getStateNameByCode === 'function' && getStateNameByCode(meta.stateCode)) || '') : (meta.foreignState || '');
+    var cityRow = [meta.city, st, meta.pincode || meta.postalCode || ''].filter(Boolean).join(', ');
+    if (cityRow) lines.push(cityRow);
+    if (meta.country && String(meta.country).trim().toLowerCase() !== 'india') lines.push(meta.country);
+    return lines.join('\n') || String(meta.address || '');
+}
+// An exchange rate for a PO in dollars that names none: the contract of that time with one (the nearest start), else 83.5
+// as the import's proposals use.
+function __msImpFxGuess(date) {
+    var best = null, bg = null;
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c) {
+        if (!c || String(c.costCurrency || 'USD').toUpperCase() === 'INR' || !(__msImpNum(c.baseFX) > 1) || !__msImpIsoOk(c.start)) return;
+        var g = __msImpIsoOk(date) ? Math.abs(__msImpDays(c.start, date) || 0) : 1e9;
+        if (bg === null || g < bg) { bg = g; best = __msImpNum(c.baseFX); }
+    });
+    return best || 83.5;
+}
+// The cycles a PO file covers: every cycle when it is the contract's own PO (its number is the contract's internal PO);
+// else the cycles starting within its term (45 days' grace before its start; a cycle starting on or after its end is the
+// next PO's), else the cycle starting nearest its start.
+function __msImpPoCycles(c, r, termOnly) {
+    var ys = Array.isArray(c.billingYears) ? c.billingYears : [];
+    var all = []; ys.forEach(function (y, i) { if (y) all.push(i); });
+    if (!all.length) return [];
+    if (!termOnly && __msImpLoose(c.internalPO) && __msImpLoose(c.internalPO) === __msImpLoose(r.number)) return all;
+    var s = r.start || '', e = r.end || '';
+    if (!__msImpIsoOk(s) && __msImpIsoOk(r.date) && __msImpNum(r.months) > 0) s = r.date;   // no start in the text but a term: from the PO's date
+    if (!__msImpIsoOk(s)) return all;
+    if (!__msImpIsoOk(e) && r.months) e = __msImpAddDays(__msImpAddMonths(s, __msImpNum(r.months)), -1);
+    var hit = all.filter(function (i) { var bd = ys[i].billDate; return __msImpIsoOk(bd) && bd >= __msImpAddDays(s, -45) && (!__msImpIsoOk(e) || bd < e); });
+    if (hit.length) return hit;
+    var best = all[0], bg = null;
+    all.forEach(function (i) { var g = __msImpIsoOk(ys[i].billDate) ? Math.abs(__msImpDays(ys[i].billDate, s) || 0) : 1e9; if (bg === null || g < bg) { bg = g; best = i; } });
+    return [best];
+}
+// What the PO record's status is, from the contract's cycles: Closed when every covered cycle's bill is paid (or the
+// contract has ended), Received when a bill is in and unpaid, Issued otherwise — with the dates to stamp.
+function __msImpPoStatus(c, yis, issueDate) {
+    var today = __msImpToday(), paid = yis.length > 0, billed = false, unpaidBill = false, lastPay = '', firstBill = '';
+    yis.forEach(function (yi) {
+        var y = (c.billingYears || [])[yi]; if (!y) { paid = false; return; }
+        var aps = Array.isArray(y.apInvoices) ? y.apInvoices.filter(function (a) { return a && (a.invNo || a.date); }) : [];   // a bill is in when it has a number or a date (a blank row with the amount is not one)
+        var hasBill = aps.length > 0 || !!y.oemInvoiceNo || !!y.oemInvoiceDate;
+        var isPaid = aps.length ? aps.every(function (a) { return !!a.payDate; }) : (!!y.vendorPaid || !!y.oemPaymentDate);
+        if (hasBill) { billed = true; var bd = aps.length ? aps.map(function (a) { return a.date || ''; }).filter(Boolean).sort()[0] || '' : (y.oemInvoiceDate || ''); if (__msImpIsoOk(bd) && (!firstBill || bd < firstBill)) firstBill = bd; }
+        if (!isPaid) { paid = false; if (hasBill) unpaidBill = true; }
+        var pd = aps.length ? aps.map(function (a) { return a.payDate || ''; }).filter(__msImpIsoOk).sort().pop() || '' : (y.oemPaymentDate || '');
+        if (__msImpIsoOk(pd) && pd > lastPay) lastPay = pd;
+    });
+    var ended = __msImpIsoOk(c.endDate) && c.endDate < today;
+    if (paid) return { status: 'Closed', closedAt: lastPay || (ended ? c.endDate : today), receivedAt: firstBill || lastPay || issueDate, why: 'the cycles\' bills are paid' };
+    if (ended) return { status: 'Closed', closedAt: c.endDate, receivedAt: firstBill || c.endDate, why: 'the contract has ended' };
+    if (billed) return { status: 'Received', closedAt: '', receivedAt: firstBill || today, why: unpaidBill ? 'a bill is in, not yet paid' : 'the later cycles are not yet billed' };
+    return { status: 'Issued', closedAt: '', receivedAt: '', why: 'no bill yet' };
+}
+function __msImpCyclesText(yis) { return !yis.length ? 'no cycles' : yis.length === 1 ? 'cycle ' + (yis[0] + 1) : 'cycles ' + (yis[0] + 1) + '–' + (yis[yis.length - 1] + 1); }
+function __msImpPoBlank() {
+    var po = (typeof poBlank === 'function') ? poBlank() : { id: __msImpNewId('po'), lineItems: [], statusHistory: [], linkedApCycles: [], currency: 'INR', fxRate: 1, status: 'Draft', commercialModel: 'Direct', sourcedViaResellerKey: '', resellerPONumber: '', signatureShown: true, showOemBankOnPdf: false, showDiscountOnPdf: false, showGstOnPdf: false, showFxOnPdf: false, instructionsToVendor: '', paymentTerms: '', deliveryTerms: '', terms: '', notes: '', acknowledgedAt: null, receivedAt: null, closedAt: null };
+    po.lineItems = []; po.linkedApCycles = [];
+    return po;
+}
+function __msImpPoLine(product, cost, gstPct, notes) {
+    return { id: (typeof poNewId === 'function') ? poNewId('li') : __msImpNewId('li'), product: product, sku: '', qty: 1, unitCost: __msImpR2(cost), discountPct: 0, gstPct: gstPct, notes: notes || '' };
+}
+function __msImpPoTotal(po) {
+    try { if (typeof computePOTotals === 'function') return __msImpNum(computePOTotals(po.lineItems, (typeof determinePOGSTMode === 'function') ? determinePOGSTMode(po.oem).mode : 'unknown').grandTotal); } catch (e) {}
+    return po.lineItems.reduce(function (t, li) { var net = __msImpNum(li.qty) * __msImpNum(li.unitCost) * (1 - __msImpNum(li.discountPct) / 100); return t + net * (1 + __msImpNum(li.gstPct) / 100); }, 0);
+}
+function __msImpPoStamp(po, status, issueDate, receivedAt, closedAt, at) {
+    var t = function (d) { return __msImpIsoOk(d) ? d + 'T00:00:00.000Z' : at; };
+    po.status = status;
+    po.statusHistory = [{ status: 'Draft', changedAt: t(issueDate) }, { status: 'Issued', changedAt: t(issueDate) }];
+    po.acknowledgedAt = null; po.receivedAt = null; po.closedAt = null;
+    if (status === 'Received' || status === 'Closed') { po.receivedAt = t(receivedAt || issueDate); po.statusHistory.push({ status: 'Received', changedAt: po.receivedAt }); }
+    if (status === 'Closed') { po.closedAt = t(closedAt || receivedAt || issueDate); po.statusHistory.push({ status: 'Closed', changedAt: po.closedAt }); }
+    po.createdAt = t(issueDate); po.updatedAt = at;      // created when the PO was issued (the module's year-to-date counts go by it); updated now
+}
+function __msImpPoFileNote(it, at) {
+    var r = it.r, parts = ['Imported from Files/' + it.file.rel + ' on ' + at.slice(0, 10)];
+    if (r.kind === 'amendment') parts.push('The file is an amendment' + (r.date ? ' dated ' + __msImpDate(r.date) : '') + ' of the order form.');
+    if (r.amended) parts.push('The order form carries an amendment dated ' + __msImpDate(r.amended) + '.');
+    it.group.forEach(function (g) { if (g !== it.file) parts.push('Also in the folder: ' + g.name + (g.kind === 'amendment' ? ' (amendment' + (g.date ? ' dated ' + __msImpDate(g.date) : '') + ')' : ' (a copy)') + '.'); });
+    if (r.warnings && r.warnings.length) parts.push('The engine notes: ' + r.warnings.join('; ') + '.');
+    return parts;
+}
+// A PO record from the contract its file belongs to: one line per covered cycle at the cycle's cost.
+function __msImpPoFromContract(it, ci, batch, at) {
+    var r = it.r, c = contracts[ci], ys = Array.isArray(c.billingYears) ? c.billingYears : [];
+    var yis = (it.state === 'contract' && it.yis && it.yis.length) ? it.yis : __msImpPoCycles(c, r, it.state === 'proposal');   // a proposed contract's cycles by the file's term (it may carry several POs' cycles)
+    var po = __msImpPoBlank();
+    var cur = String(c.costCurrency || 'USD').toUpperCase(), inr = cur === 'INR';
+    var oem = __msImpOemFor(c, r.supplier);
+    var foreign = (typeof isOemForeign === 'function') ? !!isOemForeign(oem) : !inr;
+    po.poNumber = r.number || String(c.internalPO || ''); po.oem = oem; po.endClient = c.client || ''; po.linkedProposalId = ''; po.linkedContractIdx = String(ci);
+    po.subject = c.product || ''; po.oemRefDocNo = it.quote || ''; po.oemAddress = __msImpOemAddress(oem);
+    po.commercialModel = c.commercialModel || (c.isReseller ? 'Resale' : 'Direct');
+    po.sourcedViaResellerKey = po.commercialModel === 'Direct' ? '' : (c.sourcedViaResellerKey || '');
+    po.resellerPONumber = po.commercialModel === 'Direct' ? '' : String(c.clientPO || ((Array.isArray(c.clientPOs) && c.clientPOs[0] && c.clientPOs[0].poNo) || ''));
+    po.currency = inr ? 'INR' : cur;
+    var y0 = ys[yis[0]] || {}, yl = ys[yis[yis.length - 1]] || {};
+    po.fxRate = inr ? 1 : (__msImpNum(c.baseFX) || __msImpNum(r.fx) || __msImpNum(y0.settlementFX) || __msImpNum(y0.fx) || 1);
+    po.issueDate = r.date || c.internalPODate || c.start || ''; po.expectedDelivery = '';
+    po.contractStartDate = r.start || y0.billDate || c.start || '';
+    po.contractEndDate = r.end || (__msImpIsoOk(yl.billDate) ? __msImpAddDays(__msImpAddMonths(yl.billDate, __msImpNum(yl.duration) || 12), -1) : (c.endDate || ''));
+    po.isForeignOem = foreign;
+    po.lineItems = yis.map(function (yi) {
+        var y = ys[yi];
+        var ratio = __msImpNum(y.ratio) || ((__msImpNum(y.duration) || 12) / 12);
+        var base = (y.baseCost !== undefined && y.baseCost !== null && y.baseCost !== '') ? __msImpNum(y.baseCost) : __msImpNum(c.costUSD);
+        return __msImpPoLine(c.product || '', base * ratio, (inr && !foreign) ? 18 : 0, yis.length > 1 ? 'Cycle ' + (yi + 1) + ' from ' + __msImpDate(y.billDate) : '');
+    });
+    po.linkedApCycles = yis.map(function (yi) { return { cIdx: ci, yIdx: yi }; });
+    po.externalLink = ''; po.externalLinkLocalPath = __msImpAbs(it.file.rel);
+    var st = __msImpPoStatus(c, yis, po.issueDate);
+    __msImpPoStamp(po, st.status, po.issueDate, st.receivedAt, st.closedAt, at);
+    var tot = __msImpPoTotal(po), differs = null;
+    if (r.total !== null && r.total !== undefined && String(r.total_currency || '').toUpperCase() === po.currency && tot > 0 && Math.abs(tot - __msImpNum(r.total)) > Math.max(1, __msImpNum(r.total) * 0.02)) differs = { file: __msImpNum(r.total), app: __msImpR2(tot) };
+    var notes = __msImpPoFileNote(it, at);
+    notes[0] += ', filled from the contract ' + __msImpContractLabel(c, null) + ' (' + __msImpCyclesText(yis) + '); ' + st.status + ' — ' + st.why + '.';
+    if (differs) notes.push('The file says ' + __msImpMoney(differs.file, po.currency) + '; the contract\'s cycles come to ' + __msImpMoney(differs.app, po.currency) + ' — check.');
+    po.notes = notes.join('\n');
+    po.imported = { batch: batch, at: at, from: it.file.rel, kind: r.kind, contract: __msImpConIdent(c) };
+    po.__differs = differs;
+    return po;
+}
+// A PO record from the file's text alone (no contract names it): Closed, one line at the file's total.
+function __msImpPoFromFile(it, batch, at, M) {
+    var r = it.r, po = __msImpPoBlank();
+    var cur = String(r.currency || r.total_currency || 'INR').toUpperCase();
+    var oem = __msImpOemFor(null, r.supplier) || String(r.client_token || '').trim() || 'Vendor';
+    var al = __msImpAlias(r.end_client || '') || __msImpAlias(r.client_token || '');
+    var endClient = (al && al !== 'SHARED' && M && M.clientByAlias[al]) || String(r.end_client || '').trim();   // the app's name for the client where it has one
+    var dubious = !!(r.warnings && r.warnings.length);                   // the engine doubts the text (another PO's body in a Word file): its term and quote are not this PO's
+    var known = !dubious && r.total !== null && r.total !== undefined && (!r.total_currency || String(r.total_currency).toUpperCase() === cur);
+    po.poNumber = r.number || it.file.name; po.oem = oem; po.endClient = endClient; po.linkedProposalId = ''; po.linkedContractIdx = '';
+    po.subject = r.supplier ? 'Purchase order to ' + r.supplier : 'Purchase order ' + po.poNumber;
+    po.oemRefDocNo = it.quote || ''; po.oemAddress = __msImpOemAddress(oem);
+    po.commercialModel = 'Direct'; po.sourcedViaResellerKey = ''; po.resellerPONumber = '';
+    var fxGuessed = cur !== 'INR' && !(__msImpNum(r.fx) > 0);
+    po.currency = cur; po.fxRate = cur === 'INR' ? 1 : (__msImpNum(r.fx) || __msImpFxGuess(r.date));
+    po.issueDate = r.date || ''; po.expectedDelivery = '';
+    po.contractStartDate = dubious ? '' : (r.start || ''); po.contractEndDate = dubious ? '' : (r.end || ((__msImpIsoOk(r.start) && r.months) ? __msImpAddDays(__msImpAddMonths(r.start, __msImpNum(r.months)), -1) : ''));
+    po.isForeignOem = (typeof isOemForeign === 'function') ? !!isOemForeign(oem) : cur !== 'INR';
+    po.lineItems = [__msImpPoLine(r.product || 'As the PO file says', known ? __msImpNum(r.total) : 0, 0, known ? '' : 'the total could not be read from the file — check')];
+    po.linkedApCycles = [];
+    po.externalLink = ''; po.externalLinkLocalPath = __msImpAbs(it.file.rel);
+    var today = __msImpToday(), notLater = function (d) { return (__msImpIsoOk(d) && d <= today) ? d : today; };
+    __msImpPoStamp(po, 'Closed', po.issueDate, notLater(po.contractStartDate || po.issueDate), notLater(po.contractEndDate || po.issueDate), at);
+    var notes = __msImpPoFileNote(it, at);
+    notes[0] += ' — no contract in the app names it; filled from the file\'s text.';
+    if (!known) notes.push('The total could not be read from the file — check it.');
+    if (fxGuessed) notes.push('The file names no exchange rate: ' + po.fxRate + ' is the contracts\' rate of that time — check it.');
+    po.notes = notes.join('\n');
+    po.imported = { batch: batch, at: at, from: it.file.rel, kind: r.kind, contract: '' };
+    po.__differs = null;
+    return po;
+}
+// The contract a PO file is on: a contract pins one of its files, or carries its number; a PO record in the module
+// that pins or carries it points at its contract.
+function __msImpPoContractOf(group, M) {
+    var ci = null;
+    group.forEach(function (g) { if (ci === null && M.conByIpoPath[__msImpAbs(g.rel)] !== undefined) ci = M.conByIpoPath[__msImpAbs(g.rel)]; });
+    var key = __msImpLoose(group[0].number);
+    if (ci === null && key && M.conByIpo[key] && M.conByIpo[key].length) ci = M.conByIpo[key].length === 1 ? M.conByIpo[key][0] : __msImpNearestContract(M.conByIpo[key], group[0].start || group[0].date);
+    if (ci === null) {
+        var po = null;
+        group.forEach(function (g) { if (!po && M.poByPath[__msImpAbs(g.rel)]) po = M.poByPath[__msImpAbs(g.rel)]; });
+        if (!po && key && M.poByNo[key] && M.poByNo[key].length) po = M.poByNo[key][0];
+        if (po && po.linkedContractIdx !== '' && po.linkedContractIdx !== null && po.linkedContractIdx !== undefined && !isNaN(parseInt(po.linkedContractIdx, 10))) ci = parseInt(po.linkedContractIdx, 10);
+    }
+    return (ci !== null && typeof contracts !== 'undefined' && contracts[ci]) ? ci : null;
+}
+// --- the plan: the OEM quotes (before the PO files: a PO record made for a contract carries its quote's number)
+function __msImpPlanQuotes(P, M, addLink) {
+    var idx = __msImp.idx, K = __msImpKnown();
+    P.quotes = []; P.quoteByCi = {};
+    var items = [];
+    (idx.quotes || []).forEach(function (q) {
+        var it = { id: 'Q:' + q.id, q: q, fy: q.fy, state: 'none', ci: null, how: '', links: [], why: '', namedBy: [] };
+        var qk = __msImpLoose(q.quote), ci = null, how = '';
+        if (!qk) { it.state = 'skip'; it.why = 'no quote number in the file or its name'; items.push(it); return; }
+        var abs = __msImpAbs(q.rel);
+        if (M.conByQuotePath[abs] !== undefined) { ci = M.conByQuotePath[abs]; how = 'the contract pins it'; }
+        else if (M.conByQuote[qk] && M.conByQuote[qk].length) { ci = M.conByQuote[qk].length === 1 ? M.conByQuote[qk][0] : __msImpNearestContract(M.conByQuote[qk], q.date); how = 'the contract names it'; }
+        (idx.pos || []).forEach(function (r) {                              // the PO files whose text names the quote (not a Word file the engine doubts)
+            if (__msImpLoose(r.quote) !== qk || (r.warnings && r.warnings.length)) return;
+            var group = [r].concat((r.copies || []).map(function (cp) { return K.posById[cp.id]; }).filter(Boolean));
+            var c2 = __msImpPoContractOf(group, M);
+            it.namedBy.push({ r: r, ci: c2 });
+            if (ci === null && c2 !== null) { ci = c2; how = 'PO ' + r.number + ' names it'; }
+        });
+        if (ci === null && __msImpIsoOk(q.date) && typeof contracts !== 'undefined') {
+            var al = __msImpAlias(q.end_client || '') || __msImpAlias(q.client_token || '') || __msImpAlias(q.name || '');
+            if (al && al !== 'SHARED') {
+                var cands = [];
+                contracts.forEach(function (c, i) {
+                    if (!c || __msImpAlias(c.client || '') !== al) return;
+                    [c.start].concat((c.billingYears || []).map(function (y) { return y ? y.billDate : ''; })).filter(__msImpIsoOk).forEach(function (s) {
+                        var g = __msImpDays(q.date, s);
+                        if (g !== null && g >= -30 && g <= 120) cands.push({ ci: i, g: Math.abs(g) });
+                    });
+                });
+                cands.sort(function (a, b) { return a.g - b.g; });
+                if (cands.length) { ci = cands[0].ci; how = 'the client and the date'; }
+            }
+        }
+        if (ci === null || !contracts[ci]) { it.state = 'none'; it.why = 'no PO file names it and no contract of this client starts within four months of its date'; items.push(it); return; }
+        it.ci = ci; it.how = how; it.state = 'contract';
+        // a contract that names another quote, or pins another quote file the engine lists, is that quote's: this one is left for the hand
+        var c0 = contracts[ci], cNo = __msImpLoose(c0.oemQuote), cPath = String(c0.oemQuoteLocalPath || '');
+        if (cNo && cNo !== qk) { it.state = 'extra'; it.why = 'the contract names quote ' + String(c0.oemQuote).trim() + ' — pin this one by hand if it is the contract\'s'; }
+        else if (cPath && cPath !== abs && K.paths[cPath] && K.paths[cPath].kind === 'oem_quote') { it.state = 'extra'; it.why = 'the contract pins ' + __msImpBase(cPath) + ' — pin this one by hand if it is the contract\'s'; }
+        items.push(it);
+    });
+    // one quote per contract: the one a PO file on the contract names, else the one the contract names or pins, else the
+    // earliest dated; another quote resolving to the same contract is left for the hand
+    var rank = function (it) { return it.namedBy.some(function (n) { return n.ci === it.ci; }) ? 0 : (it.how === 'the contract pins it' || it.how === 'the contract names it') ? 1 : 2; };
+    var chosen = {}, nByCi = {};
+    items.filter(function (it) { return it.state === 'contract'; }).sort(function (a, b) { return (rank(a) - rank(b)) || String(a.q.date || '9999').localeCompare(String(b.q.date || '9999')); }).forEach(function (it) { if (!chosen[it.ci]) chosen[it.ci] = it; nByCi[it.ci] = (nByCi[it.ci] || 0) + 1; });
+    items.forEach(function (it) {
+        if (it.state !== 'contract' && it.state !== 'extra') { P.quotes.push(it); P.byId[it.id] = it; return; }
+        var ci = it.ci, c = contracts[ci], q = it.q, abs = __msImpAbs(q.rel);
+        var byDate = it.how === 'the client and the date' ? 'client+date' : 'number';
+        if (it.state === 'contract' && chosen[ci] !== it) { it.state = 'extra'; it.why = 'the contract takes quote ' + chosen[ci].q.quote + ' (' + chosen[ci].how + ') — pin this one by hand if it is the contract\'s'; }
+        var mine = it.state === 'contract';
+        if (mine) {
+            var pathOk = !__msImpPathStale(c.oemQuoteLocalPath), numOk = !!String(c.oemQuote || '').trim();
+            if (pathOk && numOk) it.state = 'app';
+            else {
+                if (!pathOk) { var l1 = addLink({ key: 'oq:' + ci, entity: 'contract', ci: ci, field: 'oemQuoteLocalPath', label: __msImpContractLabel(c, null) + ' — OEM quote ' + q.quote, before: c.oemQuoteLocalPath || '', after: abs, how: byDate }); if (l1) it.links.push(l1); }
+                if (!numOk) { var l2 = addLink({ key: 'oqn:' + ci, entity: 'contract', ci: ci, field: 'oemQuote', kind: 'number', label: __msImpContractLabel(c, null) + ' — OEM quote number', before: c.oemQuote || '', after: q.quote, how: byDate }); if (l2) it.links.push(l2); }
+            }
+        }
+        // the number onto the PO record in the module whose own file names the quote; else (the contract's one quote) onto
+        // the contract's PO records — where the OEM reference is empty
+        var named = {}; it.namedBy.forEach(function (n) { var k = __msImpLoose(n.r.number); if (k) named[k] = true; });
+        var only = mine && nByCi[ci] === 1;
+        if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) purchaseOrders.forEach(function (po) {
+            if (!po || !po.id || String(po.oemRefDocNo || '').trim()) return;
+            var isNamed = !!named[__msImpLoose(po.poNumber)], onContract = String(po.linkedContractIdx) === String(ci);
+            if (!isNamed && !(onContract && only)) return;
+            var l3 = addLink({ key: 'poq:' + po.id, entity: 'po', poId: po.id, field: 'oemRefDocNo', kind: 'number', label: 'PO ' + (po.poNumber || '') + ' — OEM quote number', before: po.oemRefDocNo || '', after: q.quote, how: isNamed ? 'number' : byDate });
+            if (l3) it.links.push(l3);
+        });
+        if (only) P.quoteByCi[ci] = it;
+        P.quotes.push(it); P.byId[it.id] = it;
+    });
+}
+// --- the plan: the PO files
+function __msImpPlanPos(P, M, addLink, fyset) {
+    var idx = __msImp.idx, K = __msImpKnown();
+    P.pos = [];
+    var propByPath = {};
+    P.proposals.forEach(function (pr) { if (pr.internalPO && pr.internalPO.path) propByPath[pr.internalPO.path] = pr; });
+    (idx.pos || []).forEach(function (r) {
+        if (r.same_as && K.posById[r.same_as]) return;                 // listed under the PO's own file
+        fyset[r.fy] = true;
+        var group = [r].concat((r.copies || []).map(function (cp) { return K.posById[cp.id]; }).filter(Boolean));
+        var it = { id: 'O:' + r.id, tickKey: 'O|' + __msImpLoose(r.number) + '|' + r.rel, r: r, group: group, file: r, fy: r.fy, state: 'new', po: null, ci: null, yis: [], prop: null, tickable: false, why: '', links: [], quote: '', preview: null };
+        // the file the app already holds for this PO (a PO record's pin, a contract's pin) is the PO's own file
+        var pinnedPo = null, pinnedCi = null;
+        group.forEach(function (g) {
+            var ap = __msImpAbs(g.rel);
+            if (!pinnedPo && M.poByPath[ap]) { pinnedPo = M.poByPath[ap]; it.file = g; }
+            if (pinnedCi === null && M.conByIpoPath[ap] !== undefined) { pinnedCi = M.conByIpoPath[ap]; if (!pinnedPo) it.file = g; }
+        });
+        var key = __msImpLoose(r.number);
+        var po = pinnedPo || (key && M.poByNo[key] && M.poByNo[key].length ? M.poByNo[key][0] : null);
+        if (po) {
+            it.state = 'module'; it.po = po;
+            if (__msImpPathStale(po.externalLinkLocalPath)) {
+                var lid = addLink({ key: 'po:' + po.id, entity: 'po', poId: po.id, field: 'externalLinkLocalPath', label: 'PO ' + (po.poNumber || r.number) + ' — the PO file', before: po.externalLinkLocalPath || '', after: __msImpAbs(it.file.rel), how: 'number' });
+                if (lid) it.links.push(lid);
+            }
+        } else {
+            var ci = pinnedCi;
+            if (ci === null && key && M.conByIpo[key] && M.conByIpo[key].length) ci = M.conByIpo[key].length === 1 ? M.conByIpo[key][0] : __msImpNearestContract(M.conByIpo[key], r.start || r.date);
+            if (ci !== null && typeof contracts !== 'undefined' && contracts[ci] && (r.number || contracts[ci].internalPO)) {
+                it.state = 'contract'; it.ci = ci; it.yis = __msImpPoCycles(contracts[ci], r, false); it.tickable = true;
+                it.quote = (r.warnings && r.warnings.length ? '' : r.quote) || (P.quoteByCi[ci] ? P.quoteByCi[ci].q.quote : '');
+                var prev = __msImpPoFromContract(it, ci, '', '1970-01-01T00:00:00.000Z');
+                it.preview = { status: prev.status, total: __msImpR2(__msImpPoTotal(prev)), currency: prev.currency, differs: prev.__differs, oem: prev.oem };
+            } else {
+                var pr = null;
+                group.forEach(function (g) { pr = pr || propByPath[__msImpAbs(g.rel)] || null; });
+                if (pr) { it.state = 'proposal'; it.prop = pr.id; it.quote = (r.warnings && r.warnings.length) ? '' : (r.quote || ''); }
+                else if (r.kind === 'unread' || !r.number) { it.state = 'skip'; it.why = r.kind === 'unread' ? 'the file could not be read' : 'no PO number in the file or its name'; if (ci !== null) it.why += ' (the contract that pins it has no number either)'; }
+                else {
+                    it.state = 'new'; it.tickable = true; it.quote = (r.warnings && r.warnings.length) ? '' : (r.quote || '');
+                    var prev2 = __msImpPoFromFile(it, '', '1970-01-01T00:00:00.000Z', M);
+                    it.preview = { status: prev2.status, total: __msImpR2(__msImpPoTotal(prev2)), currency: prev2.currency, differs: null, oem: prev2.oem, totalKnown: !(prev2.lineItems[0] && prev2.lineItems[0].notes) };
+                }
+            }
+        }
+        P.pos.push(it); P.byId[it.id] = it;
+    });
+}
+// --- the page: the PO files of a year
+function __msImpPoTermHtml(r) {
+    var m = __msImpNum(r.months);
+    if (r.start && r.end) return __msImpDate(r.start) + ' – ' + __msImpDate(r.end) + (m ? ' <span class="ms-imp-note">(' + m + ' m)</span>' : '');
+    if (r.start) return 'from ' + __msImpDate(r.start) + (m ? ' · ' + m + ' months' : '');
+    if (m) return m + ' months';
+    return '<span class="ms-imp-note">—</span>';
+}
+function __msImpPosHtml(P, fy) {
+    var rows = (P.pos || []).filter(function (it) { return it.fy === fy; });
+    var shown = rows.filter(function (it) { return __msImpMatches([it.r.number, it.r.name, it.r.supplier, it.r.end_client, it.r.client_token, it.r.total, it.r.quote].concat(it.group.map(function (g) { return g.name; })).join(' ')); });
+    var nAdd = rows.filter(function (it) { return (it.state === 'contract' || it.state === 'new') && it.tickable; }).length;
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('pos', 'Purchase orders', rows.length + ' file' + (rows.length === 1 ? '' : 's') + ' · ' + nAdd + ' to add as PO records',
+        nAdd ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'pos\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'pos\', \'' + fy + '\', false)">none</a></span>' : '');
+    if (!__msImp.ui.open.pos) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">One row per file under <b>Files › Internal POs</b> (a copy or an amendment is listed under the PO\'s own file; a Word draft beside its PDF is skipped). A PO already in the Purchase Orders module is left as it is. A PO whose number a contract carries becomes a PO record filled from that contract — its cycles, cost and currency, the file pinned, Closed once the bills are paid. A PO no contract names becomes a Closed record from the file\'s text.</div>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpPos"><thead><tr><th></th><th>PO</th><th>Date</th><th>Supplier · end client</th><th>Term</th><th class="num">Total</th><th>In the app</th><th>File</th></tr></thead><tbody>';
+    shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (it) {
+        var r = it.r, tick = '', st;
+        if ((it.state === 'contract' || it.state === 'new') && it.tickable) tick = '<input type="checkbox"' + (__msImpTicked(it.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + it.id + '\', this.checked)" aria-label="Add PO ' + __msImpEsc(r.number) + '">';
+        if (it.state === 'module') st = __msImpStateHtml('app', 'in the module', 'PO ' + (it.po.poNumber || '') + ' in the Purchase Orders module (' + (it.po.status || '') + ')') + ' <span class="ms-imp-note">PO ' + __msImpEsc(it.po.poNumber || '') + ' · ' + __msImpEsc(it.po.status || '') + (it.links.length ? ' — the file goes on it (see Document links)' : '') + '</span>';
+        else if (it.state === 'contract') {
+            var c = contracts[it.ci], pv = it.preview || {};
+            st = __msImpStateHtml('cycle', 'on a contract', 'The contract carries this PO\'s number: a PO record is made from the contract') + ' <span class="ms-imp-note">→ PO record for ' + __msImpEsc(__msImpContractLabel(c, null)) + ' · ' + __msImpCyclesText(it.yis) + ' · ' + __msImpEsc(pv.status || '') + (pv.total ? ' · ' + __msImpMoney(pv.total, pv.currency) : '') + (it.quote ? ' · quote ' + __msImpEsc(it.quote) : '') + '</span>'
+                + (pv.differs ? ' <span class="ms-imp-warn" title="The file\'s total and the contract\'s cycles differ by more than 2%: the record follows the contract; check it">differs: the file says ' + __msImpMoney(pv.differs.file, pv.currency) + '</span>' : '');
+        } else if (it.state === 'proposal') st = __msImpStateHtml('new', 'with a new contract', 'Goes in with the contract proposed below, filled from it') + ' <span class="ms-imp-note">' + __msImpEsc((P.byId[it.prop] || {}).product || '') + '</span>';
+        else if (it.state === 'skip') st = __msImpStateHtml('skip', 'left out', it.why) + ' <span class="ms-imp-note">' + __msImpEsc(it.why) + '</span>';
+        else st = __msImpStateHtml('new', 'new', 'No contract in the app names this PO: a Closed record from the file\'s text') + ' <span class="ms-imp-note">→ Purchase Orders module, Closed' + (it.preview && it.preview.oem ? ' · ' + __msImpEsc(it.preview.oem) : '') + (it.quote ? ' · quote ' + __msImpEsc(it.quote) : '') + '</span>'
+            + (it.preview && !it.preview.totalKnown ? ' <span class="ms-imp-warn" title="The file does not say (or says it in another currency): the record\'s line is 0 — fill it in">total not read — check</span>' : '');
+        var copies = it.group.filter(function (g) { return g !== it.file; }).map(function (g) { return '<div class="ms-imp-note">also ' + __msImpPin(__msImpAbs(g.rel), g.rel) + ' ' + __msImpEsc(g.name) + (g.kind === 'amendment' ? ' <span class="ms-imp-st opt">amendment' + (g.date ? ' · ' + __msImpEsc(__msImpDate(g.date)) : '') + '</span>' : ' <span class="ms-imp-st skip">copy</span>') + '</div>'; }).join('');
+        var kind = r.kind === 'amendment' ? ' <span class="ms-imp-st opt" title="An amendment of the order form (the order form itself is not in the folder)">amendment</span>' : (r.ext && r.ext !== '.pdf' ? ' <span class="ms-imp-st skip" title="A Word file">Word</span>' : '');
+        var tot = (r.total !== null && r.total !== undefined) ? '<b>' + __msImpMoney(r.total, r.total_currency || r.currency) + '</b>' : '<span class="ms-imp-note" title="The file does not say">—</span>';
+        html += '<tr data-id="' + it.id + '"' + (tick && !__msImpTicked(it.id) ? ' class="ms-imp-off"' : '') + '><td>' + tick + '</td><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(r.number || '(no number)') + kind + copies + '</td><td style="white-space:nowrap;">' + __msImpDate(r.date) + '</td>'
+            + '<td class="wrap" style="min-width:160px;">' + __msImpEsc(r.supplier || '') + (r.end_client ? ' <span class="ms-imp-note">· ' + __msImpEsc(r.end_client) + '</span>' : '') + (!r.supplier && !r.end_client && r.client_token ? '<span class="ms-imp-note">' + __msImpEsc(r.client_token) + '</span>' : '') + (r.product ? ' <span class="ms-imp-note">· ' + __msImpEsc(r.product) + '</span>' : '') + '</td>'
+            + '<td class="wrap" style="min-width:150px; white-space:nowrap;">' + __msImpPoTermHtml(r) + '</td><td class="num">' + tot + '</td>'
+            + '<td class="wrap" style="min-width:200px;">' + st + '</td><td>' + __msImpPin(__msImpAbs(it.file.rel), it.file.rel) + (r.warnings && r.warnings.length ? ' <span class="ms-imp-warn" title="' + __msImpEsc(r.warnings.join('\n')) + '"><i class="fas fa-exclamation-triangle"></i></span>' : '') + '</td></tr>';
+    });
+    if (!shown.length) html += '<tr><td colspan="8" class="ms-imp-note" style="text-align:center; padding:14px;">Nothing here' + (__msImp.ui.q ? ' for this search' : '') + '.</td></tr>';
+    if (shown.length > MS_IMP_MAX_ROWS) html += '<tr><td colspan="8" class="ms-imp-note">' + (shown.length - MS_IMP_MAX_ROWS) + ' more — narrow the search.</td></tr>';
+    return html + '</tbody></table></div></div>';
+}
+// --- the page: the OEM quotes (all years together)
+function __msImpQuotesHtml(P) {
+    var list = P.quotes || [];
+    var html = '<div class="card ms-imp-sec" style="padding:12px 16px;">' + __msImpSecHead('quotes', 'OEM quotes', list.length + ' file' + (list.length === 1 ? '' : 's') + ' · ' + list.filter(function (it) { return it.state === 'contract'; }).length + ' to pin on contracts');
+    if (!__msImp.ui.open.quotes) return html + '</div>';
+    html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Each file under <b>Files › OEM Quotes</b> goes on its contract — the one whose PO file names the quote, the one that names it, else the client\'s contract starting within four months of its date: the file is pinned in the contract\'s OEM quote field and the number written where that field is empty (and on the contract\'s PO record in the module where its OEM reference is empty). The pins are listed under Document links.</div>';
+    if (!list.length) html += '<div class="ms-imp-note">No OEM quote files' + (__msImp.idx && __msImp.idx.format === 1 ? ' — the engine\'s list is from the older CA pack; run the CA pack again' : '') + '.</div>';
+    else {
+        html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpQuotes"><thead><tr><th>Quote</th><th>Date</th><th>Client</th><th class="num">Total</th><th>Contract</th><th>File</th></tr></thead><tbody>';
+        list.forEach(function (it) {
+            var q = it.q, st;
+            if (it.state === 'app') st = __msImpStateHtml('app', 'on the contract', 'The contract names the quote and pins its file') + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[it.ci], null)) + '</span>';
+            else if (it.state === 'contract') st = __msImpStateHtml('cycle', 'goes on a contract', 'By ' + it.how) + ' <span class="ms-imp-note">→ ' + __msImpEsc(__msImpContractLabel(contracts[it.ci], null)) + ' <span title="' + __msImpEsc(it.how) + '">(' + __msImpEsc(it.how) + ')</span>' + (it.links.length ? ' — see Document links' : '') + '</span>' + (it.how === 'the client and the date' ? ' <span class="ms-imp-warn">(check)</span>' : '');
+            else if (it.state === 'skip') st = __msImpStateHtml('skip', 'left out', it.why) + ' <span class="ms-imp-note">' + __msImpEsc(it.why) + '</span>';
+            else if (it.state === 'extra') st = __msImpStateHtml('opt', 'another quote on the contract', it.why) + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[it.ci], null)) + ' — ' + __msImpEsc(it.why) + '</span>';
+            else st = __msImpStateHtml('skip', 'no contract found', it.why) + ' <span class="ms-imp-note">' + __msImpEsc(it.why) + '</span>';
+            html += '<tr data-id="' + it.id + '"><td style="font-family:monospace; font-size:11.5px; white-space:nowrap;">' + __msImpEsc(q.quote || '(no number)') + '</td><td style="white-space:nowrap;">' + __msImpDate(q.date) + (q.expiry ? ' <span class="ms-imp-note">to ' + __msImpEsc(__msImpDate(q.expiry)) + '</span>' : '') + '</td>'
+                + '<td class="wrap" style="min-width:140px;">' + __msImpEsc(q.end_client || q.client_token || '') + '</td><td class="num">' + ((q.total !== null && q.total !== undefined) ? __msImpMoney(q.total, q.currency) : '<span class="ms-imp-note">—</span>') + '</td>'
+                + '<td class="wrap" style="min-width:220px;">' + st + '</td><td>' + __msImpPin(__msImpAbs(q.rel), q.rel) + ' <span class="ms-imp-note">' + __msImpEsc(q.name) + '</span></td></tr>';
+        });
+        html += '</tbody></table></div>';
+    }
+    return html + '</div>';
+}
+// =================== /Phase 8FF — Purchase orders from the files ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
