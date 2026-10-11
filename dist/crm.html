@@ -42119,6 +42119,26 @@ function __msConMasterListHtml(list) {
 }
 // ===== /Phase 8FE =====
 
+// ===== Phase 8FE.1 — Consultants: Export follows the register =====
+// What Export writes: the payments the register lists right now. The register is drawn again first, so the list
+// is the current data under the current filters. When the year box, Period, Status, Consultant or the search narrow
+// it, exactly the payments it lists (in its order, newest first); otherwise every payment in stored order, as before.
+// tag (for the file name): 'FY25-26' when only a year narrows, 'FY25-26_selection' when a year and something else do,
+// 'selection' when only other filters narrow, '' otherwise.
+function __msConExportSelection() {
+    if (typeof renderConsultantPayments === 'function' && document.getElementById('conPaymentsBody')) renderConsultantPayments();
+    var last = __msConFilterLast;
+    if (!last || !last.narrowed || !Array.isArray(last.rows)) return { list: (consultantPayments || []).slice(), tag: '' };
+    var fy = document.getElementById('conFyFilter');
+    var fyv = fy ? fy.value : 'ALL';
+    var search = document.getElementById('conSearch');
+    var others = ['conStatusFilter', 'conConsultantFilter', 'conPeriodFilter'].some(function (id) { var e = document.getElementById(id); return !!(e && e.value && e.value !== 'ALL'); })
+        || !!(search && String(search.value || '').trim());
+    var year = (fyv && fyv !== 'ALL') ? fyv.replace(/\s+/g, '') : '';
+    return { list: last.rows.slice(), tag: year ? (others ? year + '_selection' : year) : 'selection' };
+}
+// ===== /Phase 8FE.1 =====
+
 // ----- Payment Register render -----
 function renderConsultantPayments() {
     populateConsultantFilterDropdown();
@@ -42284,7 +42304,12 @@ function openConsultantPaymentForm(id, presetConsultantId) {
     const dupBtn = document.getElementById('conPayDupBtn');
     const val = (k, v) => { const el = document.getElementById(k); if (el) el.value = (v === null || v === undefined) ? '' : v; };
 
-    populateConPayConsultantDropdown();
+    // 8FE.1 — the consultant the payment is for is offered even when archived (the box lists an archived consultant
+    // only when it is the one chosen, and it is filled here, before the choice is set below); the box starts with no
+    // consultant left over from the last form, so a new payment never lists an archived one
+    const _cpSel = document.getElementById('conPayConsultantId');
+    if (_cpSel) _cpSel.value = '';
+    populateConPayConsultantDropdown(id ? (((consultantPayments.find(p => p.id === id) || {}).consultantId) || '') : (presetConsultantId || ''));
 
     if (id) {
         const rec = consultantPayments.find(p => p.id === id);
@@ -43035,11 +43060,13 @@ function exportConsultantPayments() {
         alert('Excel export library not loaded.');
         return;
     }
-    if (consultantPayments.length === 0) {
-        alert('No payments to export.');
+    // 8FE.1 — Export follows the register: the payments it lists when anything narrows it; else every payment
+    const sel = __msConExportSelection();
+    if (sel.list.length === 0) {
+        alert(consultantPayments.length === 0 ? 'No payments to export.' : 'No payments match the current filters — nothing to export.');
         return;
     }
-    const rows = consultantPayments.map(p => {
+    const rows = sel.list.map(p => {
         const c = getConsultantById(p.consultantId);
         return {
             'Payment #': p.paymentNumber || '',
@@ -43069,7 +43096,7 @@ function exportConsultantPayments() {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Consultant Payments');
-    const fname = `Consultant_Payments_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const fname = `Consultant_Payments_${sel.tag ? sel.tag + '_' : ''}${new Date().toISOString().split('T')[0]}.xlsx`;   // 8FE.1 — the year, or "selection"
     XLSX.writeFile(wb, fname);
 }
 
