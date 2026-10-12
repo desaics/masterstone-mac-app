@@ -44390,6 +44390,18 @@ async function generateCaExport() {
         _caExportApplyFormatting(wsPayments, 'payments', paymentsRows.length);
         XLSX.utils.book_append_sheet(wb, wsPayments, 'Payments');
 
+        // 8FG — Challans: the TDS / GST / professional-tax challans deposited in the range, from the CA pack engine's list (Mac only)
+        let chNote = '';
+        try {
+            const ch = (typeof __msExpCaChallansRows === 'function') ? await __msExpCaChallansRows(range.start, range.end) : null;
+            if (ch) {
+                const wsCh = XLSX.utils.json_to_sheet(ch.rows.length ? ch.rows : [{ 'SR. NO': '', 'TYPE': 'No challan deposited in this period', 'DEPOSIT DATE': '' }], { header: ch.headers });
+                wsCh['!cols'] = ch.widths.map(w => ({ wch: w }));
+                XLSX.utils.book_append_sheet(wb, wsCh, 'Challans');
+                chNote = ' · Challans: ' + ch.rows.length + ' row' + (ch.rows.length === 1 ? '' : 's');
+            } else chNote = ' · no Challans sheet (the CA pack has not listed the challans on this Mac)';
+        } catch (e) { chNote = ' · no Challans sheet (' + String((e && e.message) || e) + ')'; }
+
         // Filename
         const [yr, mo] = monthStr.split('-').map(Number);
         const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -44404,7 +44416,7 @@ async function generateCaExport() {
 
         XLSX.writeFile(wb, fname);
 
-        setStatus(`Generated. Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows.`, false);
+        setStatus(`Generated. Sales: ${sales.rows.length} rows · Payments: ${paymentsRows.length} rows${chNote}.`, false);
         // 8ER — "Show in Downloads" / "Open" next to this line once the file is saved.
         if (typeof window.__msDlLinksInto === 'function') window.__msDlLinksInto(statusEl, fname);
         // 8BD.1 — clear download confirmation via the standard toast (the inline
@@ -49081,11 +49093,12 @@ var __msExp = {
     fys: {},                         // start year -> { v, fy, lines: [...] }
     meta: { v: 1, caPackPath: '', months: {}, rules: {}, extraHeads: [], orphans: {}, lastCheck: '', bills: {} },   // 8FB: bills — your placements
     bills: { idx: null, at: 0, error: '' }, billsRev: 0, linesRev: 0, picker: null,   // 8FB: the engine's list of bills (not saved); counters for your placements and the lines; the open picker
+    ch: { idx: null, at: 0, error: '' },   // 8FG: the engine's list of challans (not saved)
     dirty: {},                       // setting key -> true
     saving: false, saveError: '', saveTimer: null, retryTimer: null,
     check: { running: false, status: '', detail: '', at: 0, path: '' },
     missing: {}, probing: false, probeAgain: false,   // 8EZ: bill key (line id:index) -> the path looked at, for bills not on the Mac; not saved
-    ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false, billsOpen: false, billsTab: 'check', billsLimit: 40 },
+    ui: { fy: null, acct: 'ALL', q: '', group: 'exp', head: '', month: '', limit: MS_EXP_LIST_STEP, rulesOpen: false, billsOpen: false, billsTab: 'check', billsLimit: 40, taxOpen: true },   // 8FG: taxOpen
     chart: null, editing: null
 };
 
@@ -49131,7 +49144,7 @@ function __msExpGroupOf(ln) { var h = __msExpHead(__msExpEffHead(ln)); return h 
 function __msExpSigned(ln) { return ln.dc === 'C' ? -ln.m : ln.m; }
 function __msExpGst(ln) {
     var g = 0;
-    __msExpBills(ln).forEach(function (b) { g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });   // 8FB
+    __msExpBills(ln).forEach(function (b) { if (b.k === 'ch') return; g += (Number(b.cgst) || 0) + (Number(b.sgst) || 0) + (Number(b.igst) || 0); });   // 8FB; 8FG: a challan is not input credit
     return Math.round(g * 100) / 100;
 }
 // 8EX: "Interest — EMI 42 of 84 (₹41,175)" for a part of a split loan EMI; '' otherwise.
@@ -49371,6 +49384,7 @@ function __msExpFromFile(ym, source, l) {
                       igst: Number(b.igst) || 0, total: Number(b.total) || 0 };
             if (b.guessed) o.guessed = true;
             if (MS_EXP_BILLS_CONF.indexOf(b.conf) !== -1) { o.c = b.conf; o.w = String(b.how || '').slice(0, 40); }   // 8FB: placed by app_bills.py
+            if (b.kind === 'challan') { o.k = 'ch'; o.ch = __msExpChFacts(b.ch); }                                   // 8FG: a tax challan placed by app_challans.py
             return o;
         });
     }
@@ -49508,6 +49522,7 @@ async function __msExpCheck(opts) {
                 waiting: result.waiting, bad: result.bad, saved: !pending || savedLines });
         }
         try { await __msExpReadBillsIndex(root); } catch (e) {}   // 8FB: the engine's list of bills (not placed, to check)
+        try { await __msExpReadChallansIndex(root); } catch (e) {}   // 8FG: the engine's list of challans
         __msExpToastResult(result, !!opts.manual, !pending || savedLines);
         __msExpProbeBills();                               // 8EZ: in the background — are the bills on the Mac?
         return result;
@@ -50009,6 +50024,7 @@ function renderExpensesPage() {
         + '<div style="font-size:11.5px; color:var(--text-dim); margin-bottom:8px;">Click a month to see its entries. The table above has every figure.</div>'
         + '<div id="msExpChartBox" style="position:relative; height:210px;"><canvas id="msExpChart" aria-label="Monthly totals" role="img"></canvas></div></div>';
     html += __msExpBillsHtml(fy);                          // 8FB: to check / not placed / placed by you
+    html += __msExpTaxHtml(fy);                            // 8FG: taxes paid — the challans by month
     html += __msExpListHtml(fy, lines);
     html += __msExpRulesHtml();
     root.innerHTML = html;
@@ -51024,8 +51040,16 @@ function __msExpBillRecOk(b, path) {
     var f = path || String(b.file || '');
     if (!__msExpBillPathOk(f)) return null;
     var n = function (v) { v = Number(v); return isFinite(v) ? Math.round(v * 100) / 100 : 0; };
-    return { file: f, vendor: String(b.vendor || '').slice(0, 80), gstin: String(b.gstin || '').slice(0, 20), no: String(b.no || '').slice(0, 60),
-             date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || '')) ? String(b.date) : '', taxable: n(b.taxable), cgst: n(b.cgst), sgst: n(b.sgst), igst: n(b.igst), total: n(b.total) };
+    var o = { file: f, vendor: String(b.vendor || '').slice(0, 80), gstin: String(b.gstin || '').slice(0, 20), no: String(b.no || '').slice(0, 60),
+              date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || '')) ? String(b.date) : '', taxable: n(b.taxable), cgst: n(b.cgst), sgst: n(b.sgst), igst: n(b.igst), total: n(b.total) };
+    if (b.k === 'ch' || b.kind === 'challan') { o.k = 'ch'; o.ch = __msExpChFacts(b.ch); }   // 8FG: a tax challan
+    return o;
+}
+// 8FG: the challan facts kept with a line's record: kind (tds / gst / ptec / ptrc), nature (94J…), bucket, the month it is for, the year, the engine's id
+function __msExpChFacts(ch) {
+    ch = (ch && typeof ch === 'object') ? ch : {};
+    return { k: String(ch.k || '').slice(0, 6), n: String(ch.n || '').slice(0, 8), b: String(ch.b || '').slice(0, 16), fm: /^\d{4}-\d{2}$/.test(String(ch.fm || '')) ? String(ch.fm) : '',
+             fy: String(ch.fy || '').slice(0, 12), id: String(ch.id || '').slice(0, 24) };
 }
 // Your placements, as stored: path -> { l, b, at }; anything odd is left out.
 function __msExpBillsMetaOk(x) {
@@ -51101,9 +51125,10 @@ function __msExpJsArg(s) { return __msExpEsc(String(s == null ? '' : s).replace(
 function __msExpBillConfText(b) {
     if (!b) return '';
     if (b.y) return 'Placed by you';
-    if (b.c === 'sure') return 'Placed by the CA pack engine — sure (by ' + __msExpBillHow(b.w) + ')';
-    if (b.c === 'likely') return 'Placed by the CA pack engine — likely (by ' + __msExpBillHow(b.w) + '). Keep or move it under Bills below.';
-    if (b.c === 'check') return 'Placed by the CA pack engine — TO CHECK (by ' + __msExpBillHow(b.w) + '). Keep or move it under Bills below.';
+    var how = (b.k === 'ch' && typeof __msExpChHow === 'function') ? __msExpChHow(b.w) : __msExpBillHow(b.w);   // 8FG: a challan's reasons in its own words
+    if (b.c === 'sure') return 'Placed by the CA pack engine — sure (by ' + how + ')';
+    if (b.c === 'likely') return 'Placed by the CA pack engine — likely (by ' + how + '). Keep or move it under Bills below.';
+    if (b.c === 'check') return 'Placed by the CA pack engine — TO CHECK (by ' + how + '). Keep or move it under Bills below.';
     if (b.guessed) return 'Matched to this payment by amount and date, not read off the bill';
     return '';
 }
@@ -51167,6 +51192,9 @@ function __msExpBillRecFor(path) {
         var x = idx.unplaced[u];
         return __msExpBillRecOk({ file: path, vendor: x.vendor, date: x.date, total: x.total }, path);
     }
+    var ch = __msExp.ch && __msExp.ch.idx ? __msExp.ch.idx.byFile[path] : null;   // 8FG: a challan from the engine's list
+    if (ch) return __msExpBillRecOk({ file: path, vendor: ch.label + (ch.fm ? ' for ' + __msExpShortMonth(ch.fm) : ''), no: ch.cin || ch.cpin, date: ch.date, total: ch.total, k: 'ch',
+                                      ch: { k: ch.kind, n: ch.nature, b: ch.bucket, fm: ch.fm, fy: ch.forFy === null || ch.forFy === undefined ? '' : __msExpFyLabel(ch.forFy), id: ch.id } }, path);
     return __msExpBillRecOk({ file: path }, path);
 }
 
@@ -51286,6 +51314,7 @@ function __msExpBillLineText(ln) {
 }
 function __msExpBillCellHtml(path, rec) {
     var bits = [];
+    if (rec && rec.k === 'ch') bits.push('challan');   // 8FG
     if (rec && rec.vendor) bits.push(rec.vendor);
     if (rec && rec.total) bits.push(__msExpRupees(rec.total));
     if (rec && rec.date) bits.push(typeof formatDateReadable === 'function' ? formatDateReadable(rec.date) : rec.date);
@@ -51310,7 +51339,7 @@ function __msExpBillsHtml(fy) {
         + (R.check.length ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; background:var(--warning); color:#000; margin-left:6px;">' + R.check.length + ' to check</span>' : '')
         + (R.unplaced.length ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--glass-border); color:var(--text-dim); margin-left:4px;">' + R.unplaced.length + ' not placed</span>' : '')
         + '</a>'
-        + '<span style="font-size:11.5px; color:var(--text-dim); margin-left:8px;">' + __msExpEsc(summary.join(' · ') || 'The CA pack engine pins each bill in Files/Expenses to the payment it was paid with.') + '</span>';
+        + '<span style="font-size:11.5px; color:var(--text-dim); margin-left:8px;">' + __msExpEsc(summary.join(' · ') || 'The CA pack engine pins each bill in Files/Expenses, and each challan in Files/TDS & GST Challans, to the payment it was paid with.') + '</span>';
     if (S.bills.error) html += '<div style="margin-top:6px; font-size:12px; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msExpEsc(S.bills.error) + '</div>';
     if (!ui.billsOpen) return html + '</div>';
     var tabBtn = function (id, label, n) {
@@ -54063,6 +54092,314 @@ function __msImpQuotesHtml(P) {
     return html + '</div>';
 }
 // =================== /Phase 8FF — Purchase orders from the files ===================
+
+// =================== Phase 8FG — TDS, GST and professional-tax challans on the Expenses page (12 Oct 2026) ===================
+// The CA pack engine (app_challans.py) reads every challan in Files/TDS & GST Challans — TDS (94J
+// consultants, 92B salaries, 94T partners), GST, PTEC and PTRC — and places each on the statement line
+// it was paid with. A placed challan reaches its line exactly as a bill does (app_expenses carries a
+// bill-shaped record with kind 'challan'): the paperclip, Keep / Not this one / Place on… / Unpin, your
+// decision in meta.bills, keyed by the file path. This block adds the Taxes paid panel for the year
+// shown — months down the side; TDS consultants / salaries / partners, GST, professional tax across —
+// with what the app itself recorded as TDS deducted that month beside the consultants' column, and the
+// Challans sheet of the CA export. The engine's list (_engine/app_challans/index.json) is read with
+// each look in the CA pack and never saved; nothing here writes into the CA pack or into Files.
+var MS_EXP_CH_DIR = '/_engine/app_challans';
+var MS_EXP_CH_MAX = 5000;
+var MS_EXP_CH_COLS = [
+    { id: 'consultants', label: 'TDS consultants', sub: '94J (and other sections)', buckets: { consultants: 1, contractors: 1, commission: 1, rent: 1, interest: 1, foreign: 1, purchases: 1, other: 1 } },
+    { id: 'salaries', label: 'TDS salaries', sub: '92B', buckets: { salaries: 1 } },
+    { id: 'partners', label: 'TDS partners', sub: '94T · 1067', buckets: { partners: 1 } },
+    { id: 'gst', label: 'GST', sub: 'cash paid, by the month it is for', buckets: { gst: 1 } },
+    { id: 'pt', label: 'Professional tax', sub: 'PTEC · PTRC', buckets: { ptec: 1, ptrc: 1 } }
+];
+var MS_EXP_CH_TAGS = { penalty: 'penalty', short: 'short deduction', interest: 'interest', notice: 'notice', upfront: 'upfront', brandbucket: 'Brandbucket' };
+
+// ---- the engine's list ----------------------------------------------------------------
+function __msExpChNum(v) { v = Number(v); return isFinite(v) ? Math.round(v * 100) / 100 : null; }
+function __msExpChStr(v, n) { return String(v == null ? '' : v).slice(0, n || 80); }
+function __msExpChRec(c) {
+    if (!c || typeof c !== 'object' || !__msExpBillPathOk(c.file)) return null;
+    var ym = /^\d{4}-\d{2}$/, iso = /^\d{4}-\d{2}-\d{2}$/;
+    var a = (c.amounts && typeof c.amounts === 'object') ? c.amounts : {};
+    var amounts = {};
+    ['tax', 'surcharge', 'cess', 'interest', 'penalty', 'fee', 'others', 'total'].forEach(function (k) { amounts[k] = __msExpChNum(a[k]); });
+    var gst = null;
+    if (c.gst && typeof c.gst === 'object') {
+        gst = {};
+        ['cgst', 'sgst', 'igst', 'cess'].forEach(function (h) { var r = c.gst[h]; if (r && typeof r === 'object') gst[h] = { tax: __msExpChNum(r.tax), interest: __msExpChNum(r.interest), penalty: __msExpChNum(r.penalty), total: __msExpChNum(r.total) }; });
+    }
+    var line = null;
+    if (c.line && typeof c.line === 'object' && MS_EXP_ID_RE.test(String(c.line.line || ''))) {
+        line = { line: String(c.line.line), ym: ym.test(String(c.line.ym || '')) ? String(c.line.ym) : '', conf: MS_EXP_BILLS_CONF.indexOf(c.line.conf) !== -1 ? c.line.conf : 'check',
+                 how: __msExpChStr(c.line.how, 60), d: iso.test(String(c.line.d || '')) ? String(c.line.d) : '', m: __msExpChNum(c.line.m), acct: __msExpChStr(c.line.acct, 20), t: __msExpChStr(c.line.t, 80) };
+    }
+    var fyOf = function (v) { var m = /^FY (\d{4})-\d{2}$/.exec(String(v || '')); return m ? parseInt(m[1], 10) : null; };
+    return { id: __msExpChStr(c.id, 24) || ('f:' + c.file), file: String(c.file), name: __msExpBillName(c.file), fy: parseInt(c.fy, 10) || __msExpBillFy(c.file, c.date), read: !!c.read, readBy: __msExpChStr(c.read_by, 60),
+             why: __msExpChStr(c.why, 60), layout: __msExpChStr(c.layout, 20), kind: __msExpChStr(c.kind, 6), nature: __msExpChStr(c.nature, 8), natureDesc: __msExpChStr(c.nature_desc, 160),
+             bucket: __msExpChStr(c.bucket, 16), label: __msExpChStr(c.label, 40) || 'challan', tags: (Array.isArray(c.tags) ? c.tags : []).map(function (t) { return __msExpChStr(t, 16); }).slice(0, 6),
+             fm: ym.test(String(c['for'] || '')) ? String(c['for']) : '', fms: (Array.isArray(c.for_months) ? c.for_months : []).filter(function (x) { return ym.test(String(x)); }).slice(0, 12),
+             forFy: fyOf(c.for_fy), forSrc: __msExpChStr(c.for_src, 10), date: iso.test(String(c.date || '')) ? String(c.date) : '', total: __msExpChNum(c.total), amounts: amounts, gst: gst,
+             cin: __msExpChStr(c.cin, 40), cpin: __msExpChStr(c.cpin, 20), bsr: __msExpChStr(c.bsr, 10), serial: __msExpChStr(c.serial, 10), ref: __msExpChStr(c.ref, 40), bank: __msExpChStr(c.bank, 40),
+             mode: __msExpChStr(c.mode, 40), ay: __msExpChStr(c.ay, 10), payer: __msExpChStr(c.payer, 40), note: __msExpChStr(c.note, 200),
+             warnings: (Array.isArray(c.warnings) ? c.warnings : []).map(function (w) { return __msExpChStr(w, 160); }).slice(0, 6), line: line };
+}
+function __msExpChIndexOk(idx) {
+    if (!idx || idx.kind !== 'masterstone-challans-index') return null;
+    var out = { made: __msExpChStr(idx.made, 30), n: Number(idx.challans_n) || 0, placed: Number(idx.placed) || 0, unread: Number(idx.unread) || 0, challans: [], byFile: {}, why: {} };
+    (Array.isArray(idx.challans) ? idx.challans : []).slice(0, MS_EXP_CH_MAX).forEach(function (c) {
+        var r = __msExpChRec(c);
+        if (r && !out.byFile[r.file]) { out.challans.push(r); out.byFile[r.file] = r; }
+    });
+    (Array.isArray(idx.unplaced) ? idx.unplaced : []).slice(0, MS_EXP_CH_MAX).forEach(function (u) {
+        if (u && typeof u === 'object' && __msExpBillPathOk(u.file)) out.why[String(u.file)] = { why: __msExpChStr(u.why, 200), near: (Array.isArray(u.near) ? u.near : []).slice(0, 3).map(function (x) {
+            return x && typeof x === 'object' ? { line: MS_EXP_ID_RE.test(String(x.line || '')) ? String(x.line) : '', d: __msExpChStr(x.d, 10), m: Number(x.m) || 0, t: __msExpChStr(x.t, 80) } : null; }).filter(Boolean) };
+    });
+    return out;
+}
+function __msExpChState() {
+    if (!__msExp.ch || typeof __msExp.ch !== 'object') __msExp.ch = { idx: null, at: 0, error: '' };
+    return __msExp.ch;
+}
+// Read the engine's list; nothing is saved. Called after each look in the CA pack (and by the CA export).
+async function __msExpReadChallansIndex(root) {
+    var S = __msExpChState();
+    try {
+        var r = await __msExpReadJson(root + MS_EXP_CH_DIR + '/index.json');
+        if (!r.ok) { S.idx = null; S.error = r.missing ? '' : ('The engine\'s list of challans ' + r.error + '.'); S.at = Date.now(); return; }
+        var idx = __msExpChIndexOk(r.data);
+        if (!idx) { S.idx = null; S.error = 'The engine\'s list of challans is not in the expected shape.'; S.at = Date.now(); return; }
+        S.idx = idx; S.error = ''; S.at = Date.now();
+    } catch (e) {
+        S.idx = null; S.error = String((e && e.message) || e); S.at = Date.now();
+        __msExpLog('WARN', 'the engine\'s list of challans could not be read', { error: S.error });
+    }
+}
+// The list for the CA export: read now if it has not been read in the last two minutes (the Expenses page may not have been opened).
+async function __msExpChEnsureIndex() {
+    var S = __msExpChState();
+    if (!__msExpTauri()) return S.idx;
+    if (S.idx && Date.now() - S.at < 120000) return S.idx;
+    var root = __msExp.check.path || await __msExpCaPackPath();
+    if (!root) return S.idx;
+    await __msExpReadChallansIndex(root);
+    return S.idx;
+}
+
+// ---- which year, which month, which line ---------------------------------------------------
+// The year a challan counts in: the month it is for (TDS for March 2025 is FY 2024-25's, though
+// deposited in April), the year a PTEC / PTRC receipt covers, else the deposit's, else the folder's.
+function __msExpChFy(c) {
+    var fy = c.fm ? __msExpFyOf(c.fm + '-01') : ((c.forFy !== null && c.forFy !== undefined) ? c.forFy : (c.date ? __msExpFyOf(c.date) : c.fy));
+    // a year the page has no entries for (an old year's PTEC paid in arrears): the year it was paid, with its own year as a tag
+    if (c.date && __msExpFyOf(c.date) !== fy && !(__msExp.fys[fy] && __msExp.fys[fy].lines.length)) return __msExpFyOf(c.date);
+    return fy;
+}
+// The month row it sits in: the month it is for; a whole-year receipt (PTEC, a short-deduction top-up) in the month it was paid.
+function __msExpChRow(c) { return c.fm || (c.date ? c.date.slice(0, 7) : ''); }
+function __msExpChCol(c) { for (var i = 0; i < MS_EXP_CH_COLS.length; i++) if (MS_EXP_CH_COLS[i].buckets[c.bucket]) return MS_EXP_CH_COLS[i].id; return c.kind === 'tds' ? 'consultants' : ''; }
+// The line a challan sits on now: yours (meta.bills), else the engine's unless you said it is not that one or the line left the page.
+function __msExpChLine(c) {
+    var own = __msExpOwn()[c.file], ix = __msExpOwnIndex();
+    if (own && own.l && !ix.gone[c.file]) { var f = __msExpFind(own.l); if (f) return { ln: f.ln, by: 'you', conf: '' }; }
+    if (own && !own.l && c.line && (!own.n || own.n === c.line.line)) return null;
+    if (c.line) { var g = __msExpFind(c.line.line); if (g) return { ln: g.ln, by: 'engine', conf: c.line.conf, how: c.line.how }; }
+    return null;
+}
+// What the app itself recorded as TDS deducted, by the month of payment: consultant payments (paid date,
+// else the invoice date) and the OEM bills of domestic OEMs (payment date, else the bill date). ym -> { amount, n, who: [...] }
+function __msExpTdsInApp(fy) {
+    var out = {};
+    var add = function (ym, amt, who) {
+        if (!/^\d{4}-\d{2}$/.test(ym) || __msExpFyOf(ym + '-01') !== fy || !(amt > 0)) return;
+        if (!out[ym]) out[ym] = { amount: 0, n: 0, who: [] };
+        out[ym].amount = Math.round((out[ym].amount + amt) * 100) / 100; out[ym].n++;
+        if (out[ym].who.length < 8) out[ym].who.push(who + ' ' + __msExpRupees(amt));
+    };
+    var names = {};
+    if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (k) { if (k && k.id) names[k.id] = k.name || k.displayName || ''; });
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) {
+        if (!p || p.tdsAmount === null || p.tdsAmount === undefined || p.tdsAmount === '') return;
+        var d = String(p.paidDate || p.invoiceDate || '');
+        add(d.slice(0, 7), Number(p.tdsAmount) || 0, names[p.consultantId] || 'consultant');
+    });
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c) {
+        (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (y, yi) {
+            (y && Array.isArray(y.apInvoices) ? y.apInvoices : []).forEach(function (ap) {
+                if (!ap || ap.tdsAmount === null || ap.tdsAmount === undefined || ap.tdsAmount === '') return;
+                var t = 0;
+                if (typeof _caExportComputeApAmounts === 'function') { try { t = Number(_caExportComputeApAmounts(c, y, yi, ap).tds) || 0; } catch (e) { t = 0; } }
+                else t = Number(ap.tdsAmount) || 0;
+                var d = String(ap.payDate || ap.date || '');
+                add(d.slice(0, 7), t, (c.oem || c.product || 'OEM bill') + (ap.invNo ? ' ' + ap.invNo : ''));
+            });
+        });
+    });
+    return out;
+}
+function __msExpChForFy(fy) {
+    var S = __msExpChState();
+    return S.idx ? S.idx.challans.filter(function (c) { return __msExpChFy(c) === fy; }) : [];
+}
+
+// ---- the panel -----------------------------------------------------------------------------
+function __msExpChDate(d) { return d ? (typeof formatDateReadable === 'function' ? formatDateReadable(d) : d) : ''; }
+// "number+amount+date" -> "the challan's number in the bank text, the amount, the date" (the engine's reasons, in words)
+function __msExpChHow(w) {
+    var words = { number: 'the challan\'s number in the bank text', amount: 'the amount', charge: 'plus a small bank or gateway charge', fee: 'plus a card fee',
+                  together: 'the amount, together with another challan deposited that day', date: 'the date', text: 'the bank text', remark: 'your remark', 'remark differs': 'though your remark names another tax', head: 'the entry\'s head' };
+    return String(w || '').split('+').map(function (k) { return words[k] || k; }).filter(Boolean).join(', ').replace(', plus', ' plus') || 'nothing in particular';
+}
+function __msExpChMark(c, L) {
+    if (!L) return '<span style="font-size:10px; color:var(--warning); font-weight:700;" title="Not on any payment yet">no line</span>';
+    if (L.by === 'you') return '<i class="fas fa-check" style="font-size:8px; color:var(--success);" title="On a payment you chose"></i>';
+    if (L.conf === 'check') return '<span style="font-size:9px; color:var(--warning); font-weight:700;" title="The engine put it on a payment but is not sure — see Bills, To check">?</span>';
+    if (L.conf === 'likely') return '<span style="font-size:9px; color:var(--text-dim);" title="Placed by the engine — likely">?</span>';
+    return '';
+}
+function __msExpChTagsHtml(c) {
+    var out = [];
+    c.tags.forEach(function (t) { if (MS_EXP_CH_TAGS[t]) out.push(MS_EXP_CH_TAGS[t]); });
+    if (c.fms.length > 1) out.push(__msExpShortMonth(c.fms[0]) + ' – ' + __msExpShortMonth(c.fms[c.fms.length - 1]));
+    if (c.forFy !== null && c.forFy !== undefined && !c.fm) out.push(__msExpFyShort(c.forFy));
+    if (c.forSrc === 'deposit') out.push('month from the deposit date');
+    if (c.kind === 'ptec' || c.kind === 'ptrc') { if (c.payer) out.push(c.payer); }
+    else if (c.nature && c.kind === 'tds') out.push(c.nature);
+    return out.length ? '<div style="font-size:10px; color:var(--text-dim); white-space:normal;">' + __msExpEsc(out.join(' · ')) + '</div>' : '';
+}
+function __msExpChCellHtml(c) {
+    var L = __msExpChLine(c), p = __msExpJsArg(c.file);
+    var title = c.name + (c.date ? ' · deposited ' + __msExpChDate(c.date) : '') + (c.cin ? ' · CIN ' + c.cin : '') + (c.bank ? ' · ' + c.bank : '') + (c.mode ? ' · ' + c.mode : '')
+        + (L ? ' · on ' + __msExpChDate(L.ln.d) + ' · ' + __msExpAcctLabel(L.ln.a) + ' · ' + __msExpRupees(L.ln.m) + (L.by === 'engine' ? ' (' + L.conf + ', by ' + __msExpChHow(L.how) + ')' : ' (placed by you)') : ' · not on any payment')
+        + (c.readBy && c.readBy !== 'engine' ? ' · figures read by ' + c.readBy : '');
+    var warn = c.warnings.length ? ' <i class="fas fa-exclamation-triangle" style="font-size:9px; color:var(--warning);" title="' + __msExpEsc(c.warnings.join('; ')) + '"></i>' : '';
+    var extra = (c.amounts.interest || c.amounts.penalty || c.amounts.fee) ? '<div style="font-size:10px; color:var(--warning);">incl. ' + [c.amounts.interest ? 'interest ' + __msExpRupees(c.amounts.interest) : '', c.amounts.penalty ? 'penalty ' + __msExpRupees(c.amounts.penalty) : '', c.amounts.fee ? 'fee ' + __msExpRupees(c.amounts.fee) : ''].filter(Boolean).join(', ') + '</div>' : '';
+    var act = L ? '' : ' <a href="#" onclick="__msExpPlacePicker(\'' + p + '\'); return false;" style="font-size:10px; color:var(--accent-cyan);" title="Pick the payment it was paid with">Place on…</a>';
+    return '<div class="msExpChItem" data-file="' + __msExpEsc(c.file) + '" style="margin:1px 0; white-space:nowrap;">'
+        + '<a href="#" onclick="__msExpOpenBillFile(\'' + p + '\'); return false;" style="color:var(--accent-cyan); font-variant-numeric:tabular-nums;" title="Open the challan: ' + __msExpEsc(title) + '"><i class="fas fa-paperclip" style="font-size:10px;"></i> ' + __msExpRupees(c.total || 0) + '</a>'
+        + ' <span style="font-size:10.5px; color:var(--text-dim);">' + __msExpEsc(c.date ? __msExpChDate(c.date).replace(/ \d{4}$/, '') : '') + '</span> ' + __msExpChMark(c, L) + warn + act + extra + __msExpChTagsHtml(c) + '</div>';
+}
+// The app's TDS for a month beside the consultants' column. `months` are the months the row's challans cover (a challan named
+// for two months covers both; its row is the last of them); `later` names the row a challan covering this month sits in.
+function __msExpChAppHtml(ym, app, dep, hasChallan, months, later) {
+    var a = null;
+    (months && months.length ? months : [ym]).forEach(function (m) { if (app[m]) { a = a || { amount: 0, who: [] }; a.amount = Math.round((a.amount + app[m].amount) * 100) / 100; a.who = a.who.concat(app[m].who); } });
+    if (later) return a ? '<div style="font-size:10px; color:var(--text-dim);" title="' + __msExpEsc(a.who.join(', ')) + '">in the app ' + __msExpRupees(a.amount) + ' · in the challan under ' + __msExpEsc(__msExpShortMonth(later)) + '</div>' : '';
+    if (!a && !hasChallan) return '';
+    var now = new Date(), cur = now.getFullYear() + '-' + (now.getMonth() < 9 ? '0' : '') + (now.getMonth() + 1);
+    var prev = now.getMonth() === 0 ? (now.getFullYear() - 1) + '-12' : now.getFullYear() + '-' + (now.getMonth() < 10 ? '0' : '') + now.getMonth();
+    if (!a) return '<div style="font-size:10px; color:var(--text-dim);" title="No consultant payment or OEM bill with TDS is recorded in the app for this month">nothing recorded in the app</div>';
+    var who = a.who.join(', ');
+    if (!hasChallan) {
+        var march = ym.slice(5) === '03';                      // March's TDS is due by 30 April; the other months' by the 7th of the next
+        if (ym >= cur || (ym === prev && (now.getDate() <= 7 || march))) return '<div style="font-size:10px; color:var(--text-dim);" title="' + __msExpEsc(who) + '">in the app ' + __msExpRupees(a.amount) + ' · challan due by ' + (march ? '30 April' : 'the 7th of next month') + '</div>';
+        return '<div style="font-size:10px; color:var(--warning);" title="' + __msExpEsc(who + ' — no challan for this month is filed in Files/TDS & GST Challans') + '">in the app ' + __msExpRupees(a.amount) + ' · no challan filed</div>';
+    }
+    var diff = Math.round((dep - a.amount) * 100) / 100;
+    if (Math.abs(diff) <= 1) return '<div style="font-size:10px; color:var(--success);" title="' + __msExpEsc(who) + '"><i class="fas fa-check" style="font-size:8px;"></i> matches the app (' + __msExpRupees(a.amount) + ')</div>';
+    return '<div style="font-size:10px; color:var(--warning);" title="' + __msExpEsc('The app has ' + who + '; the challan' + (dep ? 's' : '') + ' carry ' + __msExpRupees(dep) + ' of tax') + '">in the app ' + __msExpRupees(a.amount) + ' · ' + (diff > 0 ? 'deposited ' : 'short by ') + __msExpRupees(Math.abs(diff)) + (diff > 0 ? ' more' : '') + '</div>';
+}
+function __msExpTaxHtml(fy) {
+    var S = __msExp, ui = S.ui, C = __msExpChState();
+    if (S.state !== 'ready') return '';
+    var all = __msExpChForFy(fy);
+    if (!all.length && !C.error && !(C.idx && C.idx.n)) return '';
+    var open = ui.taxOpen !== false;
+    var placed = 0, yours = 0, check = 0, unread = 0, noLine = 0;
+    all.forEach(function (c) {
+        if (!c.read) { unread++; return; }
+        var L = __msExpChLine(c);
+        if (!L) noLine++; else { placed++; if (L.by === 'you') yours++; else if (L.conf === 'check') check++; }
+    });
+    var summary = all.length ? (all.length + ' challan' + (all.length === 1 ? '' : 's') + ' · ' + placed + ' on a payment' + (yours ? ' (' + yours + ' placed by you)' : '') + (check ? ' · ' + check + ' to check' : '') + (noLine ? ' · ' + noLine + ' on none' : '') + (unread ? ' · ' + unread + ' not read' : ''))
+        : 'No challan is filed for ' + __msExpFyLabel(fy) + ' in Files/TDS & GST Challans.';
+    var html = '<div class="card" id="msExpTaxes" style="padding:12px 18px; margin-bottom:14px;">'
+        + '<a href="#" onclick="__msExpSetUi(\'taxOpen\', ' + (!open) + '); return false;" style="font-size:13px; font-weight:600; color:var(--text-main);">'
+        + '<i class="fas fa-chevron-' + (open ? 'down' : 'right') + '" style="font-size:10px; margin-right:6px;"></i>Taxes paid, ' + __msExpEsc(__msExpFyLabel(fy))
+        + (check ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; background:var(--warning); color:#000; margin-left:6px;">' + check + ' to check</span>' : '')
+        + (noLine ? ' <span style="font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--glass-border); color:var(--text-dim); margin-left:4px;">' + noLine + ' on no payment</span>' : '')
+        + '</a><span id="msExpTaxSummary" style="font-size:11.5px; color:var(--text-dim); margin-left:8px;">' + __msExpEsc(summary) + '</span>';
+    if (C.error) html += '<div style="margin-top:6px; font-size:12px; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msExpEsc(C.error) + '</div>';
+    if (!open) return html + '</div>';
+    html += '<div style="font-size:11.5px; color:var(--text-dim); margin:8px 0;">The challans in Files/TDS &amp; GST Challans, by the month they are for (TDS for a month is deposited by the 7th of the next; a PTEC receipt or a short-deduction top-up shows in the month it was paid). '
+        + 'Beside the consultants\' column: what the app itself recorded as TDS on consultant payments and domestic OEM bills that month. A figure here changes nothing — open the challan, or place it on its payment under Bills.</div>';
+    if (!all.length) return html + '</div>';
+    var app = __msExpTdsInApp(fy), rows = {};
+    all.forEach(function (c) { if (!c.read) return; var ym = __msExpChRow(c), col = __msExpChCol(c); if (!ym || !col) return; if (!rows[ym]) rows[ym] = {}; (rows[ym][col] = rows[ym][col] || []).push(c); });
+    var tot = {}, extras = 0;
+    MS_EXP_CH_COLS.forEach(function (col) { tot[col.id] = 0; });
+    all.forEach(function (c) { var col = __msExpChCol(c); if (col && c.total) tot[col] += c.total; extras += (c.amounts.interest || 0) + (c.amounts.penalty || 0) + (c.amounts.fee || 0); });
+    html += '<div class="table-scroll-wrap"><table id="msExpTaxTable" style="font-size:12px;"><thead><tr><th style="white-space:nowrap;">Month</th>'
+        + MS_EXP_CH_COLS.map(function (col) { return '<th>' + __msExpEsc(col.label) + (col.sub ? '<div style="font-size:10px; font-weight:400; color:var(--text-dim);">' + __msExpEsc(col.sub) + '</div>' : '') + '</th>'; }).join('') + '</tr></thead><tbody>';
+    var yms = [];
+    for (var i = 0; i < 12; i++) yms.push(__msExpMonthKey(fy, i));
+    var after = Object.keys(rows).filter(function (k) { return yms.indexOf(k) === -1; }).sort();   // a whole-year receipt paid after the year ended
+    yms = yms.concat(after);
+    for (var k = 0; k < yms.length; k++) {
+        var ym = yms[k], r = rows[ym] || {}, hasApp = k < 12 && !!app[ym], late = k >= 12;
+        if (!Object.keys(r).length && !hasApp) continue;
+        html += '<tr><td style="white-space:nowrap; vertical-align:top;"><a href="#" onclick="__msExpSetUi(\'month\', ' + (ui.month === ym ? '\'\'' : '\'' + ym + '\'') + '); return false;" style="color:var(--text-main);' + (ui.month === ym ? ' font-weight:700;' : '') + '" title="' + (late ? 'Paid after the year ended. ' : '') + 'Show this month\'s entries below">' + __msExpEsc(__msExpShortMonth(ym)) + '</a>' + (late ? '<div style="font-size:10px; color:var(--text-dim);">after the year</div>' : '') + '</td>';
+        MS_EXP_CH_COLS.forEach(function (col) {
+            var cs = (r[col.id] || []).slice().sort(function (a, b) { return (a.date || '') < (b.date || '') ? -1 : (a.date || '') > (b.date || '') ? 1 : 0; });
+            var cell = cs.map(__msExpChCellHtml).join('');
+            if (col.id === 'consultants' && !late) {
+                var dep = 0, covered = {}, later = '';
+                cs.forEach(function (c) {
+                    if (c.fm !== ym || !c.read || c.bucket === 'other') return;              // a section the engine does not know stays out of the comparison
+                    dep += (c.amounts.tax !== null ? c.amounts.tax : (c.total || 0));
+                    (c.fms.length ? c.fms : [ym]).forEach(function (m) { covered[m] = true; });
+                });
+                if (!Object.keys(covered).length) all.forEach(function (c) { if (c.read && __msExpChCol(c) === 'consultants' && c.fms.length > 1 && c.fms.indexOf(ym) !== -1 && c.fm !== ym) later = c.fm; });
+                cell += __msExpChAppHtml(ym, app, Math.round(dep * 100) / 100, Object.keys(covered).length > 0, Object.keys(covered).sort(), later);
+            }
+            html += '<td style="vertical-align:top;' + (cs.length ? '' : ' color:var(--text-dim);') + '">' + (cell || '<span style="font-size:11px;">—</span>') + '</td>';
+        });
+        html += '</tr>';
+    }
+    html += '<tr style="font-weight:600;"><td>Year</td>' + MS_EXP_CH_COLS.map(function (col) { return '<td style="font-variant-numeric:tabular-nums;">' + (tot[col.id] ? __msExpRupees(tot[col.id]) : '—') + '</td>'; }).join('') + '</tr>'
+        + '</tbody></table></div>';
+    var sumApp = 0; Object.keys(app).forEach(function (k) { sumApp += app[k].amount; });
+    html += '<div style="font-size:11px; color:var(--text-dim); margin-top:6px;">' + __msExpEsc('Interest, penalty and fees inside these challans: ' + __msExpRupees(extras) + '. TDS recorded in the app this year: ' + __msExpRupees(sumApp) + '.') + '</div>';
+    var oddList = all.filter(function (c) { return c.read && (!__msExpChRow(c) || !__msExpChCol(c)); });
+    if (oddList.length) {
+        html += '<div style="font-size:11.5px; margin-top:8px;"><span style="color:var(--warning);"><i class="fas fa-exclamation-triangle"></i> Read, but not placed in a month:</span> ' + oddList.map(function (c) {
+            var why = (C.idx && C.idx.why[c.file] && C.idx.why[c.file].why) || c.warnings.join('; ') || 'no month or kind could be made out';
+            return '<a href="#" onclick="__msExpOpenBillFile(\'' + __msExpJsArg(c.file) + '\'); return false;" style="color:var(--accent-cyan);">' + __msExpEsc(c.name) + '</a> <span style="color:var(--text-dim);">(' + __msExpEsc(why) + ')</span>';
+        }).join('; ') + '</div>';
+    }
+    var unreadList = all.filter(function (c) { return !c.read; });
+    if (unreadList.length) {
+        html += '<div style="font-size:11.5px; margin-top:8px;"><span style="color:var(--warning);"><i class="fas fa-exclamation-triangle"></i> Not read by the engine:</span> ' + unreadList.map(function (c) {
+            return '<a href="#" onclick="__msExpOpenBillFile(\'' + __msExpJsArg(c.file) + '\'); return false;" style="color:var(--accent-cyan);">' + __msExpEsc(c.name) + '</a> <span style="color:var(--text-dim);">(' + __msExpEsc(c.why === 'locked' ? 'password-protected — tell Claude the password, or save a copy without it in its place' : (c.why === 'no text' ? 'a scan with no text — Claude can read it off the image' : c.why)) + ')</span>';
+        }).join('; ') + '</div>';
+    }
+    return html + '</div>';
+}
+
+// ---- the Challans sheet of the CA export (Tools › CA Export) ----------------------------------
+// The challans deposited between start and end (yyyy-mm-dd, inclusive), from the engine's list; null when there is no list (not on the Mac, or the CA pack has not run).
+async function __msExpCaChallansRows(start, end) {
+    var idx = await __msExpChEnsureIndex();
+    if (!idx) return null;
+    var headers = ['SR. NO', 'TYPE', 'SECTION', 'FOR', 'DEPOSIT DATE', 'TAX', 'SURCHARGE', 'CESS', 'INTEREST', 'PENALTY', 'FEE', 'OTHERS', 'TOTAL', 'CGST', 'SGST', 'IGST', 'GST CESS', 'CIN', 'CPIN', 'BSR CODE', 'CHALLAN NO',
+                   'BANK REFERENCE', 'BANK', 'MODE', 'ASSESSMENT YEAR', 'PAYER', 'PAID FROM', 'FILE', 'NOTE'];
+    var rows = [];
+    idx.challans.filter(function (c) { return c.date && c.date >= start && c.date <= end; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.file < b.file ? -1 : 1); })
+        .forEach(function (c, i) {
+            var ready = __msExp.state === 'ready', L = ready ? __msExpChLine(c) : null;
+            var paid = ready ? (L ? (__msExpChDate(L.ln.d) + ' · ' + __msExpAcctLabel(L.ln.a) + ' · ' + __msExpRupees(L.ln.m)) : '')
+                             : (c.line ? (__msExpChDate(c.line.d) + ' · ' + __msExpAcctLabel(c.line.acct) + ' · ' + __msExpRupees(c.line.m || 0)) : '');
+            var g = c.gst || {};
+            var num = function (v) { return (v === null || v === undefined) ? '' : v; };
+            rows.push({ 'SR. NO': i + 1, 'TYPE': c.label, 'SECTION': c.nature, 'FOR': c.fm ? __msExpMonthLabel(c.fm) : (c.forFy !== null && c.forFy !== undefined ? __msExpFyLabel(c.forFy) : ''),
+                        'DEPOSIT DATE': c.date, 'TAX': num(c.amounts.tax), 'SURCHARGE': num(c.amounts.surcharge), 'CESS': num(c.amounts.cess), 'INTEREST': num(c.amounts.interest), 'PENALTY': num(c.amounts.penalty),
+                        'FEE': num(c.amounts.fee), 'OTHERS': num(c.amounts.others), 'TOTAL': num(c.total), 'CGST': num(g.cgst ? g.cgst.total : null), 'SGST': num(g.sgst ? g.sgst.total : null), 'IGST': num(g.igst ? g.igst.total : null),
+                        'GST CESS': num(g.cess ? g.cess.total : null), 'CIN': c.cin, 'CPIN': c.cpin, 'BSR CODE': c.bsr, 'CHALLAN NO': c.serial, 'BANK REFERENCE': c.ref, 'BANK': c.bank, 'MODE': c.mode, 'ASSESSMENT YEAR': c.ay,
+                        'PAYER': c.payer, 'PAID FROM': paid, 'FILE': c.file, 'NOTE': (c.warnings.concat(c.note ? [c.note] : [])).join('; ') });
+        });
+    return { headers: headers, rows: rows, widths: [7, 24, 9, 12, 12, 12, 10, 8, 10, 10, 8, 10, 12, 11, 11, 11, 9, 22, 16, 9, 11, 18, 18, 16, 12, 14, 34, 60, 40] };
+}
+// =================== /Phase 8FG — TDS, GST and professional-tax challans on the Expenses page ===================
 
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
