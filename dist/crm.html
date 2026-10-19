@@ -4567,6 +4567,63 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     };
 
     // ------------------------------------------------------------------------
+    // 8FH.1 — start-up watchdog. The app's main script sets window.__msInitComplete
+    // at the end of its DOMContentLoaded initialisation. If that never happens
+    // (a script error at launch — e.g. the dark-mode start-up crash this phase
+    // fixed), the user used to see every figure as a dash and nothing worked,
+    // with no message. Now a banner names the first error and offers a reload,
+    // and a reload in light mode (the theme is written to the database directly:
+    // the normal write path is, rightly, closed while initialisation is unfinished).
+    // ------------------------------------------------------------------------
+    (function startupWatchdog() {
+        var firstError = null;
+        try {
+            window.addEventListener('error', function (ev) {
+                if (firstError || window.__msInitComplete === true) return;
+                firstError = String((ev && ev.message) || 'script error') + ((ev && ev.lineno) ? ' (line ' + ev.lineno + ')' : '');
+                window.__msEarlyDiag('CRITICAL', 'Script error before initialisation completed', { error: firstError });
+            });
+        } catch (e) {}
+        function show() {
+            if (window.__msInitComplete === true || document.getElementById('msStartupWatchdog')) return;
+            window.__msEarlyDiag('CRITICAL', 'Initialisation did not complete', { firstError: firstError });
+            var box = document.createElement('div');
+            box.id = 'msStartupWatchdog';
+            box.setAttribute('role', 'alert');
+            box.style.cssText = 'position:fixed; left:50%; top:52px; transform:translateX(-50%); z-index:2147483000; max-width:720px; width:calc(100% - 32px); '
+                + 'background:#fff7ed; color:#7c2d12; border:1px solid #fdba74; border-radius:10px; padding:14px 16px; font:13px/1.5 -apple-system, "IBM Plex Sans", sans-serif; box-shadow:0 10px 30px rgba(0,0,0,0.25);';
+            var text = document.createElement('div');
+            text.innerHTML = '<strong>Masterstone did not finish starting.</strong> '
+                + (firstError ? 'The first error was: <code style="font-size:12px;">' + String(firstError).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</code>. ' : '')
+                + 'Nothing has been changed and nothing will be saved until it starts properly. Try reloading; if it happens again, reload in light mode and send Claude the Diag log.';
+            box.appendChild(text);
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;';
+            function btn(label, fn) {
+                var b = document.createElement('button');
+                b.textContent = label;
+                b.style.cssText = 'padding:6px 12px; font-size:12.5px; border:1px solid #fdba74; background:#fff; color:#7c2d12; border-radius:6px; cursor:pointer;';
+                b.onclick = fn;
+                row.appendChild(b);
+            }
+            btn('Reload', function () { try { window.location.reload(); } catch (e) {} });
+            btn('Reload in light mode', async function () {
+                try { window.localStorage.setItem('ms_theme', 'light'); } catch (e) {}
+                try {
+                    var t = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core : null;
+                    if (t && t.invoke) await t.invoke('storage_save_setting', { lsKey: 'ms_theme', value: 'light' });
+                } catch (e) {}
+                try { window.location.reload(); } catch (e) {}
+            });
+            btn('Diag log', function () { try { if (window.__diag) window.__diag.show(); else alert((window.__diagEarly || []).map(function (e) { return '[' + e[0] + '] ' + e[3] + ' ' + e[1]; }).join('\n') || 'No log yet.'); } catch (e) {} });
+            box.appendChild(row);
+            (document.body || document.documentElement).appendChild(box);
+        }
+        function arm() { setTimeout(show, 4000); }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm); else arm();
+    })();
+
+    // ------------------------------------------------------------------------
     // Phase 8EO — startup storage check. Runs before anything else reads data.
     //
     // Browser storage is small. index.html copies each dataset from the
@@ -4577,6 +4634,11 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // ------------------------------------------------------------------------
     var staleBuckets = {};        // datasets loaded stale this launch -> DB writes paused
     var __msRebooting = false;    // true while re-running the launch
+    // 8FH.1 — datasets whose stored copy could not be read at launch (damaged JSON or the wrong shape). The app falls back
+    // to an empty list or the defaults for them in memory; saving that back would replace the database table with the
+    // fallback. Writes for these keys are refused this session (scheduleWrite), the indicator says so, and the user is told.
+    var unreadableBuckets = {};
+    window.__msUnreadableBuckets = unreadableBuckets;
     (function bootStorageCheck() {
         try {
             // 0. If the previous pass re-ran this launch, report it here — its
@@ -4632,6 +4694,36 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         } catch (e) {
             window.__msEarlyDiag('CRITICAL', 'Startup storage check failed', { error: String(e && e.message ? e.message : e) });
         }
+    })();
+
+    // 8FH.1 — read-check every business dataset the way the app will read it. index.html copied each one from the
+    // database into app storage a moment ago; one that does not parse, or is not the list / record the app expects,
+    // is marked unreadable so nothing can overwrite its database copy with a fallback this session.
+    (function checkReadableBuckets() {
+        var SHAPES = {
+            'ms_pro_v210': 'array', 'ms_invoices_v1': 'array', 'ms_proposals_v1': 'array', 'ms_purchase_orders_v1': 'array',
+            'ms_consultants_v1': 'array', 'ms_consultant_payments_v1': 'array',
+            'ms_client_master_v1': 'object', 'ms_reseller_master_v1': 'object', 'ms_oem_master_v1': 'object',
+            'ms_commissions_v1': 'object', 'ms_company_profile_v1': 'object'
+        };
+        Object.keys(SHAPES).forEach(function (k) {
+            var raw = null;
+            try { raw = window.localStorage.getItem(k); } catch (e) { return; }
+            if (raw === null || raw === undefined || raw === '') return;        // nothing stored: a fresh dataset, fine
+            var why = '';
+            try {
+                var v = JSON.parse(raw);
+                if (SHAPES[k] === 'array' && !Array.isArray(v)) why = 'not a list';
+                else if (SHAPES[k] === 'object' && (!v || typeof v !== 'object' || Array.isArray(v))) why = 'not a record';
+                else if (SHAPES[k] === 'array' && k !== 'ms_pro_v210' && v.some(function (r) { return r === null || typeof r !== 'object'; })) why = 'a damaged record in the list';
+                else if (SHAPES[k] === 'array' && k === 'ms_pro_v210' && v.some(function (r) { return r === null || typeof r !== 'object'; })) why = 'a damaged contract record';
+                else if (SHAPES[k] === 'object' && k !== 'ms_company_profile_v1' && k !== 'ms_commissions_v1' && k !== 'ms_oem_master_v1' && Object.keys(v).some(function (n) { return v[n] === null || typeof v[n] !== 'object'; })) why = 'a damaged record';
+            } catch (e) { why = 'damaged JSON (' + String((e && e.message) || e).slice(0, 80) + ')'; }
+            if (why) {
+                unreadableBuckets[k] = why;
+                window.__msEarlyDiag('CRITICAL', 'Stored dataset could not be read — saving it is PAUSED this session', { key: k, reason: why, length: raw.length });
+            }
+        });
     })();
 
     // tauri-runtime — applied immediately, never removed. Used by the WebKit
@@ -4908,6 +5000,29 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // whose first check failed while something was created locally). Nothing
     // is ever dropped: arrays merge by id (newer updatedAt wins, ties keep the
     // local copy); objects merge by key (local wins). Unparseable side loses.
+    // 8FH.1 — how many records (by id, or by key for the OEM details) the database copy holds that the app's copy does
+    // not; 0 when the two sides are not of one shape (then there is nothing to merge).
+    function mirrorDbExtraCount(lsVal, dbVal) {
+        var a, b;
+        try { a = JSON.parse(lsVal); b = JSON.parse(dbVal); } catch (e) { return 0; }
+        if (Array.isArray(a) && Array.isArray(b)) {
+            var ids = {};
+            a.forEach(function (r) { if (r && r.id !== undefined) ids[r.id] = true; });
+            var n = 0;
+            b.forEach(function (r) { if (r && r.id !== undefined && !ids[r.id]) n++; });
+            return n;
+        }
+        if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+            return Object.keys(b).filter(function (k) { return !(k in a); }).length;   // the OEM details (a record per OEM)
+        }
+        return 0;
+    }
+    function mirrorLabel(lsKey) {
+        return lsKey === 'ms_templates_v1' ? 'your document templates'
+             : lsKey === 'ms_generated_docs_v1' ? 'your generated documents'
+             : lsKey === 'ms_oem_metadata_v1' ? 'the OEM details' : lsKey;
+    }
+
     function mergeMirrorValues(lsVal, dbVal) {
         var a, b;
         try { a = JSON.parse(lsVal); } catch (e) { return dbVal; }
@@ -5024,7 +5139,22 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
                 else if (mirrorEmpty(ls))                { action = 'restored-from-database'; finalVal = dv; writeLs = true; }
                 else if (mirrorEmpty(dv))                { action = 'backfilled-database';    finalVal = ls; writeDb = true; }
                 else if (ls === dv)                      { action = 'in-sync'; }
-                else if (everVerified[lsKey] === '1')    { action = 'refreshed-database';     finalVal = ls; writeDb = true; }
+                else if (everVerified[lsKey] === '1') {
+                    // 8FH.1 — both sides hold data and differ on a Mac that has reconciled before. The app's copy is normally
+                    // the newer one (a write the database missed), but after the database was restored from a backup the
+                    // database copy is the one wanted — and it used to be overwritten here without a word. When the database
+                    // holds records the app's copy does not, ask; otherwise refresh the database from the app's copy as before.
+                    var extra = mirrorDbExtraCount(ls, dv);
+                    if (extra > 0) {
+                        // merge: nothing is dropped (a record deleted in the app whose write the database missed comes
+                        // back, which is recoverable; an overwritten restore is not)
+                        action = 'merged (the database held ' + extra + ' record' + (extra === 1 ? '' : 's') + ' the app did not)';
+                        finalVal = mergeMirrorValues(ls, dv); writeDb = (finalVal !== dv); writeLs = (finalVal !== ls);
+                        try { if (typeof showActionToast === 'function') showActionToast(extra + ' record' + (extra === 1 ? '' : 's') + ' of ' + mirrorLabel(lsKey) + ' came back from the database copy (merged).', 'info'); } catch (e) {}
+                    } else {
+                        action = 'refreshed-database'; finalVal = ls; writeDb = true;
+                    }
+                }
                 else {
                     action = 'merged';
                     finalVal = mergeMirrorValues(ls, dv);
@@ -5078,6 +5208,15 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     window.__msAppMirrorSeedAllowed = function () { return !!mirrorVerifiedThisSession['ms_templates_v1']; };
 
     function scheduleWrite(key, value) {
+        // 8FH.1 — the stored copy of this dataset could not be read at launch: what the app holds is a fallback, not the
+        // data. Sending it would replace the database table with the fallback. Refused for the whole session.
+        if (unreadableBuckets[key]) {
+            lastErrorByBucket['unreadable:' + key] = 'Not saved to the database: the stored copy of this dataset could not be read at launch ('
+                + unreadableBuckets[key] + '), so saving it is paused this session to protect the database copy. Restore the database from a backup (Settings) or send Claude the Diag log.';
+            window.__msEarlyDiag('CRITICAL', 'Write refused for unreadable dataset', { key: key });
+            refreshIndicator();
+            return true;
+        }
         // 8EO — this dataset was loaded stale at launch (app storage full).
         // Sending it would overwrite the database's newer copy: hold it back.
         if (staleBuckets[key]) {
@@ -5122,13 +5261,26 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // them rarely, mostly for debug / dev console workflows. If you ever need
     // to wipe, do it via the migration script.
     //
-    // Startup grace period: the CRM writes various computed values to
-    // localStorage during its initial render (theme application, view state
-    // restoration, etc.). Those writes would re-save data we just loaded,
-    // creating noise in the sync indicator. We swallow them for the first
-    // 2 seconds — safe because anything within that window is part of init.
+    // Startup grace: the CRM writes various computed values to localStorage
+    // during its initial render (theme application, view state restoration,
+    // seeded defaults, back-fills). Those writes would re-save data we just
+    // loaded — or, worse, write a fallback over a table that did not load.
+    // 8FH.1 — they are held until the app's own initialisation reports done
+    // (window.__msInitComplete, set at the end of the DOMContentLoaded init in
+    // script block 4), not for a fixed two seconds: a slow launch no longer
+    // lets an init write through, and a fast one no longer drops the user's
+    // first edit. If initialisation never completes, nothing is ever sent —
+    // the start-up watchdog below tells the user instead.
     // ------------------------------------------------------------------------
-    var startupGraceUntil = Date.now() + 2000;
+    var heldInitKeys = {};   // 8FH.1 — datasets written during start-up; sent (current value) once initialisation completes
+    document.addEventListener('ms:init-complete', function () {
+        var ks = Object.keys(heldInitKeys);
+        heldInitKeys = {};
+        ks.forEach(function (k) {
+            try { var v = window.localStorage.getItem(k); if (v !== null) scheduleWrite(k, v); } catch (e) {}
+        });
+        if (ks.length) window.__msEarlyDiag('INFO', 'Start-up writes sent after initialisation', { keys: ks });
+    });
     var realSet = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
         // 8AW — Resilience: localStorage on WKWebView caps near a few MB.
@@ -5153,12 +5305,16 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         }
         // Internal flags (start with __ms_) never touch SQLite.
         if (typeof key === 'string' && key.indexOf('__ms_') !== 0) {
-            // Skip during startup grace window.
-            if (Date.now() >= startupGraceUntil) {
+            // Skip until the app's initialisation has finished (8FH.1) — and remember which datasets start-up wrote, so
+            // their current value is sent once it has (an auto-expired proposal, an id back-fill, the renewal defaults and
+            // the schema stamp used to be redone at every launch and never persisted).
+            if (window.__msInitComplete === true) {
                 try { scheduleWrite(key, value); } catch (e) {
                     // Don't propagate errors — UI flow shouldn't break on sync issues.
                     console.error('Mac app sync error:', e);
                 }
+            } else if (BUCKET_COMMANDS[key] || SETTING_KEYS[key]) {
+                heldInitKeys[key] = true;
             }
         }
         // If localStorage failed, return undefined (same semantics as a real
@@ -5177,6 +5333,25 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     // Phase 8EM — compare the mirrored stores against the database now.
     // The interceptor above is installed, so writes made from here on are
     // routed (and held) correctly.
+    // 8FH.1 — datasets whose stored copy could not be read: say so plainly, once the app is up.
+    (function reportUnreadableBuckets() {
+        var keys = Object.keys(unreadableBuckets);
+        if (!keys.length) return;
+        var labels = keys.map(function (k) { return (BUCKET_COMMANDS[k] && BUCKET_COMMANDS[k].label) || k; });
+        keys.forEach(function (k) {
+            lastErrorByBucket['unreadable:' + k] = 'Stored copy unreadable (' + unreadableBuckets[k] + ') — saving paused this session to protect the database copy.';
+        });
+        setTimeout(refreshIndicator, 2500);
+        setTimeout(function () {
+            try {
+                var msg = 'Masterstone could not read the stored copy of: ' + labels.join(', ') + '.\n\n'
+                    + 'The app is showing an empty list or defaults for it. To protect the database copy, changes to it will NOT be saved this session.\n\n'
+                    + 'Please restore the database from a backup (Settings) or send Claude the Diag log (Show banner \u2192 \ud83d\udc1e Diag).';
+                if (typeof window.__msAlert === 'function') window.__msAlert(msg); else alert(msg);
+            } catch (e) {}
+        }, 3500);
+    })();
+
     // 8EO — datasets paused by the startup storage check: say so plainly.
     (function reportStaleBuckets() {
         var keys = Object.keys(staleBuckets);
@@ -5196,6 +5371,9 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
     })();
 
     if (!__msRebooting) reconcileAppMirrors(0);
+
+    // 8FH.1 — can this dataset be saved this session? (false while its stored copy is unreadable or stale)
+    window.__msBucketWritable = function (key) { return !unreadableBuckets[key] && !staleBuckets[key]; };
 
     window.__msScheduleBucketWriteDirect = function (key, value) {
         try {
@@ -6145,10 +6323,12 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (!input.files || !input.files[0]) { input.remove(); return; }
             var file = input.files[0];
             if (typeof addAttachment !== 'function') { alert('Attachment system unavailable.'); input.remove(); return; }
-            // Remove a previously uploaded file for this row (replace semantics).
+            // Replace semantics — 8FH.1: the previously uploaded file for this row goes only once the new one is stored
+            // (addAttachment refuses over-size files and declined soft-limit questions with no callback; purging first
+            // left a dangling id and a "stored" status over a file that no longer existed).
             var oldAtt = row.getAttribute('data-upload-attid') || '';
-            if (oldAtt) { try { window.__msPurgeAttachment(entityType, entId, oldAtt); } catch (e) {} }
             addAttachment(entityType, entId, file, 'Uploaded ' + entityType + ' document', function (rec) {
+                if (oldAtt && oldAtt !== rec.id) { try { window.__msPurgeAttachment(entityType, entId, oldAtt); } catch (e) {} }
                 row.setAttribute('data-upload-attid', rec.id);
                 window.__msRenderDocUploadStatus(row, entityType);
                 if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> PDF stored in CRM. Remember to <strong>Save</strong> the contract.', 5000);
@@ -6184,8 +6364,8 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
             if (!input.files || !input.files[0]) { input.remove(); return; }
             if (typeof addAttachment !== 'function') { alert('Attachment system unavailable.'); input.remove(); return; }
             var oldAtt = statusEl.getAttribute('data-attid') || '';
-            if (oldAtt) { try { window.__msPurgeAttachment('internalpo', entId, oldAtt); } catch (e) {} }
             addAttachment('internalpo', entId, input.files[0], 'Uploaded internal PO document', function (rec) {
+                if (oldAtt && oldAtt !== rec.id) { try { window.__msPurgeAttachment('internalpo', entId, oldAtt); } catch (e) {} }   // 8FH.1 — old file goes only once the new one is stored
                 statusEl.setAttribute('data-attid', rec.id);
                 statusEl.setAttribute('data-entid', entId);
                 window.__msRenderInternalPOUploadStatus();
@@ -8441,7 +8621,7 @@ window.__msRenderMissingOneDriveLinks = function () {
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;">
                 <div>
                     <label>Numbering Mode</label>
-                    <select id="cp_numberingMode" oninput="cpMarkDirty(); cpRefreshNumberingPreviews();">
+                    <select id="cp_numberingMode" oninput="cpOnNumberingModeChange();">
                         <option value="sequential">Sequential (e.g. MS-INV-2001)</option>
                         <option value="fy_month">FY + Month + Serial (e.g. MS-INV-262704001)</option>
                     </select>
@@ -13559,15 +13739,31 @@ function toggleTheme() {
     // Set initial logo src ONLY if no companyProfile is configured yet. This
     // is just so the very first paint looks right; syncSidebarLogo() will fire
     // shortly after data loads and is the authority on what to show.
-    var logo = document.getElementById('sidebarLogo');
-    if (logo && isDark) {
-        var hasCompanyLogo = (typeof companyProfile !== 'undefined') &&
-                             companyProfile && companyProfile.logoDataUrl;
-        if (!hasCompanyLogo && logo.dataset.darkSrc) {
-            logo.src = logo.dataset.darkSrc;
-        }
-    }
+    // 8FH.1 — this used to test `typeof companyProfile`, a `let` declared further
+    // down this script: in the temporal dead zone that throws, and because it
+    // only ran on the dark path, launching in Dark Mode killed the whole main
+    // script (every figure a dash, no page loading). The company logo is not
+    // loaded yet at this point by design; syncSidebarLogo() restores it later.
+    try {
+        var logo = document.getElementById('sidebarLogo');
+        if (logo && isDark && logo.dataset.darkSrc) logo.src = logo.dataset.darkSrc;
+    } catch (e) { console.warn('Theme init (logo):', e); }
 })();
+
+// 8FH.1 — the in-app message box in both shells: the Mac app's shim defines
+// window.__msAlert (themed, awaitable); the standalone-browser shell gets the
+// browser's own box. New code says things through this.
+if (typeof window.__msAlert !== 'function') {
+    window.__msAlert = async function (message) {
+        try { window.alert(String(message)); } catch (e) {}
+    };
+}
+// 8FH.1 — today's date as yyyy-mm-dd in local time (toISOString().slice(0, 10)
+// is the UTC date: yesterday until 05:30 IST).
+function __msTodayLocal(d) {
+    d = d || new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 
 // --- SIDEBAR COLLAPSE (#15) ---
 // Persists user preference across sessions in localStorage. The .nav-collapsed
@@ -13752,6 +13948,8 @@ const ALL_MS_STORAGE_KEYS = [
     'ms_consultant_payments_v1', // Consultant payment ledger
     'ms_schema_meta_v1',         // The schema stamp itself
     'ms_generated_docs_v1',      // Phase 8BT — Generated document instances (filled templates, client-assigned, issuable)
+    'ms_templates_v1',           // 8FH.1 — Document templates (8BK), including the user's own; never in the JSON backup before
+    'ms_templates_seeded_v1',    // 8FH.1 — the "samples already seeded" flag, so a restore does not re-seed over them
     'ms_theme'                   // Light/dark theme preference
 ];
 
@@ -13776,11 +13974,14 @@ function ensureSchemaMeta() {
                 owner: "Masterstone LLP"
             };
         }
-        // Update every session-open
+        // Update every session-open — written only when new or changed, or once a day (8FH.1: start-up writes now
+        // reach the database, and a stamp at every launch is a "Saved" for nothing)
+        const _was = JSON.stringify([meta.schemaVersion, meta.appBuild]);
+        const _lastOpen = Date.parse(meta.lastOpenedAt || '') || 0;
         meta.schemaVersion = MASTERSTONE_SCHEMA_VERSION;
         meta.appBuild = MASTERSTONE_APP_BUILD;
         meta.lastOpenedAt = new Date().toISOString();
-        localStorage.setItem(SCHEMA_META_KEY, JSON.stringify(meta));
+        if (!raw || _was !== JSON.stringify([meta.schemaVersion, meta.appBuild]) || (Date.now() - _lastOpen) > 86400000) localStorage.setItem(SCHEMA_META_KEY, JSON.stringify(meta));
         return meta;
     } catch (e) {
         console.warn("Schema meta init failed:", e);
@@ -13836,6 +14037,11 @@ try {
     const stored = localStorage.getItem(STORAGE_KEY);
     contracts = stored ? JSON.parse(stored) : [];
     if (!Array.isArray(contracts)) contracts = [];
+    // 8FH.1 — a damaged database row arrives as null. It must not stop the portfolio, and it must keep its POSITION: every
+    // invoice, PO, file and commission row addresses contracts by position (the bridge refuses to save this list while it
+    // holds one, so the placeholder is never written over the row).
+    contracts = contracts.map((c, i) => (c && typeof c === 'object') ? c
+        : { client: '(damaged record at position ' + (i + 1) + ')', product: '', start: '', endDate: '', term: 0, billingYears: [], __damaged: true });
 } catch (e) {
     console.error("Data corruption detected. Resetting.", e);
     contracts = [];
@@ -14620,7 +14826,8 @@ function initClientMaster() {
         const stored = localStorage.getItem(CLIENT_MASTER_KEY);
         if (stored) {
             clientMaster = JSON.parse(stored);
-            if (typeof clientMaster !== 'object' || Array.isArray(clientMaster)) clientMaster = {};
+            if (!clientMaster || typeof clientMaster !== 'object' || Array.isArray(clientMaster)) clientMaster = {};   // 8FH.1 — a stored "null" is an object to typeof
+            Object.keys(clientMaster).forEach(k => { if (!clientMaster[k] || typeof clientMaster[k] !== 'object') delete clientMaster[k]; });   // 8FH.1 — a damaged row arrives as null
         } else {
             clientMaster = {};
         }
@@ -14642,9 +14849,11 @@ function initClientMaster() {
 function saveClientMasterData() {
     try {
         localStorage.setItem(CLIENT_MASTER_KEY, JSON.stringify(clientMaster));
+        return true;
     } catch (e) {
         console.error("Failed to save client master", e);
         alert("Unable to save client master data. Storage may be full.");
+        return false;
     }
 }
 
@@ -15481,12 +15690,16 @@ function readGSTEntriesFromForm() {
 function readBillAddrsFromForm() {
     const rows = document.querySelectorAll('#cmBillAddrContainer .multi-entry-row');
     const out = [];
+    const gsts = readGSTEntriesFromForm();   // 8FH.1 — the state code travels with the address (it used to be restored only at the next launch)
     rows.forEach(row => {
+        const linkedGstId = row.querySelector('.me-bill-linked').value;
+        const g = linkedGstId ? gsts.find(x => x.id === linkedGstId) : null;
         out.push({
             id: row.getAttribute('data-bill-id'),
             label: row.querySelector('.me-bill-label').value.trim(),
             address: row.querySelector('.me-bill-address').value.trim(),
-            linkedGstId: row.querySelector('.me-bill-linked').value,
+            linkedGstId: linkedGstId,
+            stateCode: (g && g.stateCode) ? String(g.stateCode) : '',
             isPrimary: row.classList.contains('is-primary')
         });
     });
@@ -17033,8 +17246,8 @@ function openClientMasterForm(key) {
         titleEl.innerText = 'Add New Client';
         document.getElementById('cmEditKey').value = '';
         ['cmCompanyName','cmShortName','cmIndustry','cmWebsite',
-         'cmGSTIN','cmPAN','cmCIN','cmVendorCode','cmResellerName',
-         'cmBillAddr','cmShipAddr','cmNotes'].forEach(id => setVal(id, ''));
+         'cmGSTIN','cmPAN','cmCIN','cmAadhaar','cmVendorCode','cmResellerName',
+         'cmBillAddr','cmShipAddr','cmNotes'].forEach(id => setVal(id, ''));   // 8FH.1 — cmAadhaar was missing: the last client's Aadhaar stayed on the new one
         setVal('cmTier', 'Standard');
         setVal('cmStatus', 'Active');
         document.getElementById('cmIsReseller').checked = false;
@@ -17094,26 +17307,22 @@ async function saveClientMasterEntry() {
     const existingKey = document.getElementById('cmEditKey').value;
     const key = cmKey(name);
 
+    // 8FH.1 — "Add New Client" with a name that already exists used to overwrite that client without a word.
+    if (!existingKey && clientMaster[key]) {
+        if (!(await __msAsk(`A client named "${key}" already exists. Saving will overwrite it with this form. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
+    }
+    // 8FH.1 — the record's history (createdAt, migration markers) comes from the record being edited, even when renamed
+    const prev = (existingKey && clientMaster[existingKey]) || clientMaster[key] || cmBlankRecord(key);
+    let _renamed = null;
+
     // If name changed during edit, we need to delete old key and migrate
     if (existingKey && existingKey !== key) {
         if (clientMaster[key]) {
             if (!(await __msAsk(`A client named "${key}" already exists. Merging will overwrite it. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
         }
-        // Migrate: remove old, update contract references too
-        delete clientMaster[existingKey];
-        // Update all contracts referencing the old name
-        if (contracts && contracts.length > 0) {
-            let updated = 0;
-            contracts.forEach(c => {
-                if (cmKey(c.client) === existingKey) { c.client = key; updated++; }
-            });
-            if (updated > 0) {
-                persistData();
-            }
-        }
+        // Migrate: the old record is removed and every record that names the client re-pointed at the end, when the new
+        // record is written (8FH.1 — contracts only before; and a "No" to the GSTIN question below must leave everything as it was)
     }
-
-    const prev = clientMaster[key] || cmBlankRecord(key);
 
     // --- Read multi-entry arrays from the form ---
     let gstEntries = readGSTEntriesFromForm()
@@ -17194,9 +17403,16 @@ async function saveClientMasterEntry() {
     };
     if (!prev.createdAt) rec.createdAt = new Date().toISOString();
 
+    if (existingKey && existingKey !== key) {
+        delete clientMaster[existingKey];
+        _renamed = __msRenameClientEverywhere(existingKey, key);
+    }
     clientMaster[key] = rec;
     saveClientMasterData();
     populateClientMasterDatalist();
+    if (_renamed && _renamed.total && typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-random"></i> Renamed on ${_renamed.total} record${_renamed.total === 1 ? '' : 's'}: ${pEsc(_renamed.summary)}.`, 6500);
+    }
 
     closeClientMasterForm();
     // Bug fix #41 — closeClientMasterForm → showTab('clientMasterTab') already runs
@@ -17213,11 +17429,32 @@ async function saveClientMasterEntry() {
     populatePortfolioFilter();
 }
 
+// 8FH.1 — a client rename follows the name into every record that carries it: contracts, invoices, proposals, purchase
+// orders (end client), commission accruals and generated documents. Each touched store is saved. Returns the counts.
+function __msRenameClientEverywhere(oldKey, newKey) {
+    const same = (v) => cmKey(v) === oldKey;
+    const out = { contracts: 0, invoices: 0, proposals: 0, pos: 0, commissions: 0, docs: 0, total: 0, summary: '' };
+    try { if (Array.isArray(contracts)) { contracts.forEach(c => { if (c && same(c.client)) { c.client = newKey; out.contracts++; } }); if (out.contracts) persistData(); } } catch (e) { console.warn('rename client (contracts):', e); }
+    try { if (typeof invoices !== 'undefined' && Array.isArray(invoices)) { invoices.forEach(x => { if (x && same(x.clientName)) { x.clientName = newKey; out.invoices++; } }); if (out.invoices && typeof saveInvoices === 'function') saveInvoices(); } } catch (e) { console.warn('rename client (invoices):', e); }
+    try { if (typeof proposals !== 'undefined' && Array.isArray(proposals)) { proposals.forEach(x => { if (x && same(x.clientName)) { x.clientName = newKey; out.proposals++; } }); if (out.proposals && typeof saveProposals === 'function') saveProposals(); } } catch (e) { console.warn('rename client (proposals):', e); }
+    try { if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) { purchaseOrders.forEach(x => { if (x && same(x.endClient)) { x.endClient = newKey; out.pos++; } }); if (out.pos && typeof savePurchaseOrders === 'function') savePurchaseOrders(); } } catch (e) { console.warn('rename client (POs):', e); }
+    try { if (typeof commissionLedger === 'object' && commissionLedger && Array.isArray(commissionLedger.accruals)) { commissionLedger.accruals.forEach(a => { if (a && same(a.clientName)) { a.clientName = newKey; out.commissions++; } }); if (out.commissions && typeof saveCommissionLedger === 'function') saveCommissionLedger(); } } catch (e) { console.warn('rename client (commissions):', e); }
+    try { if (typeof __msLoadGenDocs === 'function') { (__msLoadGenDocs() || []).forEach(d => { if (d && (same(d.clientName) || d.clientKey === oldKey)) { d.clientName = newKey; d.clientKey = newKey; out.docs++; } }); if (out.docs && typeof __msPersistGenDocs === 'function') __msPersistGenDocs(); } } catch (e) { console.warn('rename client (documents):', e); }
+    out.total = out.contracts + out.invoices + out.proposals + out.pos + out.commissions + out.docs;
+    out.summary = [['contract', out.contracts], ['invoice', out.invoices], ['proposal', out.proposals], ['purchase order', out.pos], ['commission row', out.commissions], ['document', out.docs]]
+        .filter(p => p[1]).map(p => p[1] + ' ' + p[0] + (p[1] === 1 ? '' : 's')).join(', ');
+    return out;
+}
+
 async function deleteClientMasterEntry(key) {
     const contractCount = contracts.filter(c => cmKey(c.client) === key).length;
+    const _invC = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices.filter(x => x && cmKey(x.clientName) === key).length : 0;
+    const _propC = (typeof proposals !== 'undefined' && Array.isArray(proposals)) ? proposals.filter(x => x && cmKey(x.clientName) === key).length : 0;
+    const _poC = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) ? purchaseOrders.filter(x => x && cmKey(x.endClient) === key).length : 0;
     let msg = `Delete client "${key}" from the master?`;
-    if (contractCount > 0) {
-        msg += `\n\nNote: ${contractCount} contract(s) reference this client. The contracts will NOT be deleted — only the master record. You can re-sync later if needed.`;
+    if (contractCount > 0 || _invC || _propC || _poC) {
+        const _refs = [[contractCount, 'contract'], [_invC, 'invoice'], [_propC, 'proposal'], [_poC, 'purchase order']].filter(p => p[0]).map(p => p[0] + ' ' + p[1] + (p[0] === 1 ? '' : 's')).join(', ');
+        msg += `\n\nNote: ${_refs} name this client. They will NOT be deleted — only the master record (their GST state, addresses and e-mail recipients come from it). You can re-sync later if needed.`;
     }
     if (!(await __msAsk(msg, { ok: 'Delete', danger: 'ok' }))) return;
     delete clientMaster[key];
@@ -17428,6 +17665,21 @@ function cpMarkDirty() {
 
 // Refresh the numbering preview boxes + adjust labels/hints based on selected mode.
 // Called whenever the user changes prefix, next-number, or the mode dropdown.
+// 8FH.1 — when the numbering mode changes, show that mode's own counters (sequential next-number vs FY serial); the
+// inputs used to keep the other mode's values and cpSave wrote them into the newly chosen mode's counter.
+function cpOnNumberingModeChange() {
+    cpMarkDirty();
+    try {
+        const fyMode = (document.getElementById('cp_numberingMode').value === 'fy_month');
+        ['proposal', 'po', 'invoice'].forEach(t => {
+            const el = document.getElementById('cp_' + t + 'NextNumber');
+            if (!el) return;
+            el.value = fyMode ? peekFyNextSerial(t) : (parseInt(companyProfile[t + 'NextNumber']) || 1001);
+        });
+    } catch (e) { console.warn('numbering mode change:', e); }
+    cpRefreshNumberingPreviews();
+}
+
 function cpRefreshNumberingPreviews() {
     const modeEl = document.getElementById('cp_numberingMode');
     const mode = (modeEl && modeEl.value) || 'sequential';
@@ -19645,13 +19897,13 @@ function safeSetStorage(dataStr) {
     }
 }
 
-async function saveToDisk() {
+function saveToDisk() {
     const dataStr = JSON.stringify(contracts);
-    safeSetStorage(dataStr);
+    return safeSetStorage(dataStr);   // 8FH.1 — callers can tell whether the store took it
 }
 
 function persistData() {
-    saveToDisk();
+    return saveToDisk();
 }
 
 // Render the data snapshot and schema meta info on the Backup tab
@@ -19681,7 +19933,7 @@ function renderBackupSnapshot() {
             <div><strong style="color:var(--text-main);">${counts.attachments}</strong> entities with attachments${attachmentsInFile ? (attachmentSize ? ` (~${attachmentSize} KB)` : '') : ` <span style="color:var(--warning);">(files not included)</span>`}</div>
         </div>
         <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--glass-border); font-size:10.5px; color:var(--text-subtle);">
-            Plus: Company Profile, terms templates library, OEM metadata, per-client custom terms, view preferences, and schema version stamp.${attachmentsInFile ? '' : `<div style="margin-top:6px; color:var(--warning);"><i class="fas fa-info-circle"></i> Attached files (signed PDFs and other uploads) are not in this JSON backup. They are kept in the app's database, which the app's Auto-backup copies every day.</div>`}
+            Plus: Company Profile, terms templates library, document templates, generated documents, OEM metadata, per-client custom terms, view preferences, and schema version stamp.${attachmentsInFile ? '' : `<div style="margin-top:6px; color:var(--warning);"><i class="fas fa-info-circle"></i> Attached files (signed PDFs and other uploads) are not in this JSON backup. They are kept in the app's database, which the app's Auto-backup copies every day.</div>`}
         </div>
     `;
 
@@ -20564,7 +20816,7 @@ function generateYearlyInputs() {
              <div class="vp-row" style="display:grid; grid-template-columns: 140px 1fr 1fr; gap:12px; margin-bottom:10px; align-items:center;">
                  <div style="display:flex; align-items:center; font-weight:600; color:var(--text-main);">
                      Cycle <span class="cycle-index" style="margin-left:4px;">${cycleIndex}</span> 
-                     <input type="number" class="vp-duration" value="${dur.toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
+                     <input type="number" class="vp-duration" value="${(parseFloat(dur) || 12).toFixed(1)}" step="0.1" oninput="updateLiveMargin()" style="width:50px; margin-left:8px; padding:6px; font-size:12px; border:1px solid var(--glass-border); border-radius:6px; background:var(--input-bg); color:var(--text-main);"> <span style="font-size:11px; color:var(--text-dim); margin-left:6px;">Mo</span>
                  </div>
                  <div>
                      <input type="text" inputmode="decimal" class="js-money vp-cost" value="${valCost}" placeholder="Total Cost (for cycle)" oninput="updateLiveMargin()" style="width:100%;">
@@ -20848,7 +21100,7 @@ function populatePortfolioFilter() {
     if (!contracts) return;
     
     let html = '<option value="ALL">All Clients</option>';
-    const clients = [...new Set(contracts.map(c => c.client))].sort();
+    const clients = [...new Set(contracts.filter(c => c && !c.__damaged).map(c => c.client))].sort();   // 8FH.1 — a damaged row's placeholder is not a client
     
     clients.forEach(c => html += `<option value="${c}">${c}</option>`);
     
@@ -20920,7 +21172,7 @@ function updateClientDropdown() {
     let currentSelected = getSelectedClients();
     if(!contracts) return;
     
-    const clients = [...new Set(contracts.map(c => c.client))].sort();
+    const clients = [...new Set(contracts.filter(c => c && !c.__damaged).map(c => c.client))].sort();   // 8FH.1 — a damaged row's placeholder is not a client
     
     let searchBoxHtml = `
         <div style="padding: 8px 16px; border-bottom: 1px solid var(--glass-border); margin-bottom: 4px;">
@@ -21031,7 +21283,7 @@ function renderContracts() {
 
     contracts.forEach((c, index) => {
         try { 
-            if(!c.billingYears) return; 
+            if(!c || !c.billingYears || c.__damaged) return;   // 8FH.1 — a damaged row's placeholder is not a contract
             if(selectedClient !== "ALL" && c.client !== selectedClient) return;
             
             let startD = new Date(c.start);
@@ -21080,6 +21332,7 @@ function renderContracts() {
         let clientRowsHtml = "";
 
         clientGroup.forEach(item => {
+          try {   // 8FH.1 — one bad contract record must not blank the whole portfolio
             const c = item.contract;
             const i = item.index;
             const startD = item.startD;
@@ -21167,7 +21420,7 @@ function renderContracts() {
                 }
 
                 financialTableHTML += `<tr>
-                    <td style="font-weight:600; color:var(--text-main);">C${y.cycle || yIdx + 1}<span style="font-size:10.5px; color:var(--text-dim); font-weight:400; display:block;">${formatDateReadable(y.billDate)} · ${y.duration.toFixed(1)}M</span></td>
+                    <td style="font-weight:600; color:var(--text-main);">C${y.cycle || yIdx + 1}<span style="font-size:10.5px; color:var(--text-dim); font-weight:400; display:block;">${formatDateReadable(y.billDate)} · ${(parseFloat(y.duration) || 0).toFixed(1)}M</span></td>
                     <td class="num" style="color:var(--text-dim);">${baseFX}</td>
                     <td class="num" style="color:var(--text-main);">${rateLabel}</td>
                     <td class="num" style="color:var(--text-main); font-weight:600;">${fmt(cycleRev)}</td>
@@ -21334,7 +21587,7 @@ function renderContracts() {
                 </td>
                 <td title="${pEsc((expClientPOList.length > 0 ? (posToRender.map(p => p.poNo).filter(Boolean).join(', ')) : ''))}">${poDisplay}</td>
                 <td class="num">${c.licenses || '-'}</td>
-                <td><span class="badge" style="background:var(--hover-bg); border:1px solid var(--glass-border); font-weight:400; color:var(--text-main); padding:2px 6px; font-size:10.5px;">${c.term.toFixed(1)}M</span></td>
+                <td><span class="badge" style="background:var(--hover-bg); border:1px solid var(--glass-border); font-weight:400; color:var(--text-main); padding:2px 6px; font-size:10.5px;">${(parseFloat(c.term) || 0).toFixed(1)}M</span></td>
                 <td>${formatDateReadable(startD)}</td>
                 <td>${formatDateReadable(endD)}</td>
                 <td class="num">${fmt(tCost)}<span style="font-size:10.5px; color:var(--text-dim); display:block;">${costSym}${Math.round(tCostUSD).toLocaleString()}</span></td>
@@ -21490,6 +21743,7 @@ function renderContracts() {
                     </div>
                 </td>
             </tr>`;
+          } catch (e) { console.error('Subscription Portfolio: contract row skipped', item && item.index, e); }
         });
 
         // Add Indicators HTML if present
@@ -21578,6 +21832,7 @@ async function saveContract() {
     const s = new Date(startEl.value);
     const e = new Date(endEl.value);
     const termMonths = calcExactTerm(startEl.value, endEl.value);
+    if (!(termMonths > 0)) { await window.__msAlert('End Date must be after Start Date.'); return; }   // 8FH.1 — used to save a zero-term contract without a word
 
     const idx = parseInt(document.getElementById('editIndex').value);
 
@@ -21636,9 +21891,9 @@ async function saveContract() {
     if (isUpfront && !isVarPricing) {
         let existing = (idx > -1 && contracts[idx] && contracts[idx].billingYears && contracts[idx].billingYears[0]) ? contracts[idx].billingYears[0] : {};
 
-        billingYears.push({ 
-            cycle: 1, duration: termMonths, ratio: termMonths / 12, 
-            fx: baselineFx || 83.5, billDate: s.toISOString().split('T')[0], 
+        billingYears.push(Object.assign({}, existing, {   // 8FH.1 — keep whatever else the stored cycle held
+            cycle: 1, duration: termMonths, ratio: termMonths / 12,
+            fx: baselineFx || 83.5, billDate: s.toISOString().split('T')[0],  
             baseCost: stdUsdVal, baseSell: stdSellINR,
             invoiceRaised: existing.invoiceRaised || false, 
             actualInvoiceDate: existing.actualInvoiceDate || null,
@@ -21655,7 +21910,7 @@ async function saveContract() {
             clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
             arInvoices: existing.arInvoices || [],
             apInvoices: existing.apInvoices || []
-        });
+        }));
     } else {
         let currentStartDate = new Date(s);
         let cycleIndex = 1;
@@ -21665,9 +21920,9 @@ async function saveContract() {
                  if(cycleData.duration <= 0) return;
                  let existing = (idx > -1 && contracts[idx] && contracts[idx].billingYears && contracts[idx].billingYears[cIdx]) ? contracts[idx].billingYears[cIdx] : {};
                  
-                 billingYears.push({
-                    cycle: cIdx + 1, 
-                    duration: cycleData.duration, 
+                 billingYears.push(Object.assign({}, existing, {   // 8FH.1 — keep whatever else the stored cycle held
+                    cycle: cIdx + 1,
+                    duration: cycleData.duration,  
                     ratio: cycleData.duration / 12,
                     fx: baselineFx, 
                     billDate: currentStartDate.toISOString().split('T')[0],
@@ -21688,7 +21943,7 @@ async function saveContract() {
             clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
                     arInvoices: existing.arInvoices || [],
                     apInvoices: existing.apInvoices || []
-                 });
+                 }));
                  currentStartDate.setMonth(currentStartDate.getMonth() + Math.floor(cycleData.duration));
              });
         } else {
@@ -21701,7 +21956,7 @@ async function saveContract() {
                 
                 let existing = (idx > -1 && contracts[idx] && contracts[idx].billingYears && contracts[idx].billingYears[cycleIndex-1]) ? contracts[idx].billingYears[cycleIndex-1] : {};
 
-                billingYears.push({ 
+                billingYears.push(Object.assign({}, existing, {   // 8FH.1 — keep whatever else the stored cycle held
                     cycle: cycleIndex, duration: duration, ratio: ratio,
                     fx: baselineFx,
                     billDate: currentStartDate.toISOString().split('T')[0],
@@ -21722,7 +21977,7 @@ async function saveContract() {
             clientInvoiceLocalPath: existing.clientInvoiceLocalPath || '', oemInvoiceLocalPath: existing.oemInvoiceLocalPath || '',   // 8FD — the PDFs' paths stay
                     arInvoices: existing.arInvoices || [],
                     apInvoices: existing.apInvoices || []
-                });
+                }));
 
                 currentStartDate.setFullYear(currentStartDate.getFullYear() + 1);
                 remainingMonths -= duration;
@@ -21732,6 +21987,60 @@ async function saveContract() {
         }
     }
     
+    if (!billingYears.length) { await window.__msAlert('The contract term is too short to hold a billing cycle. Check the start and end dates (or the cycle durations).'); return; }   // 8FH.1
+    // 8FH.1 — cycles beyond the new list used to be dropped silently, with their invoices, bills, TDS/GST and
+    // remittance records. Say which, ask, and carry their records onto the last cycle that survives.
+    if (idx > -1 && contracts[idx] && Array.isArray(contracts[idx].billingYears) && contracts[idx].billingYears.length > billingYears.length) {
+        const _old = contracts[idx].billingYears;
+        const _hasRecords = (y) => !!(y && (y.invoiceRaised || y.paid || y.vendorPaid || (y.clientInvoiceNo || '').trim() || (y.oemInvoiceNo || '').trim()
+            || (Array.isArray(y.arInvoices) && y.arInvoices.length) || (Array.isArray(y.apInvoices) && y.apInvoices.length)));
+        const _dropped = _old.slice(billingYears.length).map((y, k) => ({ y: y, n: billingYears.length + k + 1 })).filter(d => _hasRecords(d.y));
+        if (_dropped.length) {
+            const _nos = [];
+            _dropped.forEach(d => {
+                (Array.isArray(d.y.arInvoices) ? d.y.arInvoices : []).forEach(a => { if (a && a.invNo) _nos.push(a.invNo); });
+                if ((d.y.clientInvoiceNo || '').trim() && !_nos.includes(d.y.clientInvoiceNo.trim())) _nos.push(d.y.clientInvoiceNo.trim());
+                (Array.isArray(d.y.apInvoices) ? d.y.apInvoices : []).forEach(a => { if (a && a.invNo) _nos.push(a.invNo); });
+                if ((d.y.oemInvoiceNo || '').trim() && !_nos.includes(d.y.oemInvoiceNo.trim())) _nos.push(d.y.oemInvoiceNo.trim());
+            });
+            const _q = 'This save shortens the contract from ' + _old.length + ' billing cycle' + (_old.length === 1 ? '' : 's') + ' to ' + billingYears.length + '. '
+                + 'Cycle' + (_dropped.length === 1 ? ' ' : 's ') + _dropped.map(d => d.n).join(', ') + (_dropped.length === 1 ? ' holds' : ' hold') + ' recorded invoices or bills'
+                + (_nos.length ? ' (' + _nos.slice(0, 6).join(', ') + (_nos.length > 6 ? ', …' : '') + ')' : '') + '.\n\n'
+                + 'Continue? Those records (and any invoice linked to the dropped cycles) will be moved onto cycle ' + billingYears.length + ' so nothing is lost.';
+            if (!(await __msAsk(_q, { ok: 'Shorten and keep the records', danger: 'ok' }))) return;
+            const _last = billingYears[billingYears.length - 1];
+            if (_last) {
+                _last.arInvoices = Array.isArray(_last.arInvoices) ? _last.arInvoices.slice() : [];
+                _last.apInvoices = Array.isArray(_last.apInvoices) ? _last.apInvoices.slice() : [];
+                _dropped.forEach(d => {
+                    const y = d.y;
+                    (Array.isArray(y.arInvoices) ? y.arInvoices : []).forEach(a => { if (a && !_last.arInvoices.some(b => b && b.invNo === a.invNo && b.date === a.date)) _last.arInvoices.push(a); });
+                    if ((y.clientInvoiceNo || '').trim() && !_last.arInvoices.some(b => b && b.invNo === y.clientInvoiceNo.trim())) {
+                        _last.arInvoices.push({ invNo: y.clientInvoiceNo.trim(), date: y.actualInvoiceDate || '', amount: (parseFloat(y.baseSell) || 0) * (parseFloat(y.ratio) || 0), paidDate: y.paymentDate || '', link: y.clientInvoiceLink || '', localPath: y.clientInvoiceLocalPath || '' });
+                    }
+                    (Array.isArray(y.apInvoices) ? y.apInvoices : []).forEach(a => { if (a && !_last.apInvoices.some(b => b && b.invNo === a.invNo && b.date === a.date)) _last.apInvoices.push(a); });
+                    if ((y.oemInvoiceNo || '').trim() && !_last.apInvoices.some(b => b && b.invNo === y.oemInvoiceNo.trim())) {
+                        _last.apInvoices.push({ invNo: y.oemInvoiceNo.trim(), date: y.oemInvoiceDate || '', amount: (parseFloat(y.baseCost) || 0) * (parseFloat(y.ratio) || 0), fx: y.settlementFX || y.fx || null, payDate: y.oemPaymentDate || '', link: y.oemInvoiceLink || '', localPath: y.oemInvoiceLocalPath || '' });
+                    }
+                });
+            }
+            // the links by position into the dropped cycles follow their records
+            const _nl = billingYears.length;
+            try {
+                if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+                    let _ch = false;
+                    invoices.forEach(x => { if (x && String(x.linkedContractIdx) === String(idx) && parseInt(x.linkedCycleYearIdx, 10) >= _nl) { x.linkedCycleYearIdx = String(_nl - 1); _ch = true; } });
+                    if (_ch && typeof saveInvoices === 'function') saveInvoices();
+                }
+                if (typeof __msLoadGenDocs === 'function') {
+                    let _dch = false;
+                    (__msLoadGenDocs() || []).forEach(d => { if (d && d.remit && String(d.remit.cIdx) === String(idx) && parseInt(d.remit.yi, 10) >= _nl) { d.remit.yi = _nl - 1; _dch = true; } });
+                    if (_dch && typeof __msPersistGenDocs === 'function') __msPersistGenDocs();
+                }
+            } catch (e) { console.warn('re-point links of dropped cycles:', e); }
+        }
+    }
+
     let newClientPOs = [];
     document.querySelectorAll('.client-po-row').forEach(row => {
         let poNo = row.querySelector('.c-po-no').value.trim();
@@ -21822,7 +22131,8 @@ async function saveContract() {
         start: startEl.value, 
         endDate: endEl.value, 
         billingYears: billingYears,
-        baseFX: baselineFx || 83.5, 
+        baseFX: baselineFx || 83.5,
+        billUpfront: isService ? false : !!isUpfront,   // 8FH.1 — remembered, so Edit restores the toggle
         // 8DD — contract type + service-mode fields. Persisted on every save
         // (regardless of current type) so flipping the toggle never loses data.
         type: contractType,
@@ -21836,6 +22146,13 @@ async function saveContract() {
     // its own file; the cascade below moves the contract's pin only onto its own PO (the number it carries), a PO linked by
     // index with no pin, or one that carried the contract's old pin.
     const _prevIpo = (idx > -1 && contracts[idx]) ? { link: contracts[idx].internalPOLink || '', local: contracts[idx].internalPOLocalPath || '' } : { link: '', local: '' };
+    // 8FH.1 — a contract record carries fields this form does not own: the Renewal Engine's status, milestones,
+    // activity log, target date and notes, the Import page's identity tag, and whatever else another module wrote.
+    // Replacing the whole record wiped them on every edit; keep what the form does not set.
+    if (idx > -1 && contracts[idx] && typeof contracts[idx] === 'object') {
+        const _keep = contracts[idx];
+        Object.keys(_keep).forEach(k => { if (data[k] === undefined) data[k] = _keep[k]; });
+    }
     if (idx > -1) contracts[idx] = data; else contracts.push(data);
     // Phase 8P — Contract → PO path cascade (hardened). Two complementary
     // matching strategies, applied together so any matching PO gets updated:
@@ -21895,7 +22212,10 @@ async function saveContract() {
             const _poId = window.__msPendingPoToContractLink;
             if (typeof purchaseOrders !== 'undefined') {
                 const _po = purchaseOrders.find(x => x.id === _poId);
-                if (_po) {
+                // 8FH.1 — only the contract the conversion was started for: the PO's end client must match
+                if (_po && (_po.endClient || '').trim() && (_po.endClient || '').trim() !== (data.client || '').trim()) {
+                    console.warn('PO→Contract back-link skipped: end client differs', _po.endClient, data.client);
+                } else if (_po) {
                     _po.linkedContractIdx = String(contracts.length - 1);
                     _po.conversionCompletedAt = new Date().toISOString();
                     _po.updatedAt = new Date().toISOString();
@@ -22041,8 +22361,18 @@ function editContract(i) {
         document.getElementById('endDate').value = d.toISOString().split('T')[0];
     }
     
+    delete window.__msPendingPoToContractLink;   // 8FH.1 — editing an existing contract is not the conversion
+    // 8FH.1 — restore "Bill Full Term Upfront": the stored flag, else one cycle that spans the whole term. It used to
+    // open unset (and the single long cycle tripped the variance heuristic into Variable Pricing), so a plain re-save
+    // rebuilt the cycles differently.
+    let _isUpfrontC = false;
+    if (c.type !== 'service' && Array.isArray(c.billingYears) && c.billingYears.length === 1) {
+        const _d = parseFloat(c.billingYears[0].duration) || 0, _t = parseFloat(c.term) || 0;
+        _isUpfrontC = (typeof c.billUpfront === 'boolean') ? c.billUpfront : (_t > 12.05 && Math.abs(_d - _t) < 0.1);
+    }
+    const _buEl = document.getElementById('billUpfront'); if (_buEl) _buEl.checked = _isUpfrontC;
     let hasVariance = false;
-    if(c.billingYears && c.billingYears.length > 0) {
+    if(c.billingYears && c.billingYears.length > 0 && !_isUpfrontC) {
         const stdMonths = calcExactTerm(c.start, c.endDate);
         if (c.billingYears.length !== Math.ceil(stdMonths / 12)) hasVariance = true;
         
@@ -22100,16 +22430,151 @@ function editContract(i) {
     }
 }
 
-async function deleteContract(i) { 
-    if(await __msAsk("Delete contract?", { ok: 'Delete', danger: 'ok' })) { 
-        contracts.splice(i,1); 
-        persistData();
-        renderContracts(); updateClientDropdown(); populatePortfolioFilter(); debouncedCalcDashboard(); 
-    } 
+async function deleteContract(i) {
+    // 8FH.1 — contracts are addressed by their position in the list: invoices, purchase orders, attached files, the
+    // internal-PO upload and commission rows all say "contract number i". Removing one row moved every later contract
+    // up by one and left those links pointing at the wrong contract (the next Invoices visit then wrote invoice state
+    // onto another contract's cycle). Now: the question names the contract and what is linked to it, the attached
+    // files must be loaded (they are re-keyed and saved too), and every link is re-pointed after the splice.
+    const c = contracts[i];
+    if (!c) return;
+    const _n = (v) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
+    const _invs = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices.filter(x => x && _n(x.linkedContractIdx) === i) : [];
+    const _pos = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders))
+        ? purchaseOrders.filter(x => x && (_n(x.linkedContractIdx) === i || (Array.isArray(x.linkedApCycles) && x.linkedApCycles.some(l => l && _n(l.cIdx) === i)))) : [];
+    const _atts = (typeof getAttachmentsFor === 'function') ? (getAttachmentsFor('contract', String(i)).length + getAttachmentsFor('internalpo', 'c' + i + '_internalpo').length) : 0;
+    const _cycles = (Array.isArray(c.billingYears) ? c.billingYears : []).filter(y => y && (y.invoiceRaised || y.paid || y.clientInvoiceNo || y.oemInvoiceNo || (Array.isArray(y.arInvoices) && y.arInvoices.length) || (Array.isArray(y.apInvoices) && y.apInvoices.length))).length;
+    const _parts = [];
+    if (_invs.length) _parts.push(_invs.length + ' invoice' + (_invs.length === 1 ? '' : 's') + ' (' + _invs.slice(0, 4).map(x => x.invoiceNumber || x.id).join(', ') + (_invs.length > 4 ? ', …' : '') + ')');
+    if (_pos.length) _parts.push(_pos.length + ' purchase order' + (_pos.length === 1 ? '' : 's'));
+    if (_atts) _parts.push(_atts + ' attached file' + (_atts === 1 ? '' : 's'));
+    if (_cycles) _parts.push(_cycles + ' billing cycle' + (_cycles === 1 ? '' : 's') + ' with recorded invoices or bills');
+    let msg = 'Delete the contract ' + (c.client || '?') + ' — ' + (c.product || '?') + (c.start ? ' (from ' + formatDateReadable(c.start) + ')' : '') + '?';
+    if (_parts.length) msg += '\n\nLinked to it: ' + _parts.join('; ') + '.\nInvoices and purchase orders stay but lose their contract link; attached files and the cycles\' records are removed with the contract.';
+    msg += '\n\nThis cannot be undone.';
+    if (typeof __msAttachmentsWritable === 'function' && !__msAttachmentsWritable('delete contract')) return;
+    if (!(await __msAsk(msg, { ok: 'Delete contract', danger: 'ok' }))) return;
+    contracts.splice(i, 1);
+    __msRekeyContractLinks(i, 1);
+    persistData();
+    renderContracts(); updateClientDropdown(); populatePortfolioFilter(); debouncedCalcDashboard();
 }
 
-function resetForm() { 
-    document.getElementById('editIndex').value="-1"; 
+// 8FH.1 — after `count` contracts starting at position `from` have been removed from the list, clear every
+// position-based link that pointed at them and move the links to later contracts down by `count`. Covers invoices
+// (linkedContractIdx + cycle), purchase orders (linkedContractIdx, linkedApCycles[].cIdx), commission accruals
+// (sourceContractIdx), attached files (keys contract_<n> and internalpo_c<n>_internalpo, plus each record's
+// relatedEntityId, which the database stores) and remittance-bundle records (remit.cIdx). Each touched store is
+// saved. Returns how many links were cleared. Shared by deleteContract and the Import page's Undo.
+function __msRekeyContractLinks(from, count) {
+    count = count || 1;
+    const end = from + count;
+    let cleared = 0;
+    const shift = (v) => {                      // '' when the link pointed at a removed contract, else the new position
+        const n = parseInt(v, 10);
+        if (isNaN(n) || n < from) return v;
+        if (n < end) { cleared++; return ''; }
+        return String(n - count);
+    };
+    try {
+        if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+            let ch = false;
+            invoices.forEach(x => {
+                if (!x || x.linkedContractIdx === '' || x.linkedContractIdx == null) return;
+                const nv = shift(x.linkedContractIdx);
+                if (nv !== x.linkedContractIdx) { x.linkedContractIdx = nv; if (nv === '') x.linkedCycleYearIdx = ''; ch = true; }
+            });
+            if (ch && typeof saveInvoices === 'function') saveInvoices();
+        }
+    } catch (e) { console.warn('re-key invoices after contract delete:', e); }
+    try {
+        if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
+            let ch = false;
+            purchaseOrders.forEach(p => {
+                if (!p) return;
+                if (p.linkedContractIdx !== '' && p.linkedContractIdx != null) {
+                    const nv = shift(p.linkedContractIdx);
+                    if (nv !== p.linkedContractIdx) { p.linkedContractIdx = nv; ch = true; }
+                }
+                if (Array.isArray(p.linkedApCycles) && p.linkedApCycles.length) {
+                    const kept = [];
+                    p.linkedApCycles.forEach(l => {
+                        if (!l) return;
+                        const n = parseInt(l.cIdx, 10);
+                        if (isNaN(n) || n < from) { kept.push(l); return; }
+                        if (n < end) { cleared++; return; }
+                        kept.push(Object.assign({}, l, { cIdx: n - count }));
+                    });
+                    if (JSON.stringify(kept) !== JSON.stringify(p.linkedApCycles)) { p.linkedApCycles = kept; ch = true; }
+                }
+            });
+            if (ch && typeof savePurchaseOrders === 'function') savePurchaseOrders();
+        }
+    } catch (e) { console.warn('re-key purchase orders after contract delete:', e); }
+    try {
+        if (typeof commissionLedger === 'object' && commissionLedger && Array.isArray(commissionLedger.accruals)) {
+            let ch = false;
+            commissionLedger.accruals.forEach(a => {
+                if (!a || a.sourceContractIdx === null || a.sourceContractIdx === undefined) return;
+                const n = parseInt(a.sourceContractIdx, 10);
+                if (isNaN(n) || n < from) return;
+                if (n < end) { a.sourceContractIdx = null; cleared++; } else a.sourceContractIdx = n - count;
+                ch = true;
+            });
+            if (ch && typeof saveCommissionLedger === 'function') saveCommissionLedger();
+        }
+    } catch (e) { console.warn('re-key commissions after contract delete:', e); }
+    try {
+        if (typeof attachments === 'object' && attachments) {
+            const moves = [];
+            Object.keys(attachments).forEach(k => {
+                let m = /^contract_(\d+)$/.exec(k);
+                if (m) { moves.push({ k: k, n: parseInt(m[1], 10), mk: (nn) => 'contract_' + nn, id: (nn) => String(nn) }); return; }
+                m = /^internalpo_c(\d+)_internalpo$/.exec(k);
+                if (m) moves.push({ k: k, n: parseInt(m[1], 10), mk: (nn) => 'internalpo_c' + nn + '_internalpo', id: (nn) => 'c' + nn + '_internalpo' });
+            });
+            const todo = moves.filter(mv => mv.n >= from).sort((a, b) => a.n - b.n);
+            if (todo.length) {
+                todo.forEach(mv => {
+                    const list = attachments[mv.k];
+                    delete attachments[mv.k];
+                    if (mv.n < end) { cleared += (list || []).length; return; }     // the removed contract's files go with it
+                    const nn = mv.n - count;
+                    (list || []).forEach(r => { if (r) r.relatedEntityId = mv.id(nn); });
+                    attachments[mv.mk(nn)] = list;
+                });
+                if (typeof saveAttachments === 'function') saveAttachments();
+            }
+        }
+    } catch (e) { console.warn('re-key attached files after contract delete:', e); }
+    try {   // the live indices of the open forms (the Provisioning form being edited, the renewal detail)
+        const _live = (id) => { const el = document.getElementById(id); if (!el) return; const n = parseInt(el.value, 10); if (isNaN(n) || n < from) return; el.value = (n < end) ? '-1' : String(n - count); };
+        _live('editIndex'); _live('renDetailContractIdx');
+        if (typeof currentRenewalDetailContractIdx !== 'undefined' && currentRenewalDetailContractIdx !== null) {
+            const n = parseInt(currentRenewalDetailContractIdx, 10);
+            if (!isNaN(n) && n >= from) currentRenewalDetailContractIdx = (n < end) ? null : n - count;
+        }
+    } catch (e) { console.warn('re-key open forms after contract delete:', e); }
+    try {
+        if (typeof __msLoadGenDocs === 'function' && typeof __msPersistGenDocs === 'function') {
+            let ch = false;
+            (__msLoadGenDocs() || []).forEach(d => {
+                if (!d || !d.remit || d.remit.cIdx === undefined || d.remit.cIdx === null) return;
+                const n = parseInt(d.remit.cIdx, 10);
+                if (isNaN(n) || n < from) return;
+                if (n < end) d.remit.cIdx = -1; else d.remit.cIdx = n - count;
+                ch = true;
+            });
+            if (ch) __msPersistGenDocs();
+        }
+    } catch (e) { console.warn('re-key remittance records after contract delete:', e); }
+    return cleared;
+}
+
+function resetForm() {
+    document.getElementById('editIndex').value="-1";
+    delete window.__msPendingPoToContractLink;   // 8FH.1 — a conversion that was not saved is over (convertPOToContract sets it after this reset)
+    const _bu = document.getElementById('billUpfront'); if (_bu) _bu.checked = false;   // 8FH.1 — never inherited from the last form 
     // #SP — clear last-prefilled marker so prefill fires for the next client typed
     _lastPrefilledClient = null;
     // Hide "Generate PO" button — visible only when editing an existing contract
@@ -23657,7 +24122,7 @@ function importBackup() {
                     if (parsed._storageKeys[key] !== undefined) {
                         localStorage.setItem(key, parsed._storageKeys[key]);
                         restored++;
-                    } else {
+                    } else if (key !== 'ms_templates_v1' && key !== 'ms_templates_seeded_v1') {   // 8FH.1 — a backup made before templates were listed must not remove them
                         localStorage.removeItem(key);
                     }
                 });
@@ -24735,6 +25200,7 @@ function initProposals() {
         const raw = localStorage.getItem(PROPOSALS_KEY);
         proposals = raw ? JSON.parse(raw) : [];
         if (!Array.isArray(proposals)) proposals = [];
+        proposals = proposals.filter(x => x && typeof x === 'object');   // 8FH.1 — a damaged row arrives as null
     } catch (e) { console.warn("Proposals load failed", e); proposals = []; }
     try {
         const v = localStorage.getItem(PROPOSALS_VIEW_KEY);
@@ -24959,7 +25425,7 @@ function determineProposalGSTMode(clientName, billingAddressId) {
     let addr = null;
     if (billingAddressId) addr = rec.billingAddresses.find(a => a.id === billingAddressId);
     if (!addr) addr = rec.billingAddresses.find(a => a.isPrimary) || rec.billingAddresses[0];
-    const buyerState = (addr && addr.stateCode) || '';
+    const buyerState = __msClientAddrStateCode(rec, addr);   // 8FH.1
     const buyerStateName = getStateNameByCode(buyerState);
     if (!buyerState) return { mode: 'unknown', sellerState, buyerState, buyerStateName };
     return {
@@ -25327,6 +25793,7 @@ async function openProposalForm(id) {
     try { populateFormTemplatePicker('proposalTemplatePicker', 'proposal', preferredTplId); } catch (e) { console.warn("Proposal tpl picker:", e); }
     const val = (i, v) => { const el = document.getElementById(i); if (el) el.value = (v === null || v === undefined) ? '' : v; };
 
+    try { const _f0 = document.getElementById('proposalFormId'); if (_f0 && _f0.dataset) delete _f0.dataset.renewalOfContractIdx; } catch (e) {}   // 8FH.1 — a fresh form carries no renewal tag
     if (id) {
         const p = proposals.find(x => x.id === id);
         if (!p) { alert("Proposal not found"); return; }
@@ -25472,6 +25939,19 @@ async function openProposalForm(id) {
         document.getElementById('proposalDeleteBtn').style.display = 'none';
     }
     populateProposalBillingAddressDropdown();
+    // 8FH.1 — Edit restores the proposal's chosen billing address (the rebuilt dropdown used to land on "primary" and
+    // the save took that: GST split, Bill-To and Place of Supply flipped on any edit)
+    if (id) {
+        try {
+            const _rec = proposals.find(x => x.id === id);
+            const _sel = document.getElementById('proposalBillingAddressId');
+            if (_rec && _sel && _rec.billingAddressId) {
+                if ([..._sel.options].some(o => o.value === _rec.billingAddressId)) _sel.value = _rec.billingAddressId;
+                else if (typeof showProspectToast === 'function') showProspectToast(`<i class="fas fa-exclamation-triangle"></i> The billing address saved on this proposal no longer exists on ${pEsc(_rec.clientName)} — it will fall back to the primary address on save.`, 6000);
+            }
+            if (typeof updateProposalGSTModeHint === 'function') updateProposalGSTModeHint();
+        } catch (e) { console.warn('proposal billing address restore:', e); }
+    }
     renderProposalLineItems();
     updateProposalTotalsDisplay();
     // Bug fix #38 — Navigate to the new full-page form (replaces modal display).
@@ -25670,10 +26150,9 @@ function onLineItemProductDropdownReset(idx) {
 }
 
 function onLineItemFieldChange(idx, field, value) {
-    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!proposalFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitPrice' || field === 'discountPct' || field === 'gstPct') {
-        const n = parseFloat(value);
+        const n = parseFloat(__msStripCommas(value)); // 8CV — money line-item fields may carry commas (8FH.1: money fields only)
         proposalFormLineItems[idx][field] = isNaN(n) ? 0 : n;
     } else {
         proposalFormLineItems[idx][field] = value;
@@ -26519,6 +26998,21 @@ async function saveProposalFromForm() {
     rec.updatedAt = now;
     if (isNew) proposals.push(rec);
     saveProposals();
+
+    // 8FH.1 — a proposal drafted from the Renewal Engine: record it on the contract now that it exists.
+    try {
+        const _fid = document.getElementById('proposalFormId');
+        const _rIdx = (_fid && _fid.dataset && _fid.dataset.renewalOfContractIdx !== undefined) ? parseInt(_fid.dataset.renewalOfContractIdx, 10) : NaN;
+        if (isNew && !isNaN(_rIdx) && typeof contracts !== 'undefined' && contracts[_rIdx]) {
+            const _c = contracts[_rIdx];
+            _c.renewalActivities = Array.isArray(_c.renewalActivities) ? _c.renewalActivities : [];
+            _c.renewalActivities.push({ date: __msTodayLocal(), type: 'Proposal Sent', summary: 'Renewal proposal ' + (rec.proposalNumber || '') + ' drafted (review + send)' });
+            if (!_c.renewalStatus || _c.renewalStatus === 'Not Started') _c.renewalStatus = 'Negotiating';
+            _c.renewalGeneratedProposalId = rec.id;
+            if (typeof safeSetStorage === 'function') safeSetStorage(JSON.stringify(contracts));
+        }
+        if (_fid && _fid.dataset) delete _fid.dataset.renewalOfContractIdx;
+    } catch (e) { console.warn('Renewal trace on proposal save:', e); }
 
     closeProposalForm();
 
@@ -28743,6 +29237,7 @@ function initPurchaseOrders() {
         const raw = localStorage.getItem(POS_KEY);
         purchaseOrders = raw ? JSON.parse(raw) : [];
         if (!Array.isArray(purchaseOrders)) purchaseOrders = [];
+        purchaseOrders = purchaseOrders.filter(x => x && typeof x === 'object');   // 8FH.1 — a damaged row arrives as null
     } catch (e) { console.warn("POs load failed", e); purchaseOrders = []; }
     try {
         const v = localStorage.getItem(POS_VIEW_KEY);
@@ -28759,8 +29254,8 @@ function initPurchaseOrders() {
 }
 
 function savePurchaseOrders() {
-    try { localStorage.setItem(POS_KEY, JSON.stringify(purchaseOrders)); }
-    catch (e) { console.error("POs save failed", e); alert("Unable to save purchase orders. Storage may be full."); }
+    try { localStorage.setItem(POS_KEY, JSON.stringify(purchaseOrders)); return true; }
+    catch (e) { console.error("POs save failed", e); alert("Unable to save purchase orders. Storage may be full."); return false; }
 }
 function savePOsView() { try { localStorage.setItem(POS_VIEW_KEY, poView); } catch (e) {} }
 
@@ -29201,14 +29696,26 @@ async function openPOForm(id) {
         const __fxChk = document.getElementById('poShowFxOnPdf');
         if (__fxChk) __fxChk.checked = !!po.showFxOnPdf;
         val('poInstructionsToVendor', po.instructionsToVendor || '');
-        val('poExternalLink', po.externalLink || '');
-        val('poExternalLink__local', po.externalLinkLocalPath || '');
+        // 8FH.1 — the file this PO resolves to (its own pin, else the contract's fresher one): the form used to show the
+        // PO's own, often blank, pin and the save then pushed that blank onto the contract
+        const _rp = (typeof resolvePOPath === 'function') ? resolvePOPath(po) : { link: '', localPath: '' };
+        val('poExternalLink', po.externalLink || (_rp && _rp.link) || '');
+        val('poExternalLink__local', po.externalLinkLocalPath || (_rp && _rp.localPath) || '');
         try { var __poLp = document.getElementById('poExternalLink__local'); if (__poLp) window.__msUpdateLocalToggleState(__poLp); } catch (_) {}
+        // 8FH.1 — a record's own values stay selectable even when the masters no longer list them
+        __msEnsureSelectOption('poOem', po.oem, (po.oem || '') + ' (not in OEM master)');
+        __msEnsureSelectOption('poEndClient', po.endClient, (po.endClient || '') + ' (not in Client Master)');
+        if (po.linkedProposalId) {
+            const _lp = (typeof proposals !== 'undefined' && Array.isArray(proposals)) ? proposals.find(x => x && x.id === po.linkedProposalId) : null;
+            __msEnsureSelectOption('poLinkedProposalId', po.linkedProposalId, _lp ? `${_lp.proposalNumber} — ${_lp.clientName} [${_lp.status}]` : po.linkedProposalId + ' (proposal not found)');
+        }
+        try { const _oa = document.getElementById('poOemAddress'); if (_oa) _oa.dataset.autofill = ''; } catch (_) {}
         poFormLineItems = (po.lineItems || []).map(li => ({ ...li }));
         document.getElementById('poDeleteBtn').style.display = 'inline-flex';
     } else {
         const blank = poBlank();
         title.innerText = 'New Purchase Order';
+        try { const _oa = document.getElementById('poOemAddress'); if (_oa) _oa.dataset.autofill = ''; } catch (_) {}   // 8FH.1
         val('poFormId', '');
         val('poNumber', '');
         val('poOem', '');
@@ -29282,6 +29789,19 @@ function populatePOOemDropdown() {
     sel.innerHTML = '<option value="">— Select OEM —</option>' + oems.map(o => `<option value="${pEsc(o)}"${current === o ? ' selected' : ''}>${pEsc(o)}${isOemForeign(o) ? ' (Foreign)' : ''}</option>`).join('');
 }
 
+// 8FH.1 — keep a record's own value selectable in a dropdown rebuilt from the masters (appended, marked).
+function __msEnsureSelectOption(selId, value, label) {
+    const sel = document.getElementById(selId);
+    if (!sel || value === undefined || value === null || value === '') return;
+    if (![...sel.options].some(o => o.value === String(value))) {
+        const opt = document.createElement('option');
+        opt.value = String(value);
+        opt.textContent = label || String(value);
+        sel.appendChild(opt);
+    }
+    sel.value = String(value);
+}
+
 function populatePOEndClientDropdown() {
     const sel = document.getElementById('poEndClient');
     if (!sel) return;
@@ -29319,7 +29839,7 @@ function populatePOContractDropdown() {
     if (!sel) return;
     const current = sel.value;
     if (typeof contracts === 'undefined' || !Array.isArray(contracts)) { sel.innerHTML = '<option value="">— None —</option>'; return; }
-    sel.innerHTML = '<option value="">— None —</option>' + contracts.map((c, i) => `<option value="${i}"${String(current) === String(i) ? ' selected' : ''}>${pEsc(c.client)} — ${pEsc(c.product)} (${c.startDate || ''})</option>`).join('');
+    sel.innerHTML = '<option value="">— None —</option>' + contracts.map((c, i) => (!c || c.__damaged) ? '' : `<option value="${i}"${String(current) === String(i) ? ' selected' : ''}>${pEsc(c.client)} — ${pEsc(c.product)} (${c.start || c.startDate || ''})</option>`).join('');   // 8FH.1 — contracts carry `start`; a damaged row's placeholder is not offered
 }
 
 function onPOOemChange() {
@@ -29331,7 +29851,10 @@ function onPOOemChange() {
     // address fields (line1/line2/city/state/pincode/country) and falls back to
     // the legacy single `address` textarea if those are blank.
     const oemAddrEl = document.getElementById('poOemAddress');
-    if (oemAddrEl && !oemAddrEl.value.trim() && oem && typeof oemMetadata === 'object') {
+    // 8FH.1 — the auto-filled address follows the OEM while the user has not edited it (picking OEM A then B used to
+    // keep A's address under B's name on the PDF)
+    const _autoPrev = (oemAddrEl && oemAddrEl.dataset) ? (oemAddrEl.dataset.autofill || '') : '';
+    if (oemAddrEl && oem && typeof oemMetadata === 'object' && (!oemAddrEl.value.trim() || oemAddrEl.value === _autoPrev)) {
         const meta = oemMetadata[oem];
         if (meta) {
             const lines = [];
@@ -29347,7 +29870,7 @@ function onPOOemChange() {
                 lines.push(meta.country);
             }
             const assembled = lines.join('\n') || (meta.address || '');
-            if (assembled) oemAddrEl.value = assembled;
+            if (assembled) { oemAddrEl.value = assembled; if (oemAddrEl.dataset) oemAddrEl.dataset.autofill = assembled; }
         }
     }
     if (!oem) { hint.innerHTML = ''; updatePOTotalsDisplay(); return; }
@@ -29586,10 +30109,9 @@ function removePOLineItem(idx) {
 }
 
 function onPOLineItemFieldChange(idx, field, value) {
-    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!poFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitCost' || field === 'discountPct' || field === 'gstPct') {
-        const n = parseFloat(value);
+        const n = parseFloat(__msStripCommas(value)); // 8CV — money line-item fields may carry commas (8FH.1: money fields only)
         poFormLineItems[idx][field] = isNaN(n) ? 0 : n;
     } else {
         poFormLineItems[idx][field] = value;
@@ -29763,7 +30285,12 @@ async function savePOFromForm() {
             contracts.forEach((c, i) => {
                 if (!c) return;
                 let _matched = false;
-                if (_poNum && ((c.internalPO || '').trim()) === _poNum) _matched = true;
+                if (_poNum && ((c.internalPO || '').trim()) === _poNum) {
+                    // 8FH.1 — the contract's pin moves only when this PO brings one, the contract has none, or the contract
+                    // carried this PO's old pin (a blank PO pin used to erase the contract's)
+                    const _cL = c.internalPOLocalPath || '', _cK = c.internalPOLink || '';
+                    if ((rec.externalLink || rec.externalLinkLocalPath) || (!_cL && !_cK) || (_cL === _prevPoPin.local && _cK === _prevPoPin.link)) _matched = true;
+                }
                 if (_hasLci && i === _lci) {
                     // 8FF — a contract carries several PO records (one per PO file): a PO linked by index moves the contract's pin
                     // only when the contract has none or carries this PO's old pin (the contract's own PO is matched by number above)
@@ -31013,6 +31540,7 @@ function initInvoices() {
         const raw = localStorage.getItem(INVOICES_KEY);
         invoices = raw ? JSON.parse(raw) : [];
         if (!Array.isArray(invoices)) invoices = [];
+        invoices = invoices.filter(x => x && typeof x === 'object');   // 8FH.1 — a damaged row arrives as null
     } catch (e) { console.warn("Invoices load failed", e); invoices = []; }
     try {
         const v = localStorage.getItem(INVOICES_VIEW_KEY);
@@ -31030,8 +31558,8 @@ function initInvoices() {
 }
 
 function saveInvoices() {
-    try { localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices)); }
-    catch (e) { console.error("Invoices save failed", e); alert("Unable to save invoices. Storage may be full."); }
+    try { localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices)); return true; }
+    catch (e) { console.error("Invoices save failed", e); alert("Unable to save invoices. Storage may be full."); return false; }
 }
 function saveInvoicesView() { try { localStorage.setItem(INVOICES_VIEW_KEY, invoicesView); } catch (e) {} }
 
@@ -31191,7 +31719,7 @@ function determineInvoiceGSTMode(clientName, billingAddrId, routingOverride) {
             billAddr = client.billingAddresses.find(a => a.id === billingAddrId);
         }
         if (!billAddr) {
-            billAddr = client.billingAddresses.find(a => a.isDefault) || client.billingAddresses[0];
+            billAddr = client.billingAddresses.find(a => a.isPrimary || a.isDefault) || client.billingAddresses[0];   // 8FH.1 — the Client Master marks isPrimary
         }
     }
 
@@ -31200,7 +31728,7 @@ function determineInvoiceGSTMode(clientName, billingAddrId, routingOverride) {
         return { mode: 'export', sellerState, buyerState: '', buyerStateName: billAddr.country || '', buyerStateCode: '', isExport: true, billToParty: 'client' };
     }
 
-    const buyerStateCode = (billAddr && billAddr.stateCode) || '';
+    const buyerStateCode = __msClientAddrStateCode(client, billAddr);   // 8FH.1
     const buyerStateName = buyerStateCode ? getStateNameByCode(buyerStateCode) : '';
 
     if (!sellerState || !buyerStateCode) {
@@ -31215,6 +31743,19 @@ function determineInvoiceGSTMode(clientName, billingAddrId, routingOverride) {
         isExport: false,
         billToParty: 'client'
     };
+}
+
+// 8FH.1 — the state of a client's billing address: its own code, else the GST entry it is linked to, else the client's
+// primary GST entry, else the first two digits of the client's GSTIN. resolveInvoiceBillToContext already read it this
+// way; the GST-mode resolvers read only addr.stateCode and defaulted to IGST when it was missing.
+function __msClientAddrStateCode(rec, addr) {
+    if (addr && addr.stateCode) return String(addr.stateCode);
+    const ents = (rec && Array.isArray(rec.gstEntries)) ? rec.gstEntries : [];
+    if (addr && addr.linkedGstId) { const g = ents.find(x => x && x.id === addr.linkedGstId); if (g && g.stateCode) return String(g.stateCode); }
+    const p = ents.find(x => x && x.isPrimary) || ents[0];
+    if (p && p.stateCode) return String(p.stateCode);
+    const gstin = (rec && rec.gstin) ? String(rec.gstin).trim() : '';
+    return /^\d{2}/.test(gstin) ? gstin.slice(0, 2) : '';
 }
 
 function computeInvoiceLineItemSubtotal(li) {
@@ -31248,8 +31789,12 @@ function computeInvoiceTotals(lineItems, gstMode, reverseCharge) {
             igst += gstAmt;
         }
     });
-    const gstTotal = cgst + sgst + igst;
-    const grandTotal = subtotal + gstTotal;
+    // 8FH.1 — paise: GST amounts are paise amounts on the invoice; unrounded totals left an invoice paid at its printed
+    // total "Partially Paid" with ₹0.00 outstanding.
+    const r2 = n => Math.round(n * 100) / 100;
+    cgst = r2(cgst); sgst = r2(sgst); igst = r2(igst);
+    const gstTotal = r2(cgst + sgst + igst);
+    const grandTotal = r2(subtotal + gstTotal);
     return { grossTotal, discountTotal, subtotal, cgst, sgst, igst, gstTotal, grandTotal };
 }
 
@@ -31257,30 +31802,42 @@ function computeInvoiceAmountPaid(inv) {
     return (inv.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
 }
 
-function refreshInvoiceComputedFields(inv) {
-    // Phase 4C.2 — for Resale, GST is resolved from the reseller's state
-    const routingOverride = { commercialModel: inv.commercialModel || 'Direct', sourcedViaResellerKey: inv.sourcedViaResellerKey || '' };
-    const gst = determineInvoiceGSTMode(inv.clientName, inv.billingAddressId, routingOverride);
-    const t = computeInvoiceTotals(inv.lineItems, gst.mode, inv.reverseCharge);
-    Object.assign(inv, {
-        gstMode: gst.mode,
-        placeOfSupplyCode: gst.buyerStateCode,
-        placeOfSupplyName: gst.buyerStateName,
-        grossTotal: t.grossTotal,
-        discountTotal: t.discountTotal,
-        subtotal: t.subtotal,
-        cgst: t.cgst, sgst: t.sgst, igst: t.igst,
-        gstTotal: t.gstTotal,
-        grandTotal: t.grandTotal
-    });
-    inv.amountPaid = computeInvoiceAmountPaid(inv);
-    inv.amountOutstanding = Math.max(0, inv.grandTotal - inv.amountPaid);
+function refreshInvoiceComputedFields(inv, opts) {
+    // 8FH.1 — an invoice that has left Draft is a document that was issued: its GST split, place of supply and totals
+    // are frozen as issued. They used to be recomputed from today's master data on every render of the Invoices page
+    // (every tab open, every keystroke in the search box) and saved — a client edited in the session flipped every
+    // historical invoice of that client to IGST. They are recomputed only for Drafts, or when the form saves the
+    // invoice (opts.recomputeTax), or when a record has no totals yet. Payments, outstanding and status always refresh.
+    const _frozen = inv.status !== 'Draft' && !(opts && opts.recomputeTax) && inv.grandTotal !== undefined && inv.grandTotal !== null && !!inv.gstMode && inv.gstMode !== 'unknown';   // an unresolved split may still heal
+    if (!_frozen) {
+        // Phase 4C.2 — for Resale, GST is resolved from the reseller's state
+        const routingOverride = { commercialModel: inv.commercialModel || 'Direct', sourcedViaResellerKey: inv.sourcedViaResellerKey || '' };
+        const gst = determineInvoiceGSTMode(inv.clientName, inv.billingAddressId, routingOverride);
+        const t = computeInvoiceTotals(inv.lineItems, gst.mode, inv.reverseCharge);
+        Object.assign(inv, {
+            gstMode: gst.mode,
+            placeOfSupplyCode: gst.buyerStateCode,
+            placeOfSupplyName: gst.buyerStateName,
+            grossTotal: t.grossTotal,
+            discountTotal: t.discountTotal,
+            subtotal: t.subtotal,
+            cgst: t.cgst, sgst: t.sgst, igst: t.igst,
+            gstTotal: t.gstTotal,
+            grandTotal: t.grandTotal
+        });
+    }
+    const _r2 = n => Math.round(n * 100) / 100;
+    inv.amountPaid = _r2(computeInvoiceAmountPaid(inv));
+    inv.amountOutstanding = Math.max(0, _r2((parseFloat(inv.grandTotal) || 0) - inv.amountPaid));
     // Auto-status transitions based on payments
     if (inv.status !== 'Draft' && inv.status !== 'Cancelled' && inv.status !== 'Credit Note Issued') {
-        if (inv.amountPaid >= inv.grandTotal && inv.grandTotal > 0) {
+        if (inv.amountPaid >= (parseFloat(inv.grandTotal) || 0) - 0.005 && inv.grandTotal > 0) {   // 8FH.1 — half a paisa of tolerance
             if (inv.status !== 'Paid') {
                 inv.status = 'Paid';
-                inv.paidAt = inv.paidAt || new Date().toISOString();
+                // 8FH.1 — the date the invoice was paid is the date of the payment that completed it, not the moment
+                // this ran (the CA pack reads it)
+                const _pd = (Array.isArray(inv.payments) ? inv.payments.map(p => p && p.date).filter(Boolean).sort() : []);
+                inv.paidAt = _pd.length ? _pd[_pd.length - 1] + 'T00:00:00.000Z' : (inv.paidAt || new Date().toISOString());
                 inv.statusHistory = inv.statusHistory || [];
                 inv.statusHistory.push({ status: 'Paid', changedAt: inv.paidAt });
                 // Phase 4D — trigger commission accrual (only for Commission-model invoices)
@@ -31293,6 +31850,7 @@ function refreshInvoiceComputedFields(inv) {
         } else if (inv.amountPaid > 0) {
             if (inv.status !== 'Partially Paid') {
                 inv.status = 'Partially Paid';
+                inv.paidAt = null;   // 8FH.1 — not fully paid (any more)
                 inv.statusHistory = inv.statusHistory || [];
                 inv.statusHistory.push({ status: 'Partially Paid', changedAt: new Date().toISOString() });
             }
@@ -31300,6 +31858,9 @@ function refreshInvoiceComputedFields(inv) {
             // Zero payments — if was previously Paid or Partially Paid (edge case), downgrade to Issued
             if (inv.status === 'Paid' || inv.status === 'Partially Paid') {
                 inv.status = 'Issued';
+                inv.paidAt = null;   // 8FH.1 — a stale paid date used to be reused on the next real payment
+                inv.statusHistory = inv.statusHistory || [];
+                inv.statusHistory.push({ status: 'Issued', changedAt: new Date().toISOString() });
                 // Phase 4D — invoice was downgraded from Paid. Reverse any accrual that wasn't yet paid out.
                 try {
                     if (typeof reverseCommissionAccrualForInvoice === 'function') {
@@ -31411,7 +31972,7 @@ function _propagateInvoiceToContractCycle(inv) {
             ? invoices.find(i =>
                 String(i.linkedContractIdx) === String(cIdx) &&
                 String(i.linkedCycleYearIdx) === String(yIdx) &&
-                i.status !== 'Cancelled')
+                i.status !== 'Cancelled' && i.status !== 'Credit Note Issued')
             : null;
     }
 
@@ -31419,6 +31980,17 @@ function _propagateInvoiceToContractCycle(inv) {
     const set = (field, val) => {
         if (cycle[field] !== val) { cycle[field] = val; changed = true; }
     };
+    // 8FH.1 — the rows of this cycle's CANCELLED CRM invoices, and of an invoice just deleted, leave the ledger; every
+    // other row stays (hand-entered rows, the import's rows, a credit-noted invoice's own row with its file link)
+    try {
+        if (Array.isArray(cycle.arInvoices) && cycle.arInvoices.length && typeof invoices !== 'undefined' && Array.isArray(invoices)) {
+            const _gone = new Set();
+            invoices.forEach(i => { if (i && i.status === 'Cancelled' && i.invoiceNumber && String(i.linkedContractIdx) === String(cIdx) && String(i.linkedCycleYearIdx) === String(yIdx)) _gone.add(i.invoiceNumber); });
+            if (inv.invoiceNumber && !invoices.some(i => i && i.id === inv.id)) _gone.add(inv.invoiceNumber);
+            const _kept = cycle.arInvoices.filter(e => e && !(e.invNo && _gone.has(e.invNo)));
+            if (_kept.length !== cycle.arInvoices.length) { cycle.arInvoices = _kept; changed = true; }
+        }
+    } catch (e) { console.warn('ledger rows of cancelled / deleted invoices:', e); }
 
     if (active) {
         const isIssued = active.status === 'Issued' || active.status === 'Partially Paid' || active.status === 'Paid';
@@ -31449,6 +32021,20 @@ function _propagateInvoiceToContractCycle(inv) {
         // 8FD — the entry's document links (OneDrive link, local path) survive when it is the same invoice:
         // a Mark-Issued or a payment must not drop the paperclip filled in by hand or by the import.
         const oldAr = Array.isArray(cycle.arInvoices) ? cycle.arInvoices : [];
+        const _activeNo = active.invoiceNumber || '';
+        const _others = oldAr.filter(e => e && (e.invNo || '') && e.invNo !== _activeNo);
+        if (_others.length) {
+            // 8FH.1 — a multi-entry ledger (split billing, hand-entered rows): update or add this invoice's own entry
+            // only. The amount of an existing entry is the user's (a split row); the date and paid date follow the invoice.
+            const _mine = oldAr.find(e => e && e.invNo === _activeNo);
+            if (!_mine) {
+                cycle.arInvoices = oldAr.concat([{ invNo: _activeNo, date: active.invoiceDate || '', amount: parseFloat(active.grandTotal) || 0, paidDate: paymentDate || '', link: '', localPath: '' }]);
+                changed = true;
+            } else if ((_mine.date || '') !== (active.invoiceDate || '') || (_mine.paidDate || '') !== (paymentDate || '')) {
+                _mine.date = active.invoiceDate || ''; _mine.paidDate = paymentDate || '';
+                changed = true;
+            }
+        } else {
         const sameOld = (oldAr.length === 1 && oldAr[0] && oldAr[0].invNo === (active.invoiceNumber || '')) ? oldAr[0] : null;
         const newArEntry = {
             invNo: active.invoiceNumber || '',
@@ -31468,6 +32054,7 @@ function _propagateInvoiceToContractCycle(inv) {
             cycle.arInvoices = [newArEntry];
             changed = true;
         }
+        }
     } else {
         // No active invoice — clear cycle fields (e.g., the only invoice was cancelled or deleted)
         set('invoiceRaised', false);
@@ -31475,11 +32062,7 @@ function _propagateInvoiceToContractCycle(inv) {
         set('clientInvoiceNo', '');
         set('paid', false);
         set('paymentDate', null);
-        // 8AN — also clear arInvoices since no active invoice exists
-        if (Array.isArray(cycle.arInvoices) && cycle.arInvoices.length > 0) {
-            cycle.arInvoices = [];
-            changed = true;
-        }
+        // 8AN cleared the whole ledger here; 8FH.1 — the rows of cancelled / deleted invoices went above, the rest stay
     }
 
     if (changed) {
@@ -31504,9 +32087,14 @@ function renderInvoicesPage() {
     document.getElementById('invViewKanbanBtn').classList.toggle('active', invoicesView === 'kanban');
     document.getElementById('invViewListBtn').classList.toggle('active', invoicesView === 'list');
 
-    // Refresh all computed fields
-    invoices.forEach(refreshInvoiceComputedFields);
-    saveInvoices();
+    // Refresh the computed fields (payments, outstanding, status; tax only for Drafts — 8FH.1) and save only when
+    // something changed: this page used to write the whole invoices table on every open and every keystroke.
+    let _before = '';
+    try { _before = JSON.stringify(invoices); } catch (e) { _before = null; }
+    invoices.forEach(inv => refreshInvoiceComputedFields(inv));
+    let _after = '';
+    try { _after = JSON.stringify(invoices); } catch (e) { _after = null; }
+    if (_before === null || _after === null || _before !== _after) saveInvoices();
 
     populateInvoicesFilters();
     const filtered = getFilteredInvoices();
@@ -32671,10 +33259,9 @@ function removeInvoiceLineItem(idx) {
 }
 
 function onInvoiceLineItemFieldChange(idx, field, value) {
-    value = __msStripCommas(value); // 8CV — money line-item fields may carry commas
     if (!invFormLineItems[idx]) return;
     if (field === 'qty' || field === 'unitPrice' || field === 'discountPct' || field === 'gstPct') {
-        const n = parseFloat(value);
+        const n = parseFloat(__msStripCommas(value)); // 8CV — money line-item fields may carry commas (8FH.1: money fields only)
         invFormLineItems[idx][field] = isNaN(n) ? 0 : n;
     } else {
         invFormLineItems[idx][field] = value;
@@ -32758,14 +33345,24 @@ async function saveInvoiceFromForm() {
     const idVal = document.getElementById('invFormId').value;
     const now = new Date().toISOString();
     let rec, isNew = false;
+    let _prevStatus = null, _statusDowngraded = false;
+    const invStatusChosen = document.getElementById('invStatus').value;   // 8FH.1 — what the dropdown said before the save derived the real status
     if (idVal && invoices.some(x => x.id === idVal)) {
         rec = invoices.find(x => x.id === idVal);
-        const newStatus = document.getElementById('invStatus').value;
+        _prevStatus = rec.status;
+        let newStatus = document.getElementById('invStatus').value;
+        // 8FH.1 — Paid and Partially Paid are set by recording payments, never by the dropdown: choosing them with no
+        // payment used to push a bogus history entry and stamp a paid date that the real payment later reused.
+        if (newStatus === 'Paid' || newStatus === 'Partially Paid') {
+            // the dropdown cannot move an invoice into or between the payment statuses; the refresh below derives them
+            // from the recorded payments (so no bogus history line either way)
+            newStatus = (rec.status === 'Draft' || !rec.status) ? 'Issued' : rec.status;
+            const _sel = document.getElementById('invStatus'); if (_sel) _sel.value = newStatus;
+        }
         if (rec.status !== newStatus) {
             rec.statusHistory = rec.statusHistory || [];
             rec.statusHistory.push({ status: newStatus, changedAt: now });
             if (newStatus === 'Issued' && !rec.issuedAt) rec.issuedAt = now;
-            if (newStatus === 'Paid') rec.paidAt = now;
             if (newStatus === 'Cancelled') rec.cancelledAt = now;
         }
     } else {
@@ -32810,8 +33407,7 @@ async function saveInvoiceFromForm() {
     }
     // Phase 4D — detect manual Paid-status set and set paidAt if missing
     // (refreshInvoiceComputedFields further down handles auto-accrual trigger when status transitions)
-    const __wasPaidBefore = !isNew && (invoices.find(x => x.id === rec.id) || {}).status === 'Paid';
-    if (rec.status === 'Paid' && !rec.paidAt) rec.paidAt = now;
+    const __wasPaidBefore = !isNew && _prevStatus === 'Paid';   // 8FH.1 — read before the status was overwritten
     rec.paymentTerms = document.getElementById('invPaymentTerms').value;
     rec.bankDetailsShown = document.getElementById('invShowBankDetails').value === 'true';
     __msApplySigSelect(rec, document.getElementById('invShowSignature').value); // 8EN — shown + which
@@ -32837,7 +33433,9 @@ async function saveInvoiceFromForm() {
     rec.lineItems = invFormLineItems.map(li => ({ ...li }));
     rec.updatedAt = now;
     if (rec.status === 'Issued' && !rec.issuedAt) rec.issuedAt = now;
-    refreshInvoiceComputedFields(rec);
+    refreshInvoiceComputedFields(rec, { recomputeTax: true });   // 8FH.1 — the user edited this invoice and saw the split
+    if (rec.status === 'Issued' && !rec.issuedAt) rec.issuedAt = now;   // 8FH.1 — an invoice that landed in Issued through the refresh
+    try { const _fs = invStatusChosen; if ((_fs === 'Paid' || _fs === 'Partially Paid') && rec.status !== _fs) _statusDowngraded = true; } catch (e) {}   // 8FH.1 — the chosen payment status did not hold
     // Phase 4D — if user directly set Paid via the form (bypassing payments array),
     // refreshInvoiceComputedFields may not have triggered the transition. Force-check.
     if (rec.status === 'Paid' && !__wasPaidBefore) {
@@ -32853,7 +33451,8 @@ async function saveInvoiceFromForm() {
     // already calls closeInvoiceDetail() + renderInvoicesPage(). The redundant
     // code below caused a flicker after every invoice save.
     if (typeof showProspectToast === 'function') {
-        showProspectToast(`<i class="fas fa-check-circle"></i> Invoice <strong>${pEsc(rec.invoiceNumber)}</strong> ${isNew ? 'created' : 'updated'} in <strong>${pEsc(rec.status)}</strong> status.`);
+        showProspectToast(`<i class="fas fa-check-circle"></i> Invoice <strong>${pEsc(rec.invoiceNumber)}</strong> ${isNew ? 'created' : 'updated'} in <strong>${pEsc(rec.status)}</strong> status.`
+            + (_statusDowngraded ? ' Paid / Partially Paid come from recorded payments — use <strong>Record Payment</strong> on the invoice.' : ''), _statusDowngraded ? 7000 : undefined);
     }
 }
 
@@ -32863,7 +33462,7 @@ async function deleteInvoiceFromForm() {
     if (!rec) return;
     if (!(await __msAsk(`Permanently delete invoice ${rec.invoiceNumber}? This cannot be undone.\n\n(Tip: for already-issued invoices, use "Cancelled" or "Credit Note Issued" status instead, to preserve the audit trail.)`, { ok: 'Delete', danger: 'ok' }))) return;
     // Capture cycle pointer BEFORE removing — we still need it to recompute the cycle.
-    const deletedRecCopy = { linkedContractIdx: rec.linkedContractIdx, linkedCycleYearIdx: rec.linkedCycleYearIdx };
+    const deletedRecCopy = { id: rec.id, invoiceNumber: rec.invoiceNumber, linkedContractIdx: rec.linkedContractIdx, linkedCycleYearIdx: rec.linkedCycleYearIdx };   // 8FH.1 — the id and number, so the cycle's ledger drops this invoice's own row
     invoices = invoices.filter(x => x.id !== idVal);
     saveInvoices();
     // Bug #10 fix — recompute the cycle from the remaining invoices. If this
@@ -32891,8 +33490,11 @@ function openInvoiceDetail(id) {
     }
     if (listPage) listPage.style.display = 'none';
     if (detailPage) detailPage.style.display = 'block';
+    let _b = null, _a = null;   // 8FH.1 — save only when the refresh changed something (this used to write the whole table on every open)
+    try { _b = JSON.stringify(inv); } catch (e) {}
     refreshInvoiceComputedFields(inv);
-    saveInvoices();
+    try { _a = JSON.stringify(inv); } catch (e) {}
+    if (_b === null || _a === null || _b !== _a) saveInvoices();
     renderInvoiceDetail(inv);
     // Attachments panel (Phase 3 ATT-2)
     if (typeof renderAttachmentsPanel === 'function') {
@@ -34751,10 +35353,14 @@ function findInvoiceForContractCycle(cIdx, yIdx) {
     if (typeof invoices === 'undefined' || !Array.isArray(invoices)) return null;
     const cIdxStr = String(cIdx);
     const yIdxStr = String(yIdx);
-    return invoices.find(inv => {
-        if (inv.status === 'Cancelled') return false;  // skip cancelled so a new one can be generated
+    // 8FH.1 — a credit-noted invoice steps aside like a cancelled one (it blocked re-invoicing and kept mirroring
+    // itself onto the cycle over a replacement); among several candidates an issued one outranks a Draft.
+    const _cands = invoices.filter(inv => {
+        if (!inv || inv.status === 'Cancelled' || inv.status === 'Credit Note Issued') return false;
         return String(inv.linkedContractIdx) === cIdxStr && String(inv.linkedCycleYearIdx) === yIdxStr;
-    }) || null;
+    });
+    if (!_cands.length) return null;
+    return _cands.find(inv => inv.status === 'Issued' || inv.status === 'Partially Paid' || inv.status === 'Paid') || _cands[0];
 }
 
 // ===== Entry: Generate invoice from a contract's billing cycle =====
@@ -35589,25 +36195,25 @@ async function generateRenewalProposal(contractIdx) {
                 li.qty = qty;
                 li.unitPrice = qty > 0 ? (renewalValue / qty) : renewalValue;
                 li.gstPct = (companyProfile && companyProfile.defaultGSTRate !== undefined) ? companyProfile.defaultGSTRate : 18;
-                if (typeof proposalFormLineItems !== 'undefined') {
-                    window.proposalFormLineItems = [li];
-                    if (typeof renderProposalLineItems === 'function') renderProposalLineItems();
-                    if (typeof updateProposalTotalsDisplay === 'function') updateProposalTotalsDisplay();
-                }
+                // 8FH.1 — proposalFormLineItems is a script-level `let`; the old `window.proposalFormLineItems = …`
+                // made an unrelated global and the form kept its one blank line.
+                proposalFormLineItems = [li];
+                if (typeof renderProposalLineItems === 'function') renderProposalLineItems();
+                if (typeof updateProposalTotalsDisplay === 'function') updateProposalTotalsDisplay();
             }
-            // Tag the proposal so we can trace it back
+            // 8FH.1 — the renewal term: the day after the contract ends, for the same term
+            try {
+                if (c.endDate) {
+                    const _ns = new Date(c.endDate + 'T00:00:00'); _ns.setDate(_ns.getDate() + 1);
+                    const _ne = new Date(_ns); _ne.setMonth(_ne.getMonth() + Math.max(1, Math.round(parseFloat(c.term) || 12))); _ne.setDate(_ne.getDate() - 1);
+                    val('proposalStartDate', __msTodayLocal(_ns)); val('proposalEndDate', __msTodayLocal(_ne));
+                    if (typeof updateProposalTerm === 'function') updateProposalTerm();
+                }
+            } catch (e) { console.warn('Renewal proposal dates:', e); }
+            // Tag the proposal so the contract is updated when it is saved (8FH.1: the 'Proposal Sent' activity and
+            // the status change used to be written here, before anything existed — cancelling left a false trail).
             const formId = document.getElementById('proposalFormId');
             if (formId) formId.dataset.renewalOfContractIdx = idx;
-
-            // Also record this on contract side
-            c.renewalActivities = c.renewalActivities || [];
-            c.renewalActivities.push({
-                date: today,
-                type: 'Proposal Sent',
-                summary: `Renewal proposal drafted (review + send)`
-            });
-            c.renewalStatus = c.renewalStatus === 'Not Started' ? 'Negotiating' : c.renewalStatus;
-            try { safeSetStorage(JSON.stringify(contracts)); } catch (e) { console.warn('Contracts save:', e); }
 
             if (typeof showProspectToast === 'function') {
                 showProspectToast(`<i class="fas fa-file-invoice"></i> Renewal proposal pre-filled for <strong>${pEsc(c.client)}</strong>. Review line items and save.`, 5500);
@@ -36317,6 +36923,7 @@ function attEntityKey(entityType, entityId) {
 
 // ===== Size math =====
 function fmtBytes(b) {
+    b = Number(b) || 0;   // 8FH.1 — never "NaN MB"
     if (b < 1024) return b + ' B';
     if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
     return (b / (1024 * 1024)).toFixed(2) + ' MB';
@@ -36735,7 +37342,7 @@ function renderAttachmentsManagerList() {
 
     const filtered = flat.filter(a => {
         if (entityFilter !== 'ALL' && a.entityType !== entityFilter) return false;
-        if (search && !a.filename.toLowerCase().includes(search)) return false;
+        if (search && !String(a.filename || '').toLowerCase().includes(search)) return false;   // 8FH.1 — a record without a filename
         return true;
     });
 
@@ -36886,7 +37493,8 @@ function initResellerMaster() {
         const stored = localStorage.getItem(RESELLER_MASTER_KEY);
         if (stored) {
             resellerMaster = JSON.parse(stored);
-            if (typeof resellerMaster !== 'object' || Array.isArray(resellerMaster)) resellerMaster = {};
+            if (!resellerMaster || typeof resellerMaster !== 'object' || Array.isArray(resellerMaster)) resellerMaster = {};
+            Object.keys(resellerMaster).forEach(k => { if (!resellerMaster[k] || typeof resellerMaster[k] !== 'object') delete resellerMaster[k]; });   // 8FH.1 — a damaged row arrives as null
         } else {
             resellerMaster = {};
         }
@@ -37605,10 +38213,15 @@ async function saveResellerMasterEntry() {
         if (resellerMaster[key]) {
             if (!(await __msAsk(`A reseller named "${key}" already exists. Merging will overwrite it. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
         }
-        delete resellerMaster[existingKey];
+        // 8FH.1 — the old record is removed at the end, when the new one is written (a "No" to the GSTIN question below
+        // used to leave the reseller deleted from memory, and the next reseller save made that permanent)
+    }
+    // 8FH.1 — "Add New Reseller" with a name that already exists used to overwrite that reseller without a word.
+    if (!existingKey && resellerMaster[key]) {
+        if (!(await __msAsk(`A reseller named "${key}" already exists. Saving will overwrite it with this form. Continue?`, { ok: 'Overwrite', danger: 'ok' }))) return;
     }
 
-    const prev = resellerMaster[key] || rmBlankRecord(key);
+    const prev = (existingKey && resellerMaster[existingKey]) || resellerMaster[key] || rmBlankRecord(key);   // 8FH.1 — a renamed reseller keeps its history
 
     let gstEntries = rmReadGSTFromForm().filter(e => (e.gstin && e.gstin.trim()) || (e.label && e.label.trim()));
     let billingAddresses = rmReadBillAddrsFromForm().filter(e => (e.address && e.address.trim()) || (e.label && e.label.trim()));
@@ -37659,8 +38272,16 @@ async function saveResellerMasterEntry() {
     };
     if (!prev.createdAt) rec.createdAt = new Date().toISOString();
 
+    let _rRenamed = null;
+    if (existingKey && existingKey !== key) {
+        delete resellerMaster[existingKey];
+        _rRenamed = __msRenameResellerEverywhere(existingKey, key);   // 8FH.1 — every deal routed via the old key follows it
+    }
     resellerMaster[key] = rec;
     saveResellerMasterData();
+    if (_rRenamed && _rRenamed.total && typeof showProspectToast === 'function') {
+        showProspectToast(`<i class="fas fa-random"></i> Re-pointed ${_rRenamed.total} record${_rRenamed.total === 1 ? '' : 's'} to the new name: ${pEsc(_rRenamed.summary)}.`, 6500);
+    }
 
     // Bug fix #41 — Modal converted to a full-page tab. We capture _rmInlineOnSave
     // and _rmReturnTab BEFORE navigation so they survive showTab. The inline-add
@@ -37690,8 +38311,61 @@ async function saveResellerMasterEntry() {
     }
 }
 
+// 8FH.1 — a reseller rename follows the key into every record routed through it (proposals, purchase orders, invoices,
+// contracts: sourcedViaResellerKey; commission accruals and payouts: resellerKey). Each touched store is saved.
+function __msRenameResellerEverywhere(oldKey, newKey) {
+    const out = { proposals: 0, pos: 0, invoices: 0, contracts: 0, commissions: 0, clients: 0, total: 0, summary: '' };
+    const walk = (list, field, save, name) => {
+        try {
+            if (!Array.isArray(list)) return;
+            let n = 0;
+            list.forEach(x => { if (x && x[field] === oldKey) { x[field] = newKey; n++; } });
+            out[name] += n;
+            if (n && typeof save === 'function') save();
+        } catch (e) { console.warn('rename reseller (' + name + '):', e); }
+    };
+    walk(typeof proposals !== 'undefined' ? proposals : null, 'sourcedViaResellerKey', typeof saveProposals === 'function' ? saveProposals : null, 'proposals');
+    walk(typeof purchaseOrders !== 'undefined' ? purchaseOrders : null, 'sourcedViaResellerKey', typeof savePurchaseOrders === 'function' ? savePurchaseOrders : null, 'pos');
+    walk(typeof invoices !== 'undefined' ? invoices : null, 'sourcedViaResellerKey', typeof saveInvoices === 'function' ? saveInvoices : null, 'invoices');
+    walk(typeof contracts !== 'undefined' ? contracts : null, 'sourcedViaResellerKey', typeof persistData === 'function' ? persistData : null, 'contracts');
+    try {
+        if (typeof clientMaster === 'object' && clientMaster) {
+            let n = 0;
+            Object.keys(clientMaster).forEach(k => { const r = clientMaster[k]; if (r && r.defaultSourcedViaResellerKey === oldKey) { r.defaultSourcedViaResellerKey = newKey; n++; } });
+            out.clients = n;
+            if (n && typeof saveClientMasterData === 'function') saveClientMasterData();
+        }
+    } catch (e) { console.warn('rename reseller (clients):', e); }
+    try {
+        if (typeof commissionLedger === 'object' && commissionLedger) {
+            let n = 0;
+            ['accruals', 'payouts'].forEach(k => { (Array.isArray(commissionLedger[k]) ? commissionLedger[k] : []).forEach(x => { if (x && x.resellerKey === oldKey) { x.resellerKey = newKey; n++; } }); });
+            out.commissions = n;
+            if (n && typeof saveCommissionLedger === 'function') saveCommissionLedger();
+        }
+    } catch (e) { console.warn('rename reseller (commissions):', e); }
+    out.total = out.proposals + out.pos + out.invoices + out.contracts + out.commissions + out.clients;
+    out.summary = [['proposal', out.proposals], ['purchase order', out.pos], ['invoice', out.invoices], ['contract', out.contracts], ['commission row', out.commissions], ['client default routing', out.clients]]
+        .filter(p => p[1]).map(p => p[1] + ' ' + p[0] + (p[1] === 1 ? '' : 's')).join(', ');
+    return out;
+}
+
 async function deleteResellerMasterEntry(key) {
-    if (!(await __msAsk(`Delete reseller "${key}" from the master?\n\nThis does NOT affect any existing contracts, invoices, or client records.`, { ok: 'Delete', danger: 'ok' }))) return;
+    // 8FH.1 — deals routed via this reseller keep its key: with the record gone, an issued Resale invoice would re-print
+    // with the END CLIENT as Bill-To. Refuse while anything is routed through it.
+    const _cnt = (list, field) => Array.isArray(list) ? list.filter(x => x && x[field] === key).length : 0;
+    const _refs = [[_cnt(typeof proposals !== 'undefined' ? proposals : null, 'sourcedViaResellerKey'), 'proposal'],
+                   [_cnt(typeof purchaseOrders !== 'undefined' ? purchaseOrders : null, 'sourcedViaResellerKey'), 'purchase order'],
+                   [_cnt(typeof invoices !== 'undefined' ? invoices : null, 'sourcedViaResellerKey'), 'invoice'],
+                   [_cnt(typeof contracts !== 'undefined' ? contracts : null, 'sourcedViaResellerKey'), 'contract'],
+                   [(typeof commissionLedger === 'object' && commissionLedger) ? (_cnt(commissionLedger.accruals, 'resellerKey') + _cnt(commissionLedger.payouts, 'resellerKey')) : 0, 'commission row'],
+                   [(typeof clientMaster === 'object' && clientMaster) ? Object.keys(clientMaster).filter(k => clientMaster[k] && clientMaster[k].defaultSourcedViaResellerKey === key).length : 0, 'client default routing']]
+        .filter(p => p[0]).map(p => p[0] + ' ' + p[1] + (p[0] === 1 ? '' : 's'));
+    if (_refs.length) {
+        await window.__msAlert(`"${key}" cannot be deleted: ${_refs.join(', ')} are routed through this reseller. Re-point them first, or rename the reseller instead (a rename follows into every record).`);
+        return;
+    }
+    if (!(await __msAsk(`Delete reseller "${key}" from the master?\n\nNothing is routed through it, so no contract, invoice or client record is affected.`, { ok: 'Delete', danger: 'ok' }))) return;
     delete resellerMaster[key];
     saveResellerMasterData();
     if (rmActiveResellerKey === key) rmActiveResellerKey = null;
@@ -38786,8 +39460,8 @@ async function commitProposalClientNameRepair() {
         inv.commercialModel = m.suggestedModel;
         inv.sourcedViaResellerKey = (m.suggestedModel === 'Direct') ? '' : m.suggestedRkey;
         inv.updatedAt = nowIso;
-        // Also refresh GST mode + place of supply since routing impacts them
-        try { if (typeof refreshInvoiceComputedFields === 'function') refreshInvoiceComputedFields(inv); } catch (e) {}
+        // Also refresh GST mode + place of supply since routing impacts them (8FH.1: the user confirmed this re-derivation, so the frozen split is recomputed)
+        try { if (typeof refreshInvoiceComputedFields === 'function') refreshInvoiceComputedFields(inv, { recomputeTax: true }); } catch (e) {}
         fixedCount++;
     });
     if (selected.invoiceRouting.length > 0) {
@@ -38856,14 +39530,18 @@ function loadCommissionLedger() {
     } catch (e) {
         console.warn('loadCommissionLedger failed:', e);
         commissionLedger = { accruals: [], payouts: [] };
+        window.__commissionLoadFailed = true;   // 8FH.1 — never write the empty ledger over the stored one
     }
 }
 
 function saveCommissionLedger() {
+    if (window.__commissionLoadFailed) { console.warn('saveCommissionLedger refused: the stored ledger could not be read at launch'); return false; }   // 8FH.1
     try {
         localStorage.setItem(COMMISSION_STORAGE_KEY, JSON.stringify(commissionLedger));
+        return true;
     } catch (e) {
         console.warn('saveCommissionLedger failed:', e);
+        return false;
     }
 }
 
@@ -39611,7 +40289,7 @@ function showPhase4AMigrationReview() {
             return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--detail-bg); border:1px solid var(--glass-border); border-radius:6px; margin-bottom:6px;">
                 <input type="checkbox" class="rm-mig-full-chk" data-idx="${i}" checked style="width:16px; height:16px;">
                 <div style="flex:1;">
-                    <div style="font-weight:600; color:var(--text-main); font-size:13px;">${pEsc(f.clientKey)}</div>
+                    <div style="font-weight:600; color:var(--text-main); font-size:13px;">${pEsc(f.clientKey)}${(typeof resellerMaster === 'object' && resellerMaster && resellerMaster[f.clientKey]) ? ' <span style="font-weight:400; color:var(--warning); font-size:11px;">already in Reseller Master — left as it is; only the client copy is retired</span>' : ''}</div>
                     <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">
                         ${primG && primG.gstin ? 'GSTIN: ' + primG.gstin + ' · ' : ''}
                         ${(r.contacts && r.contacts.length) || 0} contacts · ${(r.gstEntries && r.gstEntries.length) || 0} GSTINs · ${(r.billingAddresses && r.billingAddresses.length) || 0} billing addrs
@@ -39684,6 +40362,15 @@ function commitPhase4AMigration() {
     selectedFulls.forEach(item => {
         const src = item.record;
         const nm = item.clientKey;
+        if (resellerMaster[nm]) {
+            // 8FH.1 — the reseller already exists (made by hand after a skipped run): keep it; only retire the client copy
+            src._migrated_to_reseller = new Date().toISOString();
+            src._legacy_isReseller = true;
+            src._legacy_resellerName = src.resellerName || '';
+            src.isReseller = false;
+            fullCount++;
+            return;
+        }
         const rec = rmBlankRecord(nm);
         rec.shortName = src.shortName || '';
         rec.website = src.website || '';
@@ -41705,6 +42392,7 @@ function initConsultants() {
         const rawC = localStorage.getItem('ms_consultants_v1');
         consultants = rawC ? JSON.parse(rawC) : [];
         if (!Array.isArray(consultants)) consultants = [];
+        consultants = consultants.filter(x => x && typeof x === 'object');   // 8FH.1 — a damaged row arrives as null
     } catch (e) {
         console.warn("Consultants load failed:", e);
         consultants = [];
@@ -41713,6 +42401,7 @@ function initConsultants() {
         const rawP = localStorage.getItem('ms_consultant_payments_v1');
         consultantPayments = rawP ? JSON.parse(rawP) : [];
         if (!Array.isArray(consultantPayments)) consultantPayments = [];
+        consultantPayments = consultantPayments.filter(x => x && typeof x === 'object');   // 8FH.1 — a damaged row arrives as null
     } catch (e) {
         console.warn("Consultant payments load failed:", e);
         consultantPayments = [];
@@ -41803,6 +42492,22 @@ function consultantPaymentBlank() {
 // numberingMode like invoices/POs (sequential or fy_month). Simple sequential
 // fallback if companyProfile not yet set up: scan existing payments for max
 // trailing integer and increment.
+// 8FH.1 — the number the next payment will get, without consuming it.
+function peekConsultantPaymentNumber() {
+    const prefix = 'MS-CON-';
+    const mode = (companyProfile && companyProfile.numberingMode) || 'sequential';
+    if (mode === 'fy_month' && typeof peekFyNextSerial === 'function' && typeof composeFyMonthNumber === 'function') {
+        return composeFyMonthNumber(prefix, peekFyNextSerial('consultant_payment'));
+    }
+    let maxN = 1000;
+    consultantPayments.forEach(p => {
+        if (!p || !p.paymentNumber) return;
+        const m = String(p.paymentNumber).match(/(\d+)$/);
+        if (m) { const n = parseInt(m[1]); if (!isNaN(n) && n > maxN) maxN = n; }
+    });
+    return prefix + (maxN + 1);
+}
+
 function assignConsultantPaymentNumber() {
     const prefix = 'MS-CON-';
     const mode = (companyProfile && companyProfile.numberingMode) || 'sequential';
@@ -42444,9 +43149,10 @@ function openConsultantPaymentForm(id, presetConsultantId) {
         if (dupBtn) dupBtn.style.display = '';
         renderConsultantPaymentAttachZones(rec.id);
     } else {
-        // New payment
+        // New payment — 8FH.1: the number is only previewed here and assigned on Save (opening and cancelling this
+        // form used to consume a serial and write the company profile to the database each time)
         const blank = consultantPaymentBlank();
-        blank.paymentNumber = assignConsultantPaymentNumber();
+        blank.paymentNumber = peekConsultantPaymentNumber() + ' (on save)';
         if (title) title.innerHTML = `<i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan); margin-right:8px;"></i> New Consultant Payment`;
         val('conPayFormId', blank.id);
         val('conPayConsultantId', presetConsultantId || '');
@@ -42675,7 +43381,8 @@ function saveConsultantPaymentFromForm() {
     } else {
         rec = consultantPaymentBlank();
         rec.id = idVal || rec.id;
-        rec.paymentNumber = document.getElementById('conPayNumber').value || assignConsultantPaymentNumber();
+        rec.paymentNumber = assignConsultantPaymentNumber();   // 8FH.1 — assigned here, on Save (the form shows a preview)
+        document.getElementById('conPayNumber').value = rec.paymentNumber;
         consultantPayments.push(rec);
         isNew = true;
     }
@@ -42741,6 +43448,20 @@ function duplicateLastConsultantPayment() {
         });
     if (candidates.length === 0) { alert('No previous payment found for this consultant.'); return; }
     const last = candidates[0];
+    // 8FH.1 — from an existing payment's form, Duplicate makes a NEW payment: the form's identity is reset first
+    // (it used to keep the open record's id, so Save overwrote that payment — a paid one became Pending)
+    try {
+        const _curId = document.getElementById('conPayFormId').value;
+        if (_curId && consultantPayments.some(p => p.id === _curId)) {
+            const _blank = consultantPaymentBlank();
+            document.getElementById('conPayFormId').value = _blank.id;
+            document.getElementById('conPayNumber').value = peekConsultantPaymentNumber() + ' (on save)';
+            const _t = document.getElementById('conPayFormTitle');
+            if (_t) _t.innerHTML = `<i class="fas fa-file-invoice-dollar" style="color:var(--accent-cyan); margin-right:8px;"></i> New Consultant Payment`;
+            const _del = document.getElementById('conPayDeleteBtn'); if (_del) _del.style.display = 'none';
+            ['conPayInvoiceAttachZone', 'conPayOtherAttachZone'].forEach(id => { const z = document.getElementById(id); if (z) z.innerHTML = '<div style="color:var(--text-dim); font-size:11.5px; font-style:italic;">Save the payment first to attach files.</div>'; });
+        }
+    } catch (e) { console.warn('duplicate payment reset:', e); }
     // Clone: keep amounts + mode, blank dates + status + reference + paymentNumber
     document.getElementById('conPaySubtotal').value = last.subtotal || 0;
     const gstCb = document.getElementById('conPayGstApplicable');
@@ -42977,54 +43698,18 @@ function uploadConsultantAttachment(input, entityType, entityId, descTag) {
     // 8EQ — hold uploads until the attached files have loaded from the database.
     if (!__msAttachmentsWritable('consultant upload')) { input.value = ''; return; }
     const file = input.files[0];
-    if (typeof addAttachmentFromFile === 'function') {
-        // Use existing helper if available (handles size limits, base64, etc.)
-        addAttachmentFromFile(file, entityType, entityId, descTag, () => {
-            // Re-render the appropriate zone
-            if (entityType === 'consultant_payment') {
-                const idVal = document.getElementById('conPayFormId').value;
-                renderConsultantPaymentAttachZones(idVal);
-            } else if (entityType === 'consultant') {
-                const idVal = document.getElementById('conMasterFormId').value;
-                renderConsultantMasterAttachZone(idVal);
-            }
-        });
-    } else {
-        // Fallback: inline FileReader
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            if (!attachments[`${entityType}_${entityId}`]) attachments[`${entityType}_${entityId}`] = [];
-            attachments[`${entityType}_${entityId}`].push({
-                id: (typeof attNewId === 'function') ? attNewId() : ('att_' + Date.now()),
-                filename: file.name,
-                mimeType: file.type,
-                sizeBytes: file.size,
-                dataUrl: e.target.result,
-                uploadedAt: new Date().toISOString(),
-                description: descTag,
-                relatedEntityType: entityType,
-                relatedEntityId: entityId
-            });
-            // 8EQ — if the save is refused or fails, take the file back out so
-            // the screen never shows a file that is not in the database.
-            const savedOk = (typeof saveAttachments === 'function') ? saveAttachments() : false;
-            if (savedOk === false) {
-                const k = `${entityType}_${entityId}`;
-                if (attachments[k]) {
-                    attachments[k].pop();
-                    if (attachments[k].length === 0) delete attachments[k];
-                }
-            }
-            if (entityType === 'consultant_payment') {
-                const idVal = document.getElementById('conPayFormId').value;
-                renderConsultantPaymentAttachZones(idVal);
-            } else {
-                const idVal = document.getElementById('conMasterFormId').value;
-                renderConsultantMasterAttachZone(idVal);
-            }
-        };
-        reader.readAsDataURL(file);
-    }
+    // 8FH.1 — through the shared attachment pipeline (10 MB per file, 50 MB per record, the global cap, error handling,
+    // the diag trail). The old code looked for a helper that never existed and fell back to a bare FileReader with none
+    // of those checks.
+    addAttachment(entityType, entityId, file, descTag, () => {
+        if (entityType === 'consultant_payment') {
+            const idVal = document.getElementById('conPayFormId').value;
+            renderConsultantPaymentAttachZones(idVal);
+        } else {
+            const idVal = document.getElementById('conMasterFormId').value;
+            renderConsultantMasterAttachZone(idVal);
+        }
+    });
     input.value = '';  // reset so same file can be re-uploaded if needed
 }
 
@@ -44875,9 +45560,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof loadLiveFxState === 'function') {
         try { loadLiveFxState(); } catch (e) { console.warn('FX state load:', e); }
     }
-    addClientPORow(); 
-    initOemMaster(); 
-    initClientMaster();
+    // 8FH.1 — each start-up step guarded like its neighbours: one damaged
+    // record must not skip every module after it.
+    try { addClientPORow(); } catch (e) { console.warn("Client PO row init:", e); }
+    try { initOemMaster(); } catch (e) { console.warn("OEM Master init:", e); }
+    try { initClientMaster(); } catch (e) { console.warn("Client Master init:", e); }
     // Phase 4A — initialise Reseller Master BEFORE migration check runs.
     try {
         if (typeof initResellerMaster === 'function') {
@@ -44885,9 +45572,9 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__resellerMasterReady = true;
         }
     } catch (e) { console.warn("Reseller Master init:", e); }
-    initOemMetadata();
-    initCompanyProfile();
-    populateClientMasterDatalist();
+    try { initOemMetadata(); } catch (e) { console.warn("OEM metadata init:", e); }
+    try { initCompanyProfile(); } catch (e) { console.warn("Company Profile init:", e); }
+    try { populateClientMasterDatalist(); } catch (e) { console.warn("Client datalist init:", e); }
     // Render the FY Basis toggle in the default-visible Dashboard sticky top
     if (typeof renderFyBasisToggle === 'function') renderFyBasisToggle('fyBasisToggleDashboard');
     // Initialise the Proposals module
@@ -44980,6 +45667,11 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(checkAndRunPhase4AMigration, 300);
         }
     } catch (e) { console.warn("Phase 4A migration check:", e); }
+    // 8FH.1 — initialisation done: from here on the Mac app's bridge sends
+    // writes to the database (it held them until now, instead of for a fixed
+    // two seconds), and the start-up watchdog stands down.
+    window.__msInitComplete = true;
+    try { document.dispatchEvent(new CustomEvent('ms:init-complete')); } catch (e) {}
 });
 loadSettings(); populateFY(); updateClientDropdown(); populatePortfolioFilter(); debouncedCalcDashboard();
 // Phase 8B — Business Snapshot is now the default landing tab. Dashboard data
@@ -46665,6 +47357,9 @@ async function deleteGeneratedDoc(id) {
     var list = __msLoadGenDocs();
     var d = list.find(function (x) { return x.id === id; });
     if (!d) return;
+    // 8FH.1 — the issued PDF can only be removed once the attached files have loaded; before that the record went and
+    // the PDF stayed orphaned in the database
+    if (d.issuedAttachmentId && typeof __msAttachmentsWritable === 'function' && !__msAttachmentsWritable('delete generated document')) return;
     if (!(await __msAsk('Delete this generated document' + (d.status === 'issued' ? ' and its issued PDF' : '') + '? This cannot be undone.', { ok: 'Delete', danger: 'ok' }))) return;
     // Remove the issued attachment if present.
     if (d.issuedAttachmentId && typeof attEntityKey === 'function') {
@@ -47384,17 +48079,19 @@ function __deUploadFromPreview(itemIndex) {
             }
             if (!apObj) { alert('OEM invoice row not found.'); input.remove(); return; }
             if (!apObj.apId) apObj.apId = (typeof prospectNewId === 'function' ? prospectNewId('apinv') : 'apinv_' + Date.now().toString(36));
-            if (apObj.uploadAttId) { try { window.__msPurgeAttachment('apinvoice', apObj.apId, apObj.uploadAttId); } catch (e) {} }
             addAttachment('apinvoice', apObj.apId, file, 'Uploaded OEM invoice document', function (rec) {
+                var _oldAp = apObj.uploadAttId;   // 8FH.1 — the old file goes only once the new one is stored
                 apObj.uploadAttId = rec.id;
+                if (_oldAp && _oldAp !== rec.id) { try { window.__msPurgeAttachment('apinvoice', apObj.apId, _oldAp); } catch (e) {} }
                 if (typeof persistData === 'function') persistData();
                 __deAfterPreviewUpload();
             });
         } else if (tgt.type === 'internalpo') {
             var ipoEntId = 'c' + tgt.cIdx + '_internalpo';
-            if (c.internalPOUploadAttId) { try { window.__msPurgeAttachment('internalpo', ipoEntId, c.internalPOUploadAttId); } catch (e) {} }
             addAttachment('internalpo', ipoEntId, file, 'Uploaded internal PO document', function (rec) {
+                var _oldIpo = c.internalPOUploadAttId;   // 8FH.1 — the old file goes only once the new one is stored
                 c.internalPOUploadAttId = rec.id;
+                if (_oldIpo && _oldIpo !== rec.id) { try { window.__msPurgeAttachment('internalpo', ipoEntId, _oldIpo); } catch (e) {} }
                 if (typeof persistData === 'function') persistData();
                 __deAfterPreviewUpload();
             });
@@ -47408,9 +48105,10 @@ function __deUploadFromPreview(itemIndex) {
             }
             if (!poObj) { alert('Client PO row not found.'); input.remove(); return; }
             if (!poObj.cpoId) poObj.cpoId = (typeof prospectNewId === 'function' ? prospectNewId('cpo') : 'cpo_' + Date.now().toString(36));
-            if (poObj.uploadAttId) { try { window.__msPurgeAttachment('clientpo', poObj.cpoId, poObj.uploadAttId); } catch (e) {} }
             addAttachment('clientpo', poObj.cpoId, file, 'Uploaded client PO document', function (rec) {
+                var _oldCpo = poObj.uploadAttId;   // 8FH.1 — the old file goes only once the new one is stored
                 poObj.uploadAttId = rec.id;
+                if (_oldCpo && _oldCpo !== rec.id) { try { window.__msPurgeAttachment('clientpo', poObj.cpoId, _oldCpo); } catch (e) {} }
                 if (typeof persistData === 'function') persistData();
                 __deAfterPreviewUpload();
             });
@@ -48841,6 +49539,7 @@ function __msRemitSaveCopy(t, st, decl) {
                 try { stored = String(localStorage.getItem(MS_GENDOCS_KEY) || '').indexOf(att.id) !== -1; } catch (e) { stored = false; }
                 if (!stored) {
                     try { diag('ERROR', 'Remittance bundle: the Generated Documents record could not be stored', { doc: decl.docName }); } catch (e) {}
+                    if (isNew) { try { var _l = __msLoadGenDocs(); var _k = _l.indexOf(target); if (_k >= 0) _l.splice(_k, 1); } catch (e) {} }   // 8FH.1 — not shown as issued when it was not stored
                     finish({ ok: false, error: 'the record could not be stored (the app\'s storage may be full)' });
                     return;
                 }
@@ -52685,7 +53384,7 @@ function __msImpPlan() {
             if (p.product && c.product && c.product.indexOf(p.product) === -1 && !(p.product.indexOf(',') !== -1)) return;
             var cs = __msImpContractOem(c);
             if (cs && p.oem && cs !== p.oem) return;
-            var start = c.start || c.billingYears[0].billDate, end = c.endDate || __msImpAddMonths(c.billingYears[c.billingYears.length - 1].billDate, c.billingYears[c.billingYears.length - 1].duration || 12);
+            var start = c.start || (c.billingYears[0] || {}).billDate, end = c.endDate || __msImpAddMonths((c.billingYears[c.billingYears.length - 1] || {}).billDate, (c.billingYears[c.billingYears.length - 1] || {}).duration || 12);   // 8FH.1 — a null cycle slot
             if (!(start && end && p.date >= __msImpAddDays(start, -45) && p.date <= __msImpAddDays(end, 45))) return;
             var yi = 0;
             c.billingYears.forEach(function (y, i) { if (y && y.billDate && y.billDate <= __msImpAddDays(p.date, 45)) yi = i; });
@@ -53415,13 +54114,18 @@ function __msImpPutBack(L) {
 }
 function __msImpSaveAll(which) {
     var errs = [];
-    var tryIt = function (name, fn) { try { fn(); } catch (e) { errs.push(name + ': ' + String((e && e.message) || e)); } };
-    if (which.clients && typeof saveClientMasterData === 'function') tryIt('clients', saveClientMasterData);
-    if (which.consultants && typeof saveConsultants === 'function') tryIt('consultants', saveConsultants);
-    if (which.contracts && typeof persistData === 'function') tryIt('contracts', persistData);
-    if (which.invoices && typeof saveInvoices === 'function') tryIt('invoices', saveInvoices);
-    if (which.conPays && typeof saveConsultantPayments === 'function') tryIt('consultant payments', saveConsultantPayments);
-    if (which.pos && typeof savePurchaseOrders === 'function') tryIt('purchase orders', savePurchaseOrders);   // 8FF
+    // 8FH.1 — a refused save is not "Added": the bridge says when a dataset is paused this session, and a store that
+    // refused the write returns false
+    var tryIt = function (name, key, fn) {
+        if (key && typeof window.__msBucketWritable === 'function' && !window.__msBucketWritable(key)) { errs.push(name + ': saving this dataset is paused this session (see the banner) — nothing was stored'); return; }
+        try { if (fn() === false) errs.push(name + ': the store refused the write (storage full?)'); } catch (e) { errs.push(name + ': ' + String((e && e.message) || e)); }
+    };
+    if (which.clients && typeof saveClientMasterData === 'function') tryIt('clients', 'ms_client_master_v1', saveClientMasterData);
+    if (which.consultants && typeof saveConsultants === 'function') tryIt('consultants', 'ms_consultants_v1', saveConsultants);
+    if (which.contracts && typeof persistData === 'function') tryIt('contracts', 'ms_pro_v210', persistData);
+    if (which.invoices && typeof saveInvoices === 'function') tryIt('invoices', 'ms_invoices_v1', saveInvoices);
+    if (which.conPays && typeof saveConsultantPayments === 'function') tryIt('consultant payments', 'ms_consultant_payments_v1', saveConsultantPayments);
+    if (which.pos && typeof savePurchaseOrders === 'function') tryIt('purchase orders', 'ms_purchase_orders_v1', savePurchaseOrders);   // 8FF
     return errs;
 }
 
@@ -53619,7 +54323,13 @@ async function __msImpUndo(batchId) {
             }
         });
         var made = (b.created.contracts || []).slice().sort(function (a, z) { return a - z; });
-        if (made.length) contracts.splice(made[0], made.length);
+        if (made.length) {
+            contracts.splice(made[0], made.length);
+            // 8FH.1 — invoices / POs / commission rows made after the import and linked to the removed contracts would
+            // point past the end of the list: their links are cleared and said so
+            var _clr = (typeof __msRekeyContractLinks === 'function') ? __msRekeyContractLinks(made[0], made.length) : 0;
+            if (_clr) problems.push(_clr + ' link' + (_clr === 1 ? '' : 's') + ' to the removed contracts (made after the import) cleared');
+        }
         (b.created.clients || []).forEach(function (name) {
             if (contracts.some(function (cc) { return cc && cc.client === name; }) || invoices.some(function (inv) { return inv && inv.clientName === name; })) { problems.push('client ' + name + ' kept: still in use'); return; }
             if (typeof clientMaster === 'object' && clientMaster && clientMaster[name] && clientMaster[name].imported) delete clientMaster[name];
