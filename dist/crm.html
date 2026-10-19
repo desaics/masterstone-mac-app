@@ -11019,7 +11019,7 @@ window.__msRenderMissingOneDriveLinks = function () {
 
         <div style="margin-top:22px; padding:12px 14px; background:rgba(56,189,248,0.06); border:1px solid rgba(56,189,248,0.2); border-radius:6px; font-size:11.5px; color:var(--text-dim); line-height:1.6;">
             <div style="font-weight:600; color:var(--text-main); margin-bottom:4px;"><i class="fas fa-info-circle" style="color:var(--accent-cyan);"></i> Coverage notes</div>
-            • Sales sheet: all invoices with status Issued, Paid, or Credit-Note-Issued in the chosen period<br>
+            • Sales sheet: all invoices with status Issued, Partially Paid, Paid or Credit Note Issued dated in the chosen period; a credit note is a negative row in the month it was issued; a client invoice recorded only in a contract cycle's ledger is listed at its ledger amount with no GST, and the row says so<br>
             • Payments sheet: contract AP invoices + consultant payments + service-vendor payments<br>
             • Invoice numbers link to OneDrive where the cloud URL is on the record (fall back to plain text otherwise)<br>
             • Foreign-OEM lines: GST shown as IGST only (your CA handles the RCM logic)<br>
@@ -13764,6 +13764,36 @@ function __msTodayLocal(d) {
     d = d || new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
+// 8FH.2 — a 'yyyy-mm-dd' (or ISO) string, or a Date, as LOCAL midnight. new Date('yyyy-mm-dd') is UTC midnight =
+// 05:30 IST, a day off in every "before today" / "in this FY" test and every age in days. null when not a date.
+function __msLocalDate(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (v instanceof Date) { if (isNaN(v.getTime())) return null; const d = new Date(v.getTime()); d.setHours(0, 0, 0, 0); return d; }
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v).trim());   // a plain date; a datetime goes through Date (its local day)
+    if (m) { const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)); return isNaN(d.getTime()) ? null : d; }
+    const d = new Date(v); if (isNaN(d.getTime())) return null; d.setHours(0, 0, 0, 0); return d;
+}
+// 8FH.2 — whole days from a to b (local calendar days); null when either is not a date.
+function __msDaysBetween(a, b) {
+    const x = __msLocalDate(a), y = __msLocalDate(b);
+    if (!x || !y) return null;
+    return Math.round((y - x) / 86400000);
+}
+// 8FH.2 — one definition of "active" for every page: the contract has not ended (its end date, inclusive, in local
+// time; a contract without an end date ends start + term; one with neither counts as active). The Subscription
+// Portfolio's "Active Only" list and the Business Snapshot's "Active Contracts" card used two different tests (1 vs 3).
+function isContractActive(c) {
+    if (!c || c.__damaged) return false;
+    if (c.cancelled || c.status === 'Cancelled') return false;
+    let endD = __msLocalDate(c.endDate);
+    if (!endD && c.start) {
+        endD = __msLocalDate(c.start);
+        if (endD) endD.setMonth(endD.getMonth() + Math.floor(parseFloat(c.term) || 0));
+    }
+    if (!endD) return true;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return endD >= today;
+}
 
 // --- SIDEBAR COLLAPSE (#15) ---
 // Persists user preference across sessions in localStorage. The .nav-collapsed
@@ -14504,7 +14534,7 @@ function _composeCommonCtx() {
     return {
         CompanyName: (companyProfile && (companyProfile.tradingName || companyProfile.legalName)) || 'Masterstone',
         SenderName: (companyProfile && companyProfile.signatoryName) || 'Accounts Team',
-        Date: formatDateReadable(new Date().toISOString().slice(0, 10))
+        Date: formatDateReadable(__msTodayLocal())   // 8FH.2 — local date
     };
 }
 // Greeting name: the first To-contact's name, else a neutral fallback.
@@ -14563,7 +14593,7 @@ function composeSendProposal(propId) {
     ctx.ProposalSubject = p.subject || '';
     ctx.ValidUntil = p.validUntil ? formatDateReadable(p.validUntil) : '';
     try {
-        var totals = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode);
+        var totals = computeProposalTotals(p.lineItems, proposalGSTMode(p).mode);
         // 8ED — USD proposals: Western grouping with explicit "USD " prefix.
         // (Default templates don't use this token; custom templates that
         // hardcode "INR" before it should be adjusted before USD use.)
@@ -16718,7 +16748,7 @@ function renderClientMasterList() {
     const items = filtered.map(k => {
         const r = clientMaster[k];
         const contractCount = contracts.filter(c => cmKey(c.client) === k).length;
-        const activeContract = contracts.some(c => cmKey(c.client) === k && c.endDate && new Date(c.endDate) >= new Date());
+        const activeContract = contracts.some(c => cmKey(c.client) === k && isContractActive(c));   // 8FH.2
         const active = cmActiveClientKey === k;
         const tierDotColor = r.tier === 'Key Account' ? 'var(--purple)' : r.tier === 'Partner' ? 'var(--success)' : r.tier === 'Prospect' ? 'var(--text-dim)' : 'var(--accent-cyan)';
         const statusDot = activeContract ? 'var(--success)' : (contractCount > 0 ? 'var(--text-dim)' : 'var(--warning)');
@@ -16884,8 +16914,8 @@ function renderClientMasterDetail(key) {
         if (c.endDate) {
             const eDate = new Date(c.endDate);
             if (!latestEnd || eDate > latestEnd) latestEnd = eDate;
-            if (eDate >= now) activeCount++;
         }
+        if (isContractActive(c)) activeCount++;   // 8FH.2 — the same test as the list (review R3)
         c.billingYears.forEach((y, yi) => {
             const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
             const baseCost = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
@@ -16923,8 +16953,8 @@ function renderClientMasterDetail(key) {
         contractsHtml = clientContracts.map(c => {
             const idx = contracts.indexOf(c);
             const eDate = c.endDate ? new Date(c.endDate) : null;
-            const isActive = eDate && eDate >= now;
-            return `<div class="contract-chip" onclick="showTab('contractsTab'); setTimeout(()=>scrollToContract(${idx}), 400);">
+            const isActive = isContractActive(c);   // 8FH.2 (review R3)
+            return `<div class="contract-chip" onclick="bsGotoTab('contractsTab', { portfolioStatusFilter: 'ALL', portfolioClientFilter: 'ALL', portfolioFyFilter: 'ALL' }); setTimeout(()=>scrollToContract(${idx}), 450);">
                 <div class="chip-info">
                     <div class="chip-product" title="${c.product}">${c.product}</div>
                     <div class="chip-date">${c.start ? formatDateReadable(c.start) : ''} → ${eDate ? formatDateReadable(eDate) : '—'}</div>
@@ -18164,8 +18194,8 @@ function updateItemizedPerLic() {
     
     // Matrix Itemized Auto-Calc
     document.querySelectorAll('.prod-cycle-input-row').forEach(row => {
-        const c = parseFloat(row.querySelector('.pc-cost').value) || 0;
-        const s = parseFloat(row.querySelector('.pc-sell').value) || 0;
+        const c = __msNumVal(row.querySelector('.pc-cost'));   // 8FH.2 — the field holds Indian commas once blurred; parseFloat('1,00,000') was 1
+        const s = __msNumVal(row.querySelector('.pc-sell'));
         row.querySelector('.pc-cost-lic').value = lic > 0 ? (c / lic).toFixed(2) : '0.00';
         row.querySelector('.pc-sell-lic').value = lic > 0 ? (s / lic).toFixed(2) : '0.00';
     });
@@ -18314,8 +18344,8 @@ function addCurrentProduct() {
         }
         let cyclePrices = [];
         cycleRows.forEach((row, idx) => {
-            const aCost = parseFloat(row.querySelector('.pc-cost').value) || 0;
-            const aSell = parseFloat(row.querySelector('.pc-sell').value) || 0;
+            const aCost = __msNumVal(row.querySelector('.pc-cost'));   // 8FH.2 — the click on "Add" blurs (formats) the field first; every matrix product ≥ 1,000 was stored as 1
+            const aSell = __msNumVal(row.querySelector('.pc-sell'));
             
             let cycleDur = 12;
             if (vpRows[idx]) {
@@ -19764,7 +19794,7 @@ function updateProposalServiceFeeWords() {
     var feeEl = document.getElementById('proposalServiceFee');
     var wordsEl = document.getElementById('proposalServiceFeeWords');
     if (!feeEl || !wordsEl) return;
-    var v = parseFloat(feeEl.value);
+    var v = __msNumVal(feeEl);   // 8FH.2 — "11,00,000" read as 11 gave "Rupees Eleven Only"
     if (!isFinite(v) || v <= 0) { wordsEl.textContent = ''; return; }
     // 8ED — words follow the form's Currency selection
     var _cur8ed = (typeof getProposalFormCurrency === 'function') ? getProposalFormCurrency() : 'INR';
@@ -20178,15 +20208,15 @@ function updateLiveMargin() {
             // 8V — VP row values are now per-cycle TOTALS (not annualised).
             // Sum directly without applying ratio.
             document.querySelectorAll('.vp-row').forEach(row => {
-                const c = parseFloat((row.querySelector('.vp-cost') || {}).value) || 0;
-                const s = parseFloat((row.querySelector('.vp-sell') || {}).value) || 0;
+                const c = __msNumVal(row.querySelector('.vp-cost'));   // 8FH.2 — comma-safe (the margin read −823100 % against a cost of ₹98)
+                const s = __msNumVal(row.querySelector('.vp-sell'));
                 totalCostInr += c * fx;
                 totalSellInr += s;
             });
         } else {
             // 8V — standard mode values are now totals for term (not annualised).
-            const cost = parseFloat((document.getElementById('costAmount') || {}).value) || 0;
-            const sell = parseFloat((document.getElementById('sellINR') || {}).value) || 0;
+            const cost = __msNumVal(document.getElementById('costAmount'));   // 8FH.2 — comma-safe
+            const sell = __msNumVal(document.getElementById('sellINR'));
             totalCostInr = cost * fx;
             totalSellInr = sell;
         }
@@ -20239,8 +20269,8 @@ function updateAnnualisedSubtexts() {
             } else {
                 const startVal = (document.getElementById('start') || {}).value;
                 const endVal = (document.getElementById('endDate') || {}).value;
-                const cost = parseFloat((document.getElementById('costAmount') || {}).value) || 0;
-                const sell = parseFloat((document.getElementById('sellINR') || {}).value) || 0;
+                const cost = __msNumVal(document.getElementById('costAmount'));   // 8FH.2 — comma-safe
+                const sell = __msNumVal(document.getElementById('sellINR'));
                 const curr = (document.getElementById('costCurrency') || {}).value || 'USD';
                 if (startVal && endVal && typeof calcExactTerm === 'function') {
                     const tMonths = calcExactTerm(startVal, endVal);
@@ -20276,8 +20306,8 @@ function updateAnnualisedSubtexts() {
                 const cSub = row.querySelector('.vp-cost-annualised');
                 const sSub = row.querySelector('.vp-sell-annualised');
                 if (!cInp || !sInp || !dInp) return;
-                const c = parseFloat(cInp.value) || 0;
-                const s = parseFloat(sInp.value) || 0;
+                const c = __msNumVal(cInp);   // 8FH.2 — comma-safe
+                const s = __msNumVal(sInp);
                 const dur = parseFloat(dInp.value) || 0;
                 if (cSub) {
                     if (dur > 0 && c > 0) {
@@ -21288,9 +21318,9 @@ function renderContracts() {
             
             let startD = new Date(c.start);
             let endD = c.endDate ? new Date(c.endDate) : new Date(startD);
-            if(!c.endDate) endD.setMonth(endD.getMonth() + Math.floor(c.term)); 
-            
-            const isActive = endD >= new Date();
+            if(!c.endDate) endD.setMonth(endD.getMonth() + Math.floor(c.term));
+
+            const isActive = isContractActive(c);   // 8FH.2 — one test for every page (and not "expired" from 05:30 on the last day)
             if(selectedStatus === 'ACTIVE' && !isActive) return;
             if(selectedStatus === 'EXPIRED' && isActive) return;
             
@@ -21527,7 +21557,7 @@ function renderContracts() {
             if(siblings.length > 0) {
                 siblings.forEach(sib => {
                     let sibEnd = sib.endDate ? new Date(sib.endDate) : new Date();
-                    let isSibActive = sibEnd >= new Date();
+                    let isSibActive = isContractActive(sib);   // 8FH.2 (review R3)
                     let statusClass = isSibActive ? 'active' : 'expired';
                     
                     relatedLinks += `
@@ -22698,8 +22728,10 @@ function calcDashboard() {
     contracts.forEach((c, idx) => {
         if(!c.billingYears) return; 
 
-        const exp = c.endDate ? new Date(c.endDate) : new Date(new Date(c.start).setMonth(new Date(c.start).getMonth() + c.term));
-        if ((exp - now) / (1000 * 60 * 60 * 24) <= 180 && exp >= now) {
+        // 8FH.2 — local dates and calendar days (review R3)
+        const exp = __msLocalDate(c.endDate) || (() => { const s = __msLocalDate(c.start); if (s) s.setMonth(s.getMonth() + (parseFloat(c.term) || 0)); return s; })();
+        const _dExp = exp ? __msDaysBetween(now, exp) : null;
+        if (_dExp !== null && _dExp <= 180 && _dExp >= 0) {
             upcomingRenewals.push({ client: c.client, date: exp, dateStr: formatDateReadable(exp), idx: idx }); 
         }
 
@@ -22766,7 +22798,7 @@ function calcDashboard() {
                 yearlyData[fy].rev += vals.rev;
                 yearlyData[fy].margin += vals.margin;
                 yearlyData[fy].cost += vals.cost;
-                yearlyData[fy].fxSum += effectiveFX || 0;
+                if (c.costCurrency !== 'INR') { yearlyData[fy].fxSum += effectiveFX || 0; yearlyData[fy].fxCount = (yearlyData[fy].fxCount || 0) + 1; }   // 8FH.2 — INR cycles (FX 1.0) no longer drag the average down
                 yearlyData[fy].count++;
             }
         });
@@ -22831,7 +22863,7 @@ function calcDashboard() {
     const margins = years.map(y => yearlyData[y].margin);
     const costs = years.map(y => yearlyData[y].cost);
     const marginPcts = years.map(y => yearlyData[y].rev > 0 ? (yearlyData[y].margin / yearlyData[y].rev) * 100 : 0);
-    const avgFxs = years.map(y => yearlyData[y].count > 0 ? yearlyData[y].fxSum / yearlyData[y].count : 0);
+    const avgFxs = years.map(y => (yearlyData[y].fxCount || 0) > 0 ? yearlyData[y].fxSum / yearlyData[y].fxCount : 0);   // 8FH.2
     const labels = years.map(y => `FY ${y}-${(parseInt(y)+1).toString().slice(-2)}`);
 
     const strategyTbody = document.getElementById('strategyBody');
@@ -22840,7 +22872,7 @@ function calcDashboard() {
         let prevRev = i > 0 ? yearlyData[years[i-1]].rev : 0;
         let yoy = prevRev > 0 ? ((yearlyData[y].rev - prevRev)/prevRev)*100 : 0;
         let yoyHtml = i === 0 ? '-' : `<span style="color:${yoy>=0?'var(--success)':'var(--danger)'}">${yoy.toFixed(1)}%</span>`;
-        let avgFx = yearlyData[y].count > 0 ? (yearlyData[y].fxSum/yearlyData[y].count).toFixed(2) : '-';
+        let avgFx = (yearlyData[y].fxCount || 0) > 0 ? (yearlyData[y].fxSum/yearlyData[y].fxCount).toFixed(2) : '-';   // 8FH.2
 
         tableRows.push(`<tr>
             <td><strong>FY ${y}-${(parseInt(y)+1).toString().slice(-2)}</strong></td>
@@ -23569,6 +23601,57 @@ function __msCycleArInvoice(no) {
     if (!k || typeof invoices === 'undefined' || !Array.isArray(invoices)) return null;
     return invoices.find(i => i && String(i.invoiceNumber || '').trim().toLowerCase() === k && i.status !== 'Draft' && i.status !== 'Cancelled') || null;
 }
+// 8FH.2 — a cycle's share of the annual figure: the stored ratio, else its duration in months over 12 (cycles saved
+// before the ratio field have none, and the exports printed NaN for them).
+function __msCycleRatio(y) {
+    if (!y) return 1;
+    if (y.ratio !== undefined && y.ratio !== null && y.ratio !== '' && !isNaN(parseFloat(y.ratio))) return parseFloat(y.ratio);
+    const dur = parseFloat(y.duration);
+    return (dur > 0 ? dur : 12) / 12;
+}
+// 8FH.2 — a cycle's client-invoice ledger: the arInvoices list, else the one entry an old-shape cycle keeps on its own
+// fields (clientInvoiceNo / actualInvoiceDate / paymentDate / clientInvoiceLink / clientInvoiceLocalPath), the way the
+// registers synthesize it. The amount of that entry is the cycle's scheduled sell value. Never returns null.
+function __msCycleArList(y, c) {
+    if (!y) return [];
+    if (Array.isArray(y.arInvoices) && y.arInvoices.length) return y.arInvoices;
+    if (!y.clientInvoiceNo && !y.actualInvoiceDate) return [];
+    const baseSell = parseFloat(y.baseSell !== undefined ? y.baseSell : (c && c.sellINR)) || 0;
+    return [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: baseSell * __msCycleRatio(y), paidDate: y.paymentDate || '', link: y.clientInvoiceLink || '', localPath: y.clientInvoiceLocalPath || '', __legacy: true }];
+}
+// 8FH.2 — the same for the OEM bills: apInvoices, else the old-shape fields (oemInvoiceNo / oemInvoiceDate /
+// oemPaymentDate / oemInvoiceLink / oemInvoiceLocalPath; a date is required, as bug fix #20a decided — a stale number
+// alone is not a received bill). The amount is the cycle's scheduled cost in the contract's cost currency, the FX the
+// cycle's effective rate.
+function __msCycleApList(y, c, yIdx) {
+    if (!y) return [];
+    if (Array.isArray(y.apInvoices) && y.apInvoices.length) return y.apInvoices;
+    if (!y.oemInvoiceDate) return [];
+    const baseCost = parseFloat(y.baseCost !== undefined ? y.baseCost : (c && c.costUSD)) || 0;
+    const fx = (typeof getEffectiveFX === 'function') ? getEffectiveFX(c, y, yIdx) : ((c && parseFloat(c.baseFX)) || 0);
+    return [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate, amount: baseCost * __msCycleRatio(y), fx: fx, payDate: y.oemPaymentDate || '', link: y.oemInvoiceLink || '', localPath: y.oemInvoiceLocalPath || '', __legacy: true }];
+}
+// 8FH.2 — a ledger row whose number belongs to a cancelled or credit-noted CRM invoice is not a receivable (the row
+// itself stays in the ledger as the trail of that number; a replacement invoice gets its own row).
+function __msArEntryVoid(ar) {
+    if (!ar || !ar.invNo || typeof _caExportInvoiceRecordByNumber !== 'function') return false;
+    const rec = _caExportInvoiceRecordByNumber(ar.invNo);
+    return !!(rec && (rec.status === 'Cancelled' || rec.status === 'Credit Note Issued'));
+}
+// 8FH.2 — the ledger as the registers, the Snapshot and the Client Summary read it: without the void rows, and without
+// a cleared-but-not-removed row (no number, no date, no amount — review R15: it decided nothing yet made a ₹0 row).
+function __msCycleArLive(y, c) {
+    return __msCycleArList(y, c).filter(a => a && (a.invNo || a.date || (parseFloat(a.amount) || 0) > 0) && !__msArEntryVoid(a));
+}
+// 8FH.2 — the unpaid share of a ledger row whose CRM invoice is Partially Paid (1 otherwise), so a part-paid cycle shows
+// what is still open rather than the whole schedule (review R10).
+function __msArOpenFraction(ar) {
+    if (!ar || !ar.invNo || typeof _caExportInvoiceRecordByNumber !== 'function') return 1;
+    const rec = _caExportInvoiceRecordByNumber(ar.invNo);
+    if (!rec || rec.status !== 'Partially Paid') return 1;
+    const gt = parseFloat(rec.grandTotal) || 0, out = parseFloat(rec.amountOutstanding) || 0;
+    return gt > 0 ? Math.max(0, Math.min(1, out / gt)) : 1;
+}
 
 // 8DC — Export the currently-open "Manage Cycle" modal (one contract cycle:
 // its AR client invoices + AP vendor invoices) to a single-sheet Excel.
@@ -23918,7 +24001,7 @@ function populateFY() {
     }
 }
 
-function getFYRange(v){ if(v === 'ALL') return {start: new Date(1900,0,1), end: new Date(2100,0,1)}; const y=parseInt(v.split('-')[0]); return {start:new Date(y,3,1),end:new Date(y+1,2,31)}; }
+function getFYRange(v){ if(v === 'ALL') return {start: new Date(1900,0,1), end: new Date(2100,0,1)}; const y=parseInt(v.split('-')[0]); return {start:new Date(y,3,1),end:new Date(y+1,2,31,23,59,59,999)}; }   // 8FH.2 — to the END of 31 March: a date on 31 March (05:30 IST when parsed) belonged to no financial year
 
 /* ===================================================================== */
 /*  FY BASIS SYSTEM                                                       */
@@ -24156,14 +24239,19 @@ function importBackup() {
 function exportPortfolioExcel() {
     showStatus('status-excel', 'Generating Excel...', 'pending');
     if (!contracts) return;
+    if (typeof XLSX === 'undefined') { showStatus('status-excel', 'Excel library not loaded — reconnect and reload.', 'error'); return; }   // 8FH.2
     const data = contracts.map(c => {
         let totalINR_Cost = 0; let totalRev = 0;
-        if(c.billingYears) c.billingYears.forEach((y, yi) => { 
-             const baseFX = c.costCurrency === 'INR' ? 1.0 : (c.baseFX || 83.5);
-             const escalatedFX = c.costCurrency === 'INR' ? 1.0 : baseFX * Math.pow(1.05, (y.cycle || yi+1) - 1);
-             const effFX = (y.settlementFX !== undefined && y.settlementFX !== null) ? y.settlementFX : escalatedFX;
-             totalINR_Cost += (c.costUSD * y.ratio * effFX); 
-             totalRev += (c.sellINR * y.ratio); 
+        if (!c || c.__damaged) return null;   // 8FH.2 — a damaged row has no figures
+        // 8FH.2 — the cycle's own base figures and effective FX, as the screen uses (the export read the contract-level
+        // annual figures, so escalating / custom cycles were wrong, and took '' as a settlement rate)
+        if(c.billingYears) c.billingYears.forEach((y, yi) => {
+             if (!y) return;
+             const bs = parseFloat(y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
+             const bc = parseFloat(y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
+             const ratio = __msCycleRatio(y);
+             totalINR_Cost += (bc * ratio * getEffectiveFX(c, y, yi));
+             totalRev += (bs * ratio);
         });
         const totalMargin = totalRev - totalINR_Cost;
         
@@ -24182,7 +24270,7 @@ function exportPortfolioExcel() {
             "Total Realized Cost (INR)": totalINR_Cost, "Total Realized Margin (INR)": totalMargin,
             "Margin %": totalRev > 0 ? ((totalMargin / totalRev) * 100).toFixed(2) + "%" : "0%"
         };
-    });
+    }).filter(Boolean);
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Active Portfolio"); XLSX.writeFile(wb, `Masterstone_Portfolio_${new Date().toISOString().slice(0,10)}.xlsx`);
     showStatus('status-excel', 'Excel Exported successfully.');
 }
@@ -24190,6 +24278,7 @@ function exportPortfolioExcel() {
 function exportAccountingExcel() {
     showStatus('status-accounting', 'Generating Accounting Report...', 'pending');
     if (!contracts) return;
+    if (typeof XLSX === 'undefined') { showStatus('status-accounting', 'Excel library not loaded — reconnect and reload.', 'error'); return; }   // 8FH.2
 
     // 8DB — FY + Client filter (shared with the Contract-wise Register).
     const flt = _acctExportReadFilters();
@@ -24212,83 +24301,54 @@ function exportAccountingExcel() {
             c.billingYears.forEach((y, yi) => {
                 const cycleFy = toFyLabel(y.billDate);
 
-                // AR Invoices
-                if(y.arInvoices && y.arInvoices.length > 0) {
-                    y.arInvoices.forEach(inv => {
-                        // 8DB — FY filter on invoice-raised date.
-                        if (!_acctDateInFy(flt, inv.date)) return;
-                        let gstAmt = inv.amount * 0.18;
-                        let grossAmt = inv.amount + gstAmt;
-                        const invFy = toFyLabel(inv.date);
-                        const payFy = toFyLabel(inv.paidDate);
-                        arData.push({
-                            "Type": "AR (Sale)", "Client": c.client, "GSTIN": c.clientGST || '', "Product": c.product,
-                            "Cycle": `Cycle ${yi+1}`, "Invoice No": inv.invNo || '', "Date Raised": inv.date || '',
-                            "Base Amount (INR)": inv.amount, "GST 18% (INR)": parseFloat(gstAmt.toFixed(2)), "Gross Amount (INR)": parseFloat(grossAmt.toFixed(2)),
-                            "Status": inv.paidDate ? "Paid" : "Pending", "Payment Date": inv.paidDate || '',
-                            "Cycle FY (Billing Date)": cycleFy,
-                            "Invoice FY (Date Raised)": invFy,
-                            "Payment FY (Settlement)": payFy,
-                            "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
-                        });
-                    });
-                } else if((y.clientInvoiceNo || y.actualInvoiceDate) && _acctDateInFy(flt, y.actualInvoiceDate)) {
-                    let amt = c.sellINR * y.ratio;
+                // AR Invoices — 8FH.2: the ledger, or an old-shape cycle's own entry, through one reader (the old-shape
+                // branch read the contract-level annual figure, not the cycle's); a cancelled / credit-noted invoice's row
+                // is not a sale
+                __msCycleArLive(y, c).forEach(inv => {
+                    if (!inv) return;
+                    // 8DB — FY filter on invoice-raised date.
+                    if (!_acctDateInFy(flt, inv.date)) return;
+                    const amt = parseFloat(inv.amount) || 0;
                     let gstAmt = amt * 0.18;
                     let grossAmt = amt + gstAmt;
-                    const invFy = toFyLabel(y.actualInvoiceDate);
-                    const payFy = toFyLabel(y.paymentDate);
+                    const invFy = toFyLabel(inv.date);
+                    const payFy = toFyLabel(inv.paidDate);
                     arData.push({
                         "Type": "AR (Sale)", "Client": c.client, "GSTIN": c.clientGST || '', "Product": c.product,
-                        "Cycle": `Cycle ${yi+1}`, "Invoice No": y.clientInvoiceNo || '', "Date Raised": y.actualInvoiceDate || '',
+                        "Cycle": `Cycle ${yi+1}`, "Invoice No": inv.invNo || '', "Date Raised": inv.date || '',
                         "Base Amount (INR)": parseFloat(amt.toFixed(2)), "GST 18% (INR)": parseFloat(gstAmt.toFixed(2)), "Gross Amount (INR)": parseFloat(grossAmt.toFixed(2)),
-                        "Status": y.paymentDate ? "Paid" : "Pending", "Payment Date": y.paymentDate || '',
+                        "Status": inv.paidDate ? "Paid" : "Pending", "Payment Date": inv.paidDate || '',
                         "Cycle FY (Billing Date)": cycleFy,
                         "Invoice FY (Date Raised)": invFy,
                         "Payment FY (Settlement)": payFy,
                         "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
                     });
-                }
+                });
 
-                // AP Invoices
-                const baseFX = c.costCurrency === 'INR' ? 1.0 : (c.baseFX || 83.5);
-                const projectedFX = c.costCurrency === 'INR' ? 1.0 : baseFX * Math.pow(1.05, (y.cycle || yi+1) - 1);
-                let effFx = y.settlementFX !== null ? y.settlementFX : projectedFX;
-                
-                if(y.apInvoices && y.apInvoices.length > 0) {
-                    y.apInvoices.forEach(inv => {
-                        // 8DB — FY filter on invoice-raised date.
-                        if (!_acctDateInFy(flt, inv.date)) return;
-                        let inrGross = inv.amount * (inv.fx || effFx);
-                        const invFy = toFyLabel(inv.date);
-                        const payFy = toFyLabel(inv.payDate);
-                        apData.push({
-                            "Type": "AP (Purchase)", "Vendor/OEM": c.product.split(' ')[0], "Client Reference": c.client,
-                            "Cycle": `Cycle ${yi+1}`, "Invoice No": inv.invNo || '', "Date Raised": inv.date || '',
-                            "Amount (Base Curr)": inv.amount, "Settlement FX": inv.fx || effFx, "Total Cost (INR)": parseFloat(inrGross.toFixed(2)),
-                            "Status": inv.payDate ? "Settled" : "Pending", "Payment Date": inv.payDate || '',
-                            "Cycle FY (Billing Date)": cycleFy,
-                            "Invoice FY (Date Raised)": invFy,
-                            "Payment FY (Settlement)": payFy,
-                            "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
-                        });
-                    });
-                } else if((y.oemInvoiceNo || y.oemInvoiceDate) && _acctDateInFy(flt, y.oemInvoiceDate)) {
-                    let amtUsd = c.costUSD * y.ratio;
-                    let inrGross = amtUsd * effFx;
-                    const invFy = toFyLabel(y.oemInvoiceDate);
-                    const payFy = toFyLabel(y.oemPaymentDate);
+                // AP Invoices — 8FH.2: the same reader; the effective FX through getEffectiveFX (a cycle without the
+                // settlementFX key exported NaN); the OEM as the rest of the app resolves it (not the product's first word)
+                const effFx = getEffectiveFX(c, y, yi);
+                const oemName = (typeof _caExportEffectiveOem === 'function') ? (_caExportEffectiveOem(c) || '') : (c.oem || '');
+                __msCycleApList(y, c, yi).forEach(inv => {
+                    if (!inv) return;
+                    // 8DB — FY filter on invoice-raised date.
+                    if (!_acctDateInFy(flt, inv.date)) return;
+                    const amt = parseFloat(inv.amount) || 0;
+                    const fx = (parseFloat(inv.fx) > 0) ? parseFloat(inv.fx) : effFx;
+                    let inrGross = amt * fx;
+                    const invFy = toFyLabel(inv.date);
+                    const payFy = toFyLabel(inv.payDate);
                     apData.push({
-                        "Type": "AP (Purchase)", "Vendor/OEM": c.product.split(' ')[0], "Client Reference": c.client,
-                        "Cycle": `Cycle ${yi+1}`, "Invoice No": y.oemInvoiceNo || '', "Date Raised": y.oemInvoiceDate || '',
-                        "Amount (Base Curr)": parseFloat(amtUsd.toFixed(2)), "Settlement FX": effFx, "Total Cost (INR)": parseFloat(inrGross.toFixed(2)),
-                        "Status": y.oemPaymentDate ? "Settled" : "Pending", "Payment Date": y.oemPaymentDate || '',
+                        "Type": "AP (Purchase)", "Vendor/OEM": oemName, "Client Reference": c.client,
+                        "Cycle": `Cycle ${yi+1}`, "Invoice No": inv.invNo || '', "Date Raised": inv.date || '',
+                        "Amount (Base Curr)": parseFloat(amt.toFixed(2)), "Settlement FX": fx, "Total Cost (INR)": parseFloat(inrGross.toFixed(2)),
+                        "Status": inv.payDate ? "Settled" : "Pending", "Payment Date": inv.payDate || '',
                         "Cycle FY (Billing Date)": cycleFy,
                         "Invoice FY (Date Raised)": invFy,
                         "Payment FY (Settlement)": payFy,
                         "FY Crossover?": (invFy && cycleFy && invFy !== cycleFy) ? "Yes — Invoice falls in different FY" : ""
                     });
-                }
+                });
             });
         }
     });
@@ -24484,15 +24544,11 @@ function exportContractWiseExcel() {
             const cycleLabel = `Cycle ${yi + 1}`;
 
             // ---- SALES (AR) — INR only ----
-            const arList = (Array.isArray(y.arInvoices) && y.arInvoices.length)
-                ? y.arInvoices.map(inv => ({
+            // 8FH.2 — the one ledger reader (an old-shape cycle at the cycle's own value; a cancelled / credit-noted invoice's row is not a sale) — review R4
+            const arList = __msCycleArLive(y, c).map(inv => ({
                     invNo: inv.invNo || '', date: inv.date || '',
                     amount: parseFloat(inv.amount) || 0, paidDate: inv.paidDate || ''
-                  }))
-                : ((y.clientInvoiceNo || y.actualInvoiceDate)
-                    ? [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '',
-                         amount: (parseFloat(c.sellINR) || 0) * (y.ratio || 0), paidDate: y.paymentDate || '' }]
-                    : []);
+                  }));
             arList.forEach(s => {
                 if (!_acctDateInFy(flt, s.date)) return;
                 const amount = Math.round(s.amount * 100) / 100;
@@ -24511,12 +24567,7 @@ function exportContractWiseExcel() {
             });
 
             // ---- PURCHASE (AP) — both currencies where applicable ----
-            const apList = (Array.isArray(y.apInvoices) && y.apInvoices.length)
-                ? y.apInvoices
-                : ((y.oemInvoiceNo || y.oemInvoiceDate)
-                    ? [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate || '',
-                         amount: (parseFloat(c.costUSD) || 0) * (y.ratio || 0), fx: y.settlementFX, payDate: y.oemPaymentDate || '' }]
-                    : []);
+            const apList = __msCycleApList(y, c, yi);   // 8FH.2 — the one reader (review R4)
             apList.forEach(ap => {
                 if (!ap) return;
                 if (!_acctDateInFy(flt, ap.date)) return;
@@ -24579,6 +24630,7 @@ function exportContractWiseExcel() {
 }
 
 function downloadImportTemplate() {
+    if (typeof XLSX === 'undefined') { showStatus('status-import', 'Excel library not loaded — reconnect and reload.', 'error'); return; }   // 8FH.2
     const headers = [{
         "Client": "Acme Corp", "Product": "Security Suite", "Licenses": 50, "Hardware": "Dell Server", "Services": "AMC",
         "InternalPO": "INT-001", "InternalPODate": "2024-03-25", "ClientPO": "PO-998", "ClientPODate": "2024-03-28",
@@ -24638,8 +24690,10 @@ function processImportFile(input) {
                         if(termMonths <= 0) { failCount++; failReasons.push(`Row ${index+2}: EndDate must be after StartDate`); return; }
 
                         let costUSD = parseFloat(row.CostAmount) || 0;
-                        let rowBaseFx = parseFloat(row.BaseFX) || globalFx;
-                        if(row.CostCurrency === 'INR') costUSD = costUSD / rowBaseFx;
+                        // 8FH.2 — an INR cost stays in rupees at FX 1, as the Provisioning form stores it (it was divided
+                        // by the FX rate: ₹1,00,000 at 84.5 became a cost of ₹1,183 and a 99 % margin)
+                        const _isInrRow = String(row.CostCurrency || '').trim().toUpperCase() === 'INR';
+                        let rowBaseFx = _isInrRow ? 1 : (parseFloat(row.BaseFX) || globalFx);
                         
                         let isReseller = false;
                         if(row.IsReseller) { const val = String(row.IsReseller).toLowerCase(); if(val === 'yes' || val === 'true' || val === '1') isReseller = true; }
@@ -24662,7 +24716,7 @@ function processImportFile(input) {
                             let remainingMonths = termMonths; let cycleIndex = 1; let currentStartDate = new Date(dateObj); let safety = 0;
                             while(remainingMonths > 0.05 && safety < 600) {
                                 let duration = Math.min(12, remainingMonths); let ratio = duration / 12; 
-                                let compoundedFx = rowBaseFx * Math.pow(1.05, cycleIndex - 1);
+                                let compoundedFx = _isInrRow ? 1 : rowBaseFx * Math.pow(1.05, cycleIndex - 1);   // 8FH.2
                                 const localDateStr = `${currentStartDate.getFullYear()}-${String(currentStartDate.getMonth() + 1).padStart(2, '0')}-${String(currentStartDate.getDate()).padStart(2, '0')}`;
 
                                 billingYears.push({
@@ -24684,7 +24738,7 @@ function processImportFile(input) {
                             vendorCode: row.VendorCode || '', clientGST: row.GSTIN || '', clientPAN: row.PAN || '', clientCIN: row.CIN || '',
                             clientContactName: row.ContactName || '', clientEmail: row.ContactEmail || '', clientPhone: row.ContactPhone || '',
                             billAddr: row.BillingAddress || '', shipAddr: row.ShippingAddress || '',
-                            isReseller: isReseller, resellerName: row.ResellerName || '', costCurrency: row.CostCurrency || 'USD',
+                            isReseller: isReseller, resellerName: row.ResellerName || '', costCurrency: _isInrRow ? 'INR' : (row.CostCurrency || 'USD'),
                             costUSD: costUSD, sellINR: parseFloat(row.SellINR) || 0, term: termMonths, start: dateStr, endDate: endStr, 
                             billingYears: billingYears, baseFX: rowBaseFx
                         });
@@ -25213,10 +25267,13 @@ function initProposals() {
         if (!p.id) { p.id = proposalNewId('prop'); changed = true; }
         if (!p.lineItems) { p.lineItems = []; changed = true; }
         if (p.status === 'Sent' && p.validUntil) {
-            const valid = new Date(p.validUntil);
-            if (!isNaN(valid.getTime()) && valid < today) {
+            // 8FH.2 — calendar days: a proposal valid until today used to expire at 05:30 (the date parsed as UTC
+            // midnight), and the transition left no history entry
+            const _vd = __msLocalDate(p.validUntil);
+            if (_vd && __msDaysBetween(today, _vd) < 0) {
                 p.status = 'Expired';
                 p.autoExpiredAt = new Date().toISOString();
+                (p.statusHistory = Array.isArray(p.statusHistory) ? p.statusHistory : []).push({ status: 'Expired', changedAt: p.autoExpiredAt, note: 'Auto-expired (valid until ' + p.validUntil + ')' });
                 changed = true;
             }
         }
@@ -25232,7 +25289,7 @@ function saveProposalsView() { try { localStorage.setItem(PROPOSALS_VIEW_KEY, pr
 
 function proposalBlank() {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const today = __msTodayLocal();   // 8FH.2 — local date (review R2)
     // Default validity: 30 days from today
     const validUntil = new Date(); validUntil.setDate(validUntil.getDate() + 30);
     return {
@@ -25242,7 +25299,7 @@ function proposalBlank() {
         billingAddressId: '', // from client master billingAddresses[]
         subject: '',
         issueDate: today,
-        validUntil: validUntil.toISOString().slice(0, 10),
+        validUntil: __msTodayLocal(validUntil),   // 8FH.2 — local date
         startDate: '',                    // 8CJ — contract/licence start (subscription)
         endDate: '',                      // 8CJ — contract/licence end (subscription)
         status: 'Draft',
@@ -25436,6 +25493,22 @@ function determineProposalGSTMode(clientName, billingAddressId) {
     };
 }
 
+// 8FH.2 — the one GST-mode resolver for a proposal: the reseller's state on a Resale deal (what the PDF prints), the
+// end client's billing address otherwise. The cards, list, detail, totals box, hint, KPIs, revision history, Excel
+// export, e-mail and the conversion all read this; they used the end client's state while the PDF used the reseller's.
+function proposalGSTMode(p) {
+    if (p && p.commercialModel === 'Resale' && p.sourcedViaResellerKey && typeof resolveProposalBillToContext === 'function' && typeof gstModeFromStateCode === 'function') {
+        const ctx = resolveProposalBillToContext(p);
+        if (ctx && ctx.party === 'reseller') return gstModeFromStateCode(ctx.stateCode);
+    }
+    return determineProposalGSTMode(p ? p.clientName : '', p ? p.billingAddressId : '');
+}
+// 8FH.2 — the same for the open form (the client, address and routing the user has picked)
+function proposalFormGSTMode() {
+    const v = id => { const el = document.getElementById(id); return el ? (el.value || '') : ''; };
+    return proposalGSTMode({ clientName: v('proposalClient'), billingAddressId: v('proposalBillingAddressId'), commercialModel: v('proposalCommercialModel') || 'Direct', sourcedViaResellerKey: v('proposalSourcedViaResellerKey') });
+}
+
 // Compute line item subtotal (pre-GST)
 function computeLineItemSubtotal(li) {
     const qty = parseFloat(li.qty) || 0;
@@ -25523,7 +25596,7 @@ function fmtProposalDualTotals(acc) {
 function sumProposalTotalsByCurrency(arr) {
     var acc = { INR: 0, USD: 0 };
     (arr || []).forEach(function (p) {
-        var v = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode).grandTotal;
+        var v = computeProposalTotals(p.lineItems, proposalGSTMode(p).mode).grandTotal;
         acc[getProposalCurrency(p)] += (isFinite(v) ? v : 0);
     });
     return acc;
@@ -25654,8 +25727,8 @@ function renderProposalsKPIs(filtered) {
     const now = new Date(); const sevenAhead = new Date(); sevenAhead.setDate(sevenAhead.getDate() + 7);
     const expiring = proposals.filter(p => {
         if (p.status !== 'Sent' || !p.validUntil) return false;
-        const v = new Date(p.validUntil);
-        return !isNaN(v.getTime()) && v >= now && v <= sevenAhead;
+        const v = __msLocalDate(p.validUntil);   // 8FH.2
+        return !!v && __msDaysBetween(now, v) >= 0 && __msDaysBetween(now, v) <= 7;
     });
 
     const set = (id, t) => { const el = document.getElementById(id); if (el) el.innerText = t; };
@@ -25713,10 +25786,10 @@ function renderProposalsKanban(filtered) {
 }
 
 function renderProposalCard(p) {
-    const totals = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode);
-    const validUntil = p.validUntil ? new Date(p.validUntil) : null;
+    const totals = computeProposalTotals(p.lineItems, proposalGSTMode(p).mode);
+    const validUntil = p.validUntil ? __msLocalDate(p.validUntil) : null;
     const now = new Date();
-    const daysUntilExpiry = validUntil ? Math.floor((validUntil - now) / 86400000) : null;
+    const daysUntilExpiry = validUntil ? __msDaysBetween(now, validUntil) : null;   // 8FH.2 — calendar days
     let expFlag = '';
     if (p.status === 'Sent' && daysUntilExpiry !== null) {
         if (daysUntilExpiry < 0) expFlag = `<span class="expired-flag">Expired ${Math.abs(daysUntilExpiry)}d ago</span>`;
@@ -25745,7 +25818,7 @@ function renderProposalsListView(filtered) {
         if (isProposalOpen(a.status) !== isProposalOpen(b.status)) return isProposalOpen(a.status) ? -1 : 1;
         return new Date(b.updatedAt) - new Date(a.updatedAt);
     }).map(p => {
-        const totals = computeProposalTotals(p.lineItems, determineProposalGSTMode(p.clientName, p.billingAddressId).mode);
+        const totals = computeProposalTotals(p.lineItems, proposalGSTMode(p).mode);
         return `<tr class="clickable-row" onclick="openProposalDetail('${p.id}')">
             <td style="font-family:monospace; font-size:11.5px;">${pEsc(p.proposalNumber || '—')}</td>
             <td style="font-weight:600;">${pEsc(p.clientName || '—')}</td>
@@ -26019,9 +26092,7 @@ function populateProposalBillingAddressDropdown() {
 function updateProposalGSTModeHint() {
     const hint = document.getElementById('proposalGstModeHint');
     if (!hint) return;
-    const client = document.getElementById('proposalClient').value;
-    const addrId = document.getElementById('proposalBillingAddressId').value;
-    const gst = determineProposalGSTMode(client, addrId);
+    const gst = proposalFormGSTMode();   // 8FH.2 — the reseller's state on a Resale deal
     if (gst.mode === 'unknown') {
         hint.innerHTML = `<span style="color:var(--warning);"><i class="fas fa-exclamation-triangle"></i> GST mode undetermined — missing state codes. Defaulting to IGST.</span>`;
     } else if (gst.mode === 'intra') {
@@ -26171,9 +26242,7 @@ function onLineItemFieldChange(idx, field, value) {
 function updateProposalTotalsDisplay() {
     const box = document.getElementById('proposalTotalsBox');
     if (!box) return;
-    const client = document.getElementById('proposalClient').value;
-    const addrId = document.getElementById('proposalBillingAddressId').value;
-    const gst = determineProposalGSTMode(client, addrId);
+    const gst = proposalFormGSTMode();   // 8FH.2 — the reseller's state on a Resale deal (the box disagreed with the hint above it and with the saved proposal)
     const t = computeProposalTotals(proposalFormLineItems, gst.mode);
     // 8ED — currency-aware formatter for every figure in this box
     const _pcur8ed = getProposalFormCurrency();
@@ -27084,13 +27153,13 @@ function closeProposalDetail() {
 }
 
 function renderProposalDetail(p) {
-    const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
+    const gst = proposalGSTMode(p);
     const t = computeProposalTotals(p.lineItems, gst.mode);
     // 8ED — currency-aware formatting for the whole detail page
     const _pcur8ed = getProposalCurrency(p);
     const _pfmt8ed = (n) => fmtProposalMoney(n, _pcur8ed);
-    const validUntil = p.validUntil ? new Date(p.validUntil) : null;
-    const daysUntil = validUntil ? Math.floor((validUntil - new Date()) / 86400000) : null;
+    const validUntil = p.validUntil ? __msLocalDate(p.validUntil) : null;
+    const daysUntil = validUntil ? __msDaysBetween(new Date(), validUntil) : null;   // 8FH.2 — calendar days
 
     const header = document.getElementById('proposalDetailHeader');
     header.innerHTML = `
@@ -27315,7 +27384,7 @@ async function reviseProposal(id) {
     const curRev = _propRev(p);
     let grandTotal = 0;
     try {
-        const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
+        const gst = proposalGSTMode(p);
         grandTotal = computeProposalTotals(p.lineItems, gst.mode).grandTotal;
     } catch (e) {}
 
@@ -27330,6 +27399,7 @@ async function reviseProposal(id) {
         type: p.type,
         serviceFee: p.serviceFee,
         grandTotal: grandTotal,
+        currency: (typeof getProposalCurrency === 'function') ? getProposalCurrency(p) : 'INR',   // 8FH.2 — a snapshot keeps its own currency
         lineItems: JSON.parse(JSON.stringify(p.lineItems || []))
     });
 
@@ -27355,11 +27425,11 @@ function _renderProposalRevisionHistory(p) {
 
     let curTotal = 0;
     try {
-        const gstMode = determineProposalGSTMode(p.clientName, p.billingAddressId).mode;
+        const gstMode = proposalGSTMode(p).mode;
         curTotal = computeProposalTotals(p.lineItems, gstMode).grandTotal;
     } catch (e) {}
     const curLic = _sumProposalLicenses(p.lineItems);
-    const fmtMoney = (typeof fmtCurrency === 'function') ? fmtCurrency : function (n) { return '₹' + (Number(n) || 0).toLocaleString('en-IN'); };
+    const fmtMoney = function (n, cur) { return fmtProposalMoney(Number(n) || 0, cur || getProposalCurrency(p)); };   // 8FH.2 — the proposal's currency (a USD proposal showed ₹ here)
     const fmtD = function (iso) { if (!iso) return '—'; try { return formatDateReadable(String(iso).slice(0, 10)); } catch (e) { return iso; } };
 
     const pastRows = revs.slice().reverse().map(function (rv) {
@@ -27368,7 +27438,7 @@ function _renderProposalRevisionHistory(p) {
             + '<div style="min-width:0;">'
             + '<div style="font-weight:600; font-size:12.5px;">Rev ' + rv.revision + ' <span style="font-weight:400; color:var(--text-dim);">· superseded ' + fmtD(rv.snapshotAt) + '</span></div>'
             + (rv.note ? '<div style="font-size:11.5px; color:var(--text-main); margin-top:3px;">' + pEsc(rv.note) + '</div>' : '<div style="font-size:11px; color:var(--text-dim); font-style:italic; margin-top:3px;">No note</div>')
-            + '<div style="font-size:11px; color:var(--text-dim); margin-top:3px;">' + (lic != null ? lic + ' licence' + (lic === 1 ? '' : 's') + ' · ' : '') + 'Total ' + fmtMoney(rv.grandTotal || 0) + ' · valid until ' + fmtD(rv.validUntil) + '</div>'
+            + '<div style="font-size:11px; color:var(--text-dim); margin-top:3px;">' + (lic != null ? lic + ' licence' + (lic === 1 ? '' : 's') + ' · ' : '') + 'Total ' + fmtMoney(rv.grandTotal || 0, rv.currency) + ' · valid until ' + fmtD(rv.validUntil) + '</div>'
             + '</div></div>';
     }).join('');
 
@@ -27451,7 +27521,7 @@ function exportProposalsExcel() {
     if (!proposals || proposals.length === 0) { alert("No proposals to export."); return; }
     // Summary sheet
     const summary = proposals.map(p => {
-        const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
+        const gst = proposalGSTMode(p);
         const t = computeProposalTotals(p.lineItems, gst.mode);
         return {
             "Proposal #": p.proposalNumber,
@@ -28322,9 +28392,7 @@ function buildProposalPDFHTMLDefault(proposal) {
         ? resolveProposalBillToContext(proposal)
         : { party: 'client', partyName: proposal.clientName, address: '', gstin: '', stateCode: '', endUserName: '', endUserRef: false, model: proposal.commercialModel || 'Direct' };
     // GST mode uses reseller's state for Resale, otherwise the original client-based lookup
-    const gst = (billCtx.party === 'reseller' && typeof gstModeFromStateCode === 'function')
-        ? gstModeFromStateCode(billCtx.stateCode)
-        : determineProposalGSTMode(proposal.clientName, proposal.billingAddressId);
+    const gst = proposalGSTMode(proposal);   // 8FH.2 — the same resolver as every screen
     const totals = computeProposalTotals(proposal.lineItems, gst.mode);
 
     // Bill-To party details (client for Direct/Commission, reseller for Resale)
@@ -28590,9 +28658,7 @@ function buildProposalPDFHTMLWithLetterhead(proposal) {
     const billCtx = (typeof resolveProposalBillToContext === 'function')
         ? resolveProposalBillToContext(proposal)
         : { party: 'client', partyName: proposal.clientName, address: '', gstin: '', stateCode: '', endUserName: '', endUserRef: false, model: proposal.commercialModel || 'Direct' };
-    const gst = (billCtx.party === 'reseller' && typeof gstModeFromStateCode === 'function')
-        ? gstModeFromStateCode(billCtx.stateCode)
-        : determineProposalGSTMode(proposal.clientName, proposal.billingAddressId);
+    const gst = proposalGSTMode(proposal);   // 8FH.2 — the same resolver as every screen
     const totals = computeProposalTotals(proposal.lineItems, gst.mode);
 
     const billPartyName = billCtx.partyName || proposal.clientName || '';
@@ -29073,7 +29139,7 @@ async function convertProposalToContract(proposalId) {
     }
 
     // Compute total sell INR from line items (subtotal, pre-GST — contracts store pre-GST)
-    const gst = determineProposalGSTMode(p.clientName, p.billingAddressId);
+    const gst = proposalGSTMode(p);
     const totals = computeProposalTotals(p.lineItems, gst.mode);
 
     // Phase 8ED — USD proposals: contracts store the sell value in INR by
@@ -29148,7 +29214,7 @@ async function convertProposalToContract(proposalId) {
             // Engagement dates → contract Start/End. Prefer engagementStart/End,
             // then the proposal-level Start/End, then validUntil/today. End is
             // left blank if unknown — the save gate requires the user to set it.
-            const _svcStart = p.engagementStart || p.startDate || p.validUntil || new Date().toISOString().slice(0, 10);
+            const _svcStart = p.engagementStart || p.startDate || p.validUntil || __msTodayLocal();   // 8FH.2
             setVal('start', _svcStart);
             setVal('endDate', p.engagementEnd || p.endDate || '');
         } else {
@@ -29160,7 +29226,7 @@ async function convertProposalToContract(proposalId) {
         setVal('costCurrency', 'INR');
         // Dates: 8CJ — use the proposal's contract Start/End when set; otherwise fall
         // back to legacy behaviour (start = validUntil or today; end = start + 12mo).
-        const startDate = p.startDate || p.validUntil || new Date().toISOString().slice(0, 10);
+        const startDate = p.startDate || p.validUntil || __msTodayLocal();   // 8FH.2
         setVal('start', startDate);
         let endStr;
         if (p.endDate) {
@@ -29261,7 +29327,7 @@ function savePOsView() { try { localStorage.setItem(POS_VIEW_KEY, poView); } cat
 
 function poBlank() {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const today = __msTodayLocal();   // 8FH.2 — local date (review R2)
     return {
         id: poNewId('po'),
         poNumber: '',
@@ -29479,7 +29545,10 @@ function renderPOsKPIs(filtered) {
     const __fyY = __fy.start.getFullYear();
     const __fyLabel = 'FY ' + String(__fyY).slice(2) + '-' + String(__fyY + 1).slice(2);
     const issuedYTD = purchaseOrders.filter(po => {
-        const d = new Date(po.createdAt);
+        // 8FH.2 — by the day it left Draft (else its issue date), not the draft's creation time: a PO drafted on 28 March
+        // and issued on 5 April counted in the old FY and never in the new one
+        const _ih = (Array.isArray(po.statusHistory) ? po.statusHistory : []).find(h => h && h.status === 'Issued');
+        const d = __msLocalDate(_ih ? _ih.changedAt : (po.issueDate || po.createdAt)) || new Date(NaN);
         if (isNaN(d.getTime()) || d < ytdStart || d > __fy.end) return false;
         // "Issued" KPI = any PO that has progressed past Draft
         return po.status !== 'Draft' && po.status !== 'Cancelled';
@@ -29907,12 +29976,17 @@ function onPOCurrencyChange() {
         if (hint) hint.innerHTML = 'No FX conversion needed for INR.';
     } else {
         fxInput.disabled = false;
-        // If FX rate is still 1 (default), suggest a sensible starter
+        // 8FH.2 — seed from the live USD rate when the app has one (the fixed 83.50 / 107 / 91 seeds were years stale and
+        // fed Open Value, the kanban totals and the Excel); otherwise it is left for the user or the Fetch button
         if (!parseFloat(fxInput.value) || parseFloat(fxInput.value) === 1) {
-            const defaultFx = { USD: 83.50, GBP: 107.00, EUR: 91.00 };
-            fxInput.value = defaultFx[ccy] || 83.50;
+            // (review R14) only a rate fetched within the week — the widget calls an older one stale
+            const _st = (ccy === 'USD' && typeof getLiveFxStateForUI === 'function') ? getLiveFxStateForUI() : null;
+            const _live = (_st && typeof _st.rate === 'number' && _st.fetchedAt && (Date.now() - new Date(_st.fetchedAt).getTime()) <= 7 * 86400000) ? _st.rate : null;
+            fxInput.value = (_live && _live > 0) ? Number(_live).toFixed(4) : '';
         }
-        if (hint) hint.innerHTML = `Used to convert to INR for reporting. Update with booking-rate FX when issuing.`;
+        if (hint) hint.innerHTML = parseFloat(fxInput.value) > 0
+            ? `Used to convert to INR for reporting. Update with booking-rate FX when issuing.`
+            : `<span style="color:var(--warning);">Enter the ${ccy}→INR rate (or fetch it) — it converts this PO to INR for reporting.</span>`;
     }
     updatePOTotalsDisplay();
 }
@@ -30201,6 +30275,14 @@ async function savePOFromForm() {
     }
     if (poFormLineItems.length === 0) {
         if (!(await __msAsk("No line items — PO will be empty. Save anyway?"))) return;
+    }
+    // 8FH.2 — a foreign-currency PO saved at FX 1.00 is reported at a fraction of its value everywhere. Asked here, before
+    // the record is touched or a number assigned (review R1: asked later, a "No" left a half-edited record in memory and
+    // burned a PO serial).
+    {
+        const _cur = document.getElementById('poCurrency').value || 'INR';
+        const _fx = parseFloat(document.getElementById('poFxRate').value) || 1;
+        if (_cur !== 'INR' && !(_fx > 1) && !(await __msAsk(`The FX rate is ${_fx} for a ${_cur} purchase order — every rupee figure (Open Value, the totals, the Excel) will be wrong. Save anyway?`, { ok: 'Save anyway' }))) return;
     }
 
     const idVal = document.getElementById('poFormId').value;
@@ -30754,7 +30836,7 @@ async function convertPOToContract(poId) {
         const linkedProp = proposals.find(x => x.id === po.linkedProposalId);
         if (linkedProp && linkedProp.lineItems && linkedProp.lineItems.length > 0) {
             try {
-                const gst = determineProposalGSTMode(linkedProp.clientName, linkedProp.billingAddressId);
+                const gst = proposalGSTMode(linkedProp);
                 const totals = computeProposalTotals(linkedProp.lineItems, gst.mode);
                 sellINRValue = totals.subtotal || 0;
             } catch (e) { /* fall back to 0 */ }
@@ -30783,7 +30865,7 @@ async function convertPOToContract(poId) {
         }
 
         // Dates — use contract dates captured on PO if present, else fallback
-        const startDate = po.contractStartDate || po.issueDate || new Date().toISOString().slice(0, 10);
+        const startDate = po.contractStartDate || po.issueDate || __msTodayLocal();   // 8FH.2
         setVal('start', startDate);
         let endDate = po.contractEndDate;
         if (!endDate) {
@@ -31565,13 +31647,13 @@ function saveInvoicesView() { try { localStorage.setItem(INVOICES_VIEW_KEY, invo
 
 function invoiceBlank() {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const today = __msTodayLocal();   // 8FH.2 — local date (the UTC date is yesterday until 05:30 IST)
     const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + DEFAULT_INVOICE_PAYMENT_TERMS_DAYS);
     return {
         id: invNewId('inv'),
         invoiceNumber: '',
         invoiceDate: today,
-        dueDate: dueDate.toISOString().slice(0, 10),
+        dueDate: __msTodayLocal(dueDate),
         clientName: '',
         billingAddressId: '',
         linkedContractIdx: '',
@@ -31682,12 +31764,15 @@ function determineInvoiceGSTMode(clientName, billingAddrId, routingOverride) {
             let rStateCode = '';
             const rAddrs = rRec.billingAddresses || [];
             const rPrim = rAddrs.find(a => a.isPrimary || a.isDefault) || rAddrs[0];
-            if (rPrim) rStateCode = rPrim.stateCode || '';
             const rGsts = rRec.gstEntries || [];
+            // 8FH.2 (review R16) — the GST entry linked to the primary billing address first, as resolveInvoiceBillToContext
+            // (the PDF and the e-invoice) resolves it; then the primary GST entry; then the address's own state
+            if (rPrim && rPrim.linkedGstId) { const _lg = rGsts.find(g => g && g.id === rPrim.linkedGstId); if (_lg) rStateCode = _lg.stateCode || ''; }
             if (!rStateCode && rGsts.length > 0) {
                 const p = rGsts.find(g => g.isPrimary) || rGsts[0];
                 rStateCode = p.stateCode || '';
             }
+            if (!rStateCode && rPrim) rStateCode = rPrim.stateCode || '';
             const buyerStateName = rStateCode ? getStateNameByCode(rStateCode) : '';
             if (!sellerState || !rStateCode) {
                 return { mode: 'unknown', sellerState, buyerState: rStateCode, buyerStateName, buyerStateCode: rStateCode, isExport: false, billToParty: 'reseller' };
@@ -31906,12 +31991,11 @@ function _reconcileSharedInvoicePaidDates() {
     const byNo = {};
     invoices.forEach(inv => {
         if (!inv || !inv.invoiceNumber) return;
+        // 8FH.2 — a paid date only once the invoice is paid in full (see _propagateInvoiceToContractCycle)
         let d = '';
-        if (inv.status === 'Paid' && inv.paidAt) {
-            d = String(inv.paidAt).slice(0, 10);
-        } else if (Array.isArray(inv.payments) && inv.payments.length > 0) {
-            const ds = inv.payments.map(p => p.date).filter(Boolean).sort();
-            d = ds[ds.length - 1] || '';
+        if (inv.status === 'Paid') {
+            const ds = Array.isArray(inv.payments) ? inv.payments.map(p => p && p.date).filter(Boolean).sort() : [];
+            d = ds.length ? ds[ds.length - 1] : (inv.paidAt ? String(inv.paidAt).slice(0, 10) : '');
         }
         byNo[inv.invoiceNumber] = { paidDate: d, fullyPaid: inv.status === 'Paid' };
     });
@@ -31999,12 +32083,13 @@ function _propagateInvoiceToContractCycle(inv) {
         set('actualInvoiceDate', active.invoiceDate || null);
         set('clientInvoiceNo', active.invoiceNumber || '');
         set('paid', !!isPaid);
+        // 8FH.2 — the cycle's paid date is the date the invoice was paid in full. A part payment used to write its date
+        // here and into the ledger row, and the Snapshot, the Weekly Briefing and the Action Center took the whole
+        // cycle as collected while the register still showed it overdue.
         let paymentDate = null;
-        if (isPaid && active.paidAt) {
-            paymentDate = String(active.paidAt).slice(0, 10);
-        } else if (Array.isArray(active.payments) && active.payments.length > 0) {
-            const dates = active.payments.map(p => p.date).filter(Boolean).sort();
-            paymentDate = dates[dates.length - 1] || null;
+        if (isPaid) {
+            const _pdates = Array.isArray(active.payments) ? active.payments.map(p => p && p.date).filter(Boolean).sort() : [];
+            paymentDate = _pdates.length ? _pdates[_pdates.length - 1] : (active.paidAt ? String(active.paidAt).slice(0, 10) : null);
         }
         set('paymentDate', paymentDate);
         // 8AN — Also populate arInvoices[] so the Subscription Portfolio's
@@ -32248,7 +32333,7 @@ function renderInvoicesKPIs() {
     const ytdStart = __fy.start;
     const issuedYTD = live.filter(i => {
         if (!i.issuedAt && !i.invoiceDate) return false;
-        const d = new Date(i.issuedAt || i.invoiceDate);
+        const d = __msLocalDate(i.invoiceDate || i.issuedAt) || new Date(NaN);   // 8FH.2 — the invoice date (GSTR-1's), the Mark-Issued click only when there is none (review R8)
         return !isNaN(d.getTime()) && d >= ytdStart && d <= __fy.end && i.status !== 'Draft';
     });
     const issuedYTDAmt = issuedYTD.reduce((s, i) => s + (__excl ? (parseFloat(i.subtotal) || 0) : (i.grandTotal || 0)), 0);
@@ -33281,7 +33366,9 @@ function updateInvoiceTotalsDisplay() {
     const clientName = document.getElementById('invClient').value;
     const addrId = document.getElementById('invBillingAddressId').value;
     const rcm = document.getElementById('invReverseCharge').value === 'true';
-    const gst = determineInvoiceGSTMode(clientName, addrId);
+    // 8FH.2 — the routing the form holds (Resale → the reseller's state), as the hint above and the save already do
+    const _routing = { commercialModel: (document.getElementById('invCommercialModel') || {}).value || 'Direct', sourcedViaResellerKey: (document.getElementById('invSourcedViaResellerKey') || {}).value || '' };
+    const gst = determineInvoiceGSTMode(clientName, addrId, _routing);
     const t = computeInvoiceTotals(invFormLineItems, gst.mode, rcm);
     let gstRows = '';
     let gstLabel;
@@ -33345,7 +33432,7 @@ async function saveInvoiceFromForm() {
     const idVal = document.getElementById('invFormId').value;
     const now = new Date().toISOString();
     let rec, isNew = false;
-    let _prevStatus = null, _statusDowngraded = false;
+    let _prevStatus = null, _statusDowngraded = false, _openCn = false;
     const invStatusChosen = document.getElementById('invStatus').value;   // 8FH.1 — what the dropdown said before the save derived the real status
     if (idVal && invoices.some(x => x.id === idVal)) {
         rec = invoices.find(x => x.id === idVal);
@@ -33358,6 +33445,14 @@ async function saveInvoiceFromForm() {
             // from the recorded payments (so no bogus history line either way)
             newStatus = (rec.status === 'Draft' || !rec.status) ? 'Issued' : rec.status;
             const _sel = document.getElementById('invStatus'); if (_sel) _sel.value = newStatus;
+        }
+        // 8FH.2 — a credit note needs its number, date and reason (the CA's workbook reports it in the month it was issued):
+        // the dropdown cannot set 'Credit Note Issued' by itself — the record keeps its status and the credit-note window
+        // opens after the save (review R6)
+        if (newStatus === 'Credit Note Issued' && !rec.creditNoteNumber) {
+            newStatus = (rec.status === 'Draft' || !rec.status) ? 'Issued' : rec.status;
+            const _sel = document.getElementById('invStatus'); if (_sel) _sel.value = newStatus;
+            _openCn = true;
         }
         if (rec.status !== newStatus) {
             rec.statusHistory = rec.statusHistory || [];
@@ -33399,6 +33494,7 @@ async function saveInvoiceFromForm() {
     rec.invoiceDate = document.getElementById('invInvoiceDate').value;
     rec.dueDate = document.getElementById('invDueDate').value;
     rec.status = document.getElementById('invStatus').value;
+    if (rec.status === 'Credit Note Issued' && !rec.creditNoteNumber) { rec.status = 'Issued'; _openCn = true; }   // 8FH.2 — a new record: the credit-note window opens after the save (review R6)
     // Phase 8E — persist invoice type. In service mode, also store the
     // helper SAC code (used as default for new line items).
     rec.type = (typeof getInvoiceFormType === 'function') ? getInvoiceFormType() : 'subscription';
@@ -33452,8 +33548,10 @@ async function saveInvoiceFromForm() {
     // code below caused a flicker after every invoice save.
     if (typeof showProspectToast === 'function') {
         showProspectToast(`<i class="fas fa-check-circle"></i> Invoice <strong>${pEsc(rec.invoiceNumber)}</strong> ${isNew ? 'created' : 'updated'} in <strong>${pEsc(rec.status)}</strong> status.`
-            + (_statusDowngraded ? ' Paid / Partially Paid come from recorded payments — use <strong>Record Payment</strong> on the invoice.' : ''), _statusDowngraded ? 7000 : undefined);
+            + (_statusDowngraded ? ' Paid / Partially Paid come from recorded payments — use <strong>Record Payment</strong> on the invoice.' : '')
+            + (_openCn ? ' A credit note needs its number, date and reason — enter them in the window that opens.' : ''), (_statusDowngraded || _openCn) ? 7000 : undefined);
     }
+    if (_openCn) setTimeout(() => { try { issueCreditNoteForInvoice(rec.id); } catch (e) { console.warn('credit-note window:', e); } }, 400);   // 8FH.2 (review R6)
 }
 
 async function deleteInvoiceFromForm() {
@@ -33719,7 +33817,7 @@ function submitMarkIssued(withFile) {
         const now = new Date().toISOString();
         inv.status = 'Issued';
         inv.issuedAt = now;
-        if (!inv.invoiceDate) inv.invoiceDate = now.slice(0, 10);
+        if (!inv.invoiceDate) inv.invoiceDate = __msTodayLocal();   // 8FH.2 — local date (review R2)
         inv.statusHistory = inv.statusHistory || [];
         inv.statusHistory.push({ status: 'Issued', changedAt: now });
         inv.updatedAt = now;
@@ -33980,7 +34078,7 @@ function openPaymentModal(invoiceId, paymentIdx) {
     val('invPaymentIdx', paymentIdx === null || paymentIdx === undefined ? '' : paymentIdx);
     if (paymentIdx === null || paymentIdx === undefined || paymentIdx === '') {
         // New payment
-        val('invPaymentDate', new Date().toISOString().slice(0, 10));
+        val('invPaymentDate', __msTodayLocal());   // 8FH.2
         val('invPaymentAmount', inv.amountOutstanding > 0 ? inv.amountOutstanding.toFixed(2) : '');
         val('invPaymentMode', 'NEFT');
         val('invPaymentRef', '');
@@ -34264,7 +34362,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
         let billAddr = null;
         if (client && Array.isArray(client.billingAddresses) && client.billingAddresses.length > 0) {
             if (inv.billingAddressId) billAddr = client.billingAddresses.find(a => a.id === inv.billingAddressId);
-            if (!billAddr) billAddr = client.billingAddresses.find(a => a.isDefault) || client.billingAddresses[0];
+            if (!billAddr) billAddr = client.billingAddresses.find(a => a.isPrimary || a.isDefault) || client.billingAddresses[0];   // 8FH.2 — the Client Master marks isPrimary
         }
         if (billAddr) {
             if (billAddr.addressLine1) buyerAddrLines.push(billAddr.addressLine1);
@@ -34311,6 +34409,7 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
         const { net } = computeInvoiceLineItemSubtotal(li);
         const qty = parseFloat(li.qty) || 0;
         const unitPrice = parseFloat(li.unitPrice) || 0;
+        const lineRate = (inv.reverseCharge || inv.gstMode === 'export') ? 0 : (parseFloat(li.gstPct) || 0);   // 8FH.2 — the totals carry no GST on an export / reverse-charge invoice; the lines printed 18 % and GST-inclusive amounts
         return `<tr>
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:center; vertical-align:top; font-size:11px;">${idx + 1}</td>
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); vertical-align:top;">
@@ -34323,8 +34422,8 @@ function buildInvoicePDFHTMLDefault(inv, opts) {
             ${showRateCol ? `<td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${fmt(unitPrice)}</td>` : ''}
             ${showDiscCol ? `<td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${fmt(net)}</td>
-            <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
-            <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-weight:600; font-size:11px;">${fmt(net * (1 + (parseFloat(li.gstPct) || 0) / 100))}</td>
+            <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-size:11px;">${lineRate.toFixed(2)}%</td>
+            <td style="padding:7px 6px; border:1px solid var(--text-subtle); text-align:right; vertical-align:top; font-weight:600; font-size:11px;">${fmt(net * (1 + lineRate / 100))}</td>
         </tr>`;
     }).join('');
 
@@ -34565,7 +34664,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
         let billAddr = null;
         if (client && Array.isArray(client.billingAddresses) && client.billingAddresses.length > 0) {
             if (inv.billingAddressId) billAddr = client.billingAddresses.find(a => a.id === inv.billingAddressId);
-            if (!billAddr) billAddr = client.billingAddresses.find(a => a.isDefault) || client.billingAddresses[0];
+            if (!billAddr) billAddr = client.billingAddresses.find(a => a.isPrimary || a.isDefault) || client.billingAddresses[0];   // 8FH.2 — the Client Master marks isPrimary
         }
         if (billAddr) {
             if (billAddr.addressLine1) buyerAddrLines.push(billAddr.addressLine1);
@@ -34603,6 +34702,7 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
         const { net } = computeInvoiceLineItemSubtotal(li);
         const qty = parseFloat(li.qty) || 0;
         const unitPrice = parseFloat(li.unitPrice) || 0;
+        const lineRate = (inv.reverseCharge || inv.gstMode === 'export') ? 0 : (parseFloat(li.gstPct) || 0);   // 8FH.2 — the totals carry no GST on an export / reverse-charge invoice; the lines printed 18 % and GST-inclusive amounts
         return `<tr>
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:center; vertical-align:top; font-size:11px;">${idx + 1}</td>
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; vertical-align:top;">
@@ -34615,8 +34715,8 @@ function buildInvoicePDFHTMLWithLetterhead(inv, opts) {
             ${showRateCol ? `<td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${fmt(unitPrice)}</td>` : ''}
             ${showDiscCol ? `<td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${(parseFloat(li.discountPct) || 0).toFixed(2)}%</td>` : ''}
             <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${fmt(net)}</td>
-            <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${(parseFloat(li.gstPct) || 0).toFixed(2)}%</td>
-            <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600; font-size:11px;">${fmt(net * (1 + (parseFloat(li.gstPct) || 0) / 100))}</td>
+            <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-size:11px;">${lineRate.toFixed(2)}%</td>
+            <td style="padding:7px 6px; border:1px solid ${COL_HAIRLINE}; text-align:right; vertical-align:top; font-weight:600; font-size:11px;">${fmt(net * (1 + lineRate / 100))}</td>
         </tr>`;
     }).join('');
 
@@ -35228,13 +35328,29 @@ function exportInvoiceEInvoiceJSON(invId) {
     let billAddr = null;
     if (client && Array.isArray(client.billingAddresses) && client.billingAddresses.length > 0) {
         if (inv.billingAddressId) billAddr = client.billingAddresses.find(a => a.id === inv.billingAddressId);
-        if (!billAddr) billAddr = client.billingAddresses.find(a => a.isDefault) || client.billingAddresses[0];
+        if (!billAddr) billAddr = client.billingAddresses.find(a => a.isPrimary || a.isDefault) || client.billingAddresses[0];   // 8FH.2 — the Client Master marks isPrimary
     }
 
     // Supply type determination (GSTN schema values)
     // B2B: buyer has GSTIN, non-export. B2C: no buyer GSTIN. EXPWP: export with payment of IGST. EXPWOP: export without payment (LUT).
+    // 8FH.2 — the buyer is whoever the invoice bills (the reseller on a Resale deal) with the GSTIN linked to the chosen
+    // address — what the PDF prints. The JSON billed the end client with the primary GSTIN, so Pos and Stcd contradicted
+    // each other and the IRN would have been raised against the wrong GSTIN.
+    const billCtx = (typeof resolveInvoiceBillToContext === 'function') ? resolveInvoiceBillToContext(inv) : null;
+    const buyerName = (billCtx && billCtx.partyName) || inv.clientName || '';
+    const buyerRec = (billCtx && billCtx.party === 'reseller')
+        ? ((typeof resellerMaster === 'object' && resellerMaster && resellerMaster[billCtx.partyName]) || null)
+        : client;
+    let buyerAddr = billAddr;
+    if (billCtx && billCtx.party === 'reseller' && buyerRec && Array.isArray(buyerRec.billingAddresses) && buyerRec.billingAddresses.length) {
+        buyerAddr = buyerRec.billingAddresses.find(a => a && (a.isPrimary || a.isDefault)) || buyerRec.billingAddresses[0];
+    }
+    const buyerStateCode = (billCtx && billCtx.stateCode) || (buyerAddr && buyerAddr.stateCode) || '';
+    const _addrLines = (buyerAddr && !buyerAddr.addressLine1 && buyerAddr.address) ? String(buyerAddr.address).split('\n').map(s => s.trim()).filter(Boolean) : [];
+    // GSTN unit-quantity codes: the app's "Licenses" is not one
+    const _uqc = u => { const k = String(u || '').trim().toLowerCase(); if (!k || /^(nos?|numbers?|licen[cs]es?|units?|pcs|pieces?|each|qty)$/.test(k)) return 'NOS'; if (/^sets?$/.test(k)) return 'SET'; return 'OTH'; };
     let supTyp = 'B2B';
-    const buyerGstin = (client && client.gstin) ? client.gstin.trim() : '';
+    const buyerGstin = String((billCtx && billCtx.gstin) || (client && client.gstin) || '').trim();
     if (inv.gstMode === 'export') {
         supTyp = 'EXPWOP';  // we assume LUT-based export (no IGST) by default; user can edit JSON for EXPWP
     } else if (!buyerGstin) {
@@ -35276,16 +35392,16 @@ function exportInvoiceEInvoiceJSON(invId) {
         },
         BuyerDtls: {
             Gstin: buyerGstin || (supTyp === 'B2C' ? "URP" : ""),
-            LglNm: inv.clientName || "",
-            TrdNm: inv.clientName || "",
-            Pos: inv.placeOfSupplyCode || "",
-            Addr1: (billAddr && billAddr.addressLine1) || "",
-            Addr2: (billAddr && billAddr.addressLine2) || "",
-            Loc: (billAddr && billAddr.city) || "",
-            Pin: (billAddr && parseInt(billAddr.pincode)) || 0,
-            Stcd: (billAddr && billAddr.stateCode) || "",
-            Ph: (client && client.phone) || "",
-            Em: (client && client.email) || ""
+            LglNm: (buyerRec && billCtx && billCtx.party === 'reseller' && buyerRec.companyName) || buyerName,   // (review R16) the reseller's registered name
+            TrdNm: buyerName,
+            Pos: inv.placeOfSupplyCode || buyerStateCode || "",
+            Addr1: (buyerAddr && buyerAddr.addressLine1) || _addrLines[0] || "",
+            Addr2: (buyerAddr && buyerAddr.addressLine2) || _addrLines[1] || "",
+            Loc: (buyerAddr && buyerAddr.city) || "",
+            Pin: (buyerAddr && parseInt(buyerAddr.pincode)) || 0,
+            Stcd: buyerStateCode || "",
+            Ph: (buyerRec && (buyerRec.phone || buyerRec.contactPhone)) || "",
+            Em: (buyerRec && (buyerRec.email || buyerRec.contactEmail)) || ""
         },
         ItemList: (inv.lineItems || []).map((li, idx) => {
             const { gross, net } = computeInvoiceLineItemSubtotal(li);
@@ -35301,10 +35417,10 @@ function exportInvoiceEInvoiceJSON(invId) {
             return {
                 SlNo: String(idx + 1),
                 PrdDesc: li.product || "",
-                IsServc: "Y",
+                IsServc: (!String(li.hsnCode || '').trim() || String(li.hsnCode || '').trim().indexOf('99') === 0) ? "Y" : "N",   // 8FH.2 — a goods HSN (85238020 on Darktrace lines) is not a service
                 HsnCd: li.hsnCode || "",
                 Qty: qty,
-                Unit: (li.unit || "NOS").toUpperCase(),
+                Unit: _uqc(li.unit),   // 8FH.2 — a GSTN unit code ("LICENSES" is not one)
                 UnitPrice: Math.round(unitPrice * 100) / 100,
                 TotAmt: Math.round(gross * 100) / 100,
                 Discount: Math.round(discount * 100) / 100,
@@ -35406,11 +35522,11 @@ async function generateInvoiceFromContractCycle(cIdx, yIdx) {
             const now = new Date(); now.setHours(0, 0, 0, 0);
             const billDate = cycle.billDate ? new Date(cycle.billDate) : null;
             if (billDate) billDate.setHours(0, 0, 0, 0);
-            const invDate = (billDate && billDate <= now) ? cycle.billDate : now.toISOString().slice(0, 10);
+            const invDate = (billDate && billDate <= now) ? cycle.billDate : __msTodayLocal(now);   // 8FH.2 — was the UTC date: yesterday at any hour of the day
             val('invInvoiceDate', invDate);
             // Due date +30
-            const due = new Date(invDate); due.setDate(due.getDate() + DEFAULT_INVOICE_PAYMENT_TERMS_DAYS);
-            val('invDueDate', due.toISOString().slice(0, 10));
+            const due = __msLocalDate(invDate) || new Date(invDate); due.setDate(due.getDate() + DEFAULT_INVOICE_PAYMENT_TERMS_DAYS);
+            val('invDueDate', __msTodayLocal(due));
 
             // Subject
             const cycleNum = cycle.cycle || (parseInt(yIdx) + 1);
@@ -35471,7 +35587,7 @@ function issueCreditNoteForInvoice(invId) {
     // Suggest a credit note number: use invoice number prefixed with CN
     const suggestedNum = inv.creditNoteNumber || ('CN-' + (inv.invoiceNumber || 'XXXX'));
     val('cnNumber', suggestedNum);
-    val('cnDate', new Date().toISOString().slice(0, 10));
+    val('cnDate', __msTodayLocal());   // 8FH.2
     val('cnReason', '');
     val('cnAmount', (inv.grandTotal || 0).toFixed(2));
     document.getElementById('cnInvoiceNumberDisplay').innerText = inv.invoiceNumber || '(no number)';
@@ -35700,10 +35816,13 @@ function isContractRenewable(c, windowDays) {
 function getContractRenewalValue(c) {
     if (!c) return 0;
     if (c.billingYears && c.billingYears.length > 0) {
-        // Use the most-recent cycle's baseSell (closest to renewal value)
+        // Use the most-recent cycle's baseSell (closest to renewal value). 8FH.2 — baseSell is the ANNUALISED figure
+        // (saveContract stores it so); × ratio gave the last cycle's total: ₹30 L "annual" for a ₹10 L/yr 36-month
+        // upfront deal, ₹2 L for a ₹12 L/yr contract ending in a two-month stub. Rows, KPIs, the dashboard, the
+        // Excel and the renewal proposal's price all read this.
         const last = c.billingYears[c.billingYears.length - 1];
-        const baseSell = last && last.baseSell !== undefined ? last.baseSell : c.sellINR;
-        return (baseSell || 0) * (last && last.ratio !== undefined ? last.ratio : 1);
+        const baseSell = (last && last.baseSell !== undefined && last.baseSell !== null && last.baseSell !== '') ? last.baseSell : c.sellINR;
+        return parseFloat(baseSell) || 0;
     }
     return parseFloat(c.sellINR) || 0;
 }
@@ -35770,13 +35889,18 @@ function renderRenewalKPIs() {
 
     let n30 = 0, n60 = 0, n90 = 0, atRisk = 0, confirmed = 0;
     let v30 = 0, v60 = 0, v90 = 0;
+    // 8FH.2 — At Risk / Confirmed count the window the page shows, as the list does (they were lifetime counts: a
+    // renewal confirmed two years ago, a contract 200 days expired and still marked At Risk)
+    const _wf = (document.getElementById('renWindowFilter') || {}).value || '90';
+    const _win = _wf === 'all' ? 'all' : parseInt(_wf);
     upcoming.forEach(c => {
         const days = getContractDaysToExpiry(c);
         if (days === null) return;
         const val = getContractRenewalValue(c);
         const st = c.renewalStatus || 'Not Started';
-        if (st === 'Confirmed') { confirmed++; return; }
-        if (st === 'At Risk') atRisk++;
+        const inWindow = isContractRenewable(c, _win);
+        if (st === 'Confirmed') { if (inWindow) confirmed++; return; }
+        if (st === 'At Risk' && inWindow) atRisk++;
         if (days <= 30 && days >= -14)  { n30++; v30 += val; }
         if (days <= 60 && days >= -14)  { n60++; v60 += val; }
         if (days <= 90 && days >= -14)  { n90++; v90 += val; }
@@ -35963,7 +36087,7 @@ function quickChangeRenewalStatus(contractIdx, newStatus) {
     c.renewalStatus = newStatus;
     c.renewalActivities = c.renewalActivities || [];
     c.renewalActivities.push({
-        date: new Date().toISOString().slice(0, 10),
+        date: __msTodayLocal(),   // 8FH.2
         type: 'Status Change',
         summary: `Status: ${old} → ${newStatus}`
     });
@@ -36016,7 +36140,7 @@ function toggleRenewalMilestone(contractIdx, flagKey) {
     c[flagKey] = !wasOn;
     c.renewalActivities = c.renewalActivities || [];
     c.renewalActivities.push({
-        date: new Date().toISOString().slice(0, 10),
+        date: __msTodayLocal(),   // 8FH.2
         type: 'Milestone',
         summary: wasOn ? meta.off : meta.on
     });
@@ -36053,7 +36177,7 @@ function openRenewalDetail(contractIdx) {
     val('renDetailTargetDate', c.renewalTargetDate || '');
     val('renDetailNotes', c.renewalNotes || '');
     // Pre-fill today for new activity input
-    val('renActivityDate', new Date().toISOString().slice(0, 10));
+    val('renActivityDate', __msTodayLocal());   // 8FH.2
     val('renActivityType', 'Email');
     val('renActivitySummary', '');
 
@@ -36129,7 +36253,7 @@ function saveRenewalDetail() {
     if (newStatus !== old) {
         c.renewalActivities = c.renewalActivities || [];
         c.renewalActivities.push({
-            date: new Date().toISOString().slice(0, 10),
+            date: __msTodayLocal(),   // 8FH.2
             type: 'Status Change',
             summary: `Status: ${old} → ${newStatus}`
         });
@@ -36182,10 +36306,10 @@ async function generateRenewalProposal(contractIdx) {
             // Subject
             val('proposalSubject', `Renewal of ${c.product || 'Subscription'} — ${c.client || ''}`.trim());
             // Issue date + valid until
-            const today = new Date().toISOString().slice(0, 10);
+            const today = __msTodayLocal();   // 8FH.2
             val('proposalIssueDate', today);
             const valid = new Date(); valid.setDate(valid.getDate() + 30);
-            val('proposalValidUntil', valid.toISOString().slice(0, 10));
+            val('proposalValidUntil', __msTodayLocal(valid));
             // Line item — single line from contract product + renewal value
             if (typeof proposalLineItemBlank === 'function') {
                 const renewalValue = getContractRenewalValue(c);
@@ -38823,8 +38947,7 @@ function updateProposalShipToPreview() {
             const rkey = rSel ? rSel.value : '';
             const hint = document.getElementById('proposalGstModeHint');
             if (model === 'Resale' && rkey) {
-                const stateCode = getResellerPrimaryStateCode(rkey);
-                const gst = gstModeFromStateCode(stateCode);
+                const gst = proposalFormGSTMode();   // 8FH.2 — the GSTIN linked to the reseller's primary billing address, as the PDF resolves it
                 if (hint) {
                     if (gst.mode === 'unknown') {
                         hint.innerHTML = `<span style="color:var(--warning);"><i class="fas fa-exclamation-triangle"></i> GST undetermined — reseller <strong>${pEsc(rkey)}</strong> has no primary state code. Defaulting to IGST.</span>`;
@@ -38926,13 +39049,13 @@ function buildLinkedDealsTableForReseller(resellerKey) {
     // Build unified rows
     const rows = [];
     prop.forEach(p => {
-        const total = computeProposalTotals(p.lineItems || [], 'inter');
+        const total = computeProposalTotals(p.lineItems || [], proposalGSTMode(p).mode);   // 8FH.2 — the proposal's own GST mode (was IGST for every line)
         rows.push({
             type: 'Proposal',
             title: p.subject || p.proposalNumber || '—',
             client: p.clientName || '—',
             stage: p.status || '—',
-            amount: '₹ ' + (total.grandTotal || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }),
+            amount: fmtProposalMoney(total.grandTotal || 0, getProposalCurrency(p)),   // 8FH.2 — in the proposal's currency (a $25,000 proposal read "₹ 25,000")
             date: p.updatedAt ? p.updatedAt.slice(0,10) : '',
             model: p.commercialModel || 'Direct',
             id: p.id,
@@ -38962,7 +39085,7 @@ function buildLinkedDealsTableForReseller(resellerKey) {
             && _lcIdx >= 0
             && _lcIdx < contracts.length;
         const _poAction = _hasLinkedContract
-            ? `showTab('contractsTab'); setTimeout(()=>scrollToContract(${_lcIdx}), 250);`
+            ? `bsGotoTab('contractsTab', { portfolioStatusFilter: 'ALL', portfolioClientFilter: 'ALL', portfolioFyFilter: 'ALL' }); setTimeout(()=>scrollToContract(${_lcIdx}), 400);`
             : `showTab('purchaseOrdersTab'); setTimeout(()=>openPOForm('${po.id}'), 250);`;
         rows.push({
             type: 'PO',
@@ -38993,12 +39116,7 @@ function buildLinkedDealsTableForReseller(resellerKey) {
         const totalSell = sellINR * termRatio;
         let stageLbl = 'Active';
         if (c.cancelled || c.status === 'Cancelled') stageLbl = 'Cancelled';
-        else if (c.endDate) {
-            try {
-                const ed = new Date(c.endDate);
-                if (!isNaN(ed.getTime()) && ed < new Date()) stageLbl = 'Expired';
-            } catch (_) {}
-        }
+        else if (!isContractActive(c)) stageLbl = 'Expired';   // 8FH.2 — one test (review R3)
         rows.push({
             type: 'Contract',
             title: (c.product || '—') + (c.internalPO ? ' (PO ' + c.internalPO + ')' : ''),
@@ -39008,8 +39126,8 @@ function buildLinkedDealsTableForReseller(resellerKey) {
             date: c.updatedAt ? c.updatedAt.slice(0,10) : (c.start || ''),
             model: c.commercialModel || 'Direct',
             id: c.id || ('contract-' + idx),
-            action: (idx >= 0)
-                ? `showTab('contractsTab'); setTimeout(()=>scrollToContract(${idx}), 250);`
+            action: (idx >= 0)   // 8FH.2 — the portfolio shows Active Only by default; an expired or cancelled deal was nowhere on the page it opened
+                ? `bsGotoTab('contractsTab', { portfolioStatusFilter: 'ALL', portfolioClientFilter: 'ALL', portfolioFyFilter: 'ALL' }); setTimeout(()=>scrollToContract(${idx}), 400);`
                 : `showTab('contractsTab');`
         });
     });
@@ -39869,7 +39987,7 @@ function openCommissionPayoutModal(accrualId) {
     }
 
     document.getElementById('commissionPayoutAccrualId').value = accrualId;
-    document.getElementById('commissionPayoutDate').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('commissionPayoutDate').value = __msTodayLocal();   // 8FH.2
     document.getElementById('commissionPayoutAmount').value = balance > 0 ? balance.toFixed(2) : '';
     document.getElementById('commissionPayoutMethod').value = 'NEFT';
     document.getElementById('commissionPayoutReference').value = '';
@@ -40635,16 +40753,14 @@ function bsBuildMoneyRecords() {
             const cycleCostUSD = baseCost * (y.ratio || 0);
             const effFX = (typeof getEffectiveFX === 'function') ? getEffectiveFX(c, y, yIdx) : 83;
             const cycleCostINR = cycleCostUSD * effFX;
-            const billDate = y.billDate ? new Date(y.billDate) : null;
+            const billDate = y.billDate ? (__msLocalDate(y.billDate) || new Date(y.billDate)) : null;   // 8FH.2 — local midnight
 
             // ----- AR side -----
             if (cycleRev > 0) {
                 // Resolve list of AR invoices for this cycle (real or legacy single-record fallback)
-                let arInvs = [];
-                if (y.arInvoices && y.arInvoices.length > 0) arInvs = y.arInvoices;
-                else if (y.clientInvoiceNo || y.actualInvoiceDate) {
-                    arInvs = [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '' }];
-                }
+                // 8FH.2 — one reader for the ledger and the old-shape fields; the row of a cancelled / credit-noted
+                // invoice is not a receivable (₹2 L credit-noted 70 days ago showed as overdue here and in the briefing)
+                let arInvs = __msCycleArLive(y, c);
                 // Filter to invoices that ACTUALLY have a date (i.e., are raised)
                 const raisedArInvs = arInvs.filter(i => !!i.date);
                 const cycleVendorPaid = !!y.paid;
@@ -40660,13 +40776,13 @@ function bsBuildMoneyRecords() {
                     raisedArInvs.forEach(inv => {
                         const isPaid = !!inv.paidDate || cycleVendorPaid;
                         if (isPaid) return;
-                        const amt = singleInvoiceCycle
+                        const amt = (singleInvoiceCycle
                             ? cycleRev
                             : ((inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
                                 ? (Number(inv.amount) || 0)
-                                : cycleRev);
+                                : cycleRev)) * __msArOpenFraction(inv);   // 8FH.2 — a part-paid invoice: what is still open (review R10)
                         if (amt <= 0) return;
-                        const invDate = new Date(inv.date);
+                        const invDate = __msLocalDate(inv.date) || new Date(inv.date);   // 8FH.2 — local midnight
                         const ageDays = Math.floor((today - invDate) / 86400000);
                         arInvoiced.push({
                             amount: amt, ageDays, fyDate: invDate,
@@ -40692,11 +40808,7 @@ function bsBuildMoneyRecords() {
 
             // ----- AP side -----
             if (cycleCostINR > 0) {
-                let apInvs = [];
-                if (y.apInvoices && y.apInvoices.length > 0) apInvs = y.apInvoices;
-                else if (y.oemInvoiceDate) {
-                    apInvs = [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate, amount: cycleCostUSD, fx: effFX, payDate: y.oemPaymentDate || '' }];
-                }
+                let apInvs = __msCycleApList(y, c, yIdx);   // 8FH.2 — one reader
                 const receivedApInvs = apInvs.filter(i => !!i.date);
                 const cycleOemPaid = !!y.oemPaid || !!y.vendorPaid;
 
@@ -40723,7 +40835,7 @@ function bsBuildMoneyRecords() {
                             }
                         }
                         if (amtINR <= 0) return;
-                        const invDate = new Date(inv.date);
+                        const invDate = __msLocalDate(inv.date) || new Date(inv.date);   // 8FH.2 — local midnight
                         const ageDays = Math.floor((today - invDate) / 86400000);
                         apReceived.push({
                             amount: amtINR, ageDays, fyDate: invDate,
@@ -40798,7 +40910,7 @@ function bsUrgencyBuckets(list, side) {
 function bsRowUrgencyMatches(row, urgency) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const monthOut = new Date(today); monthOut.setDate(monthOut.getDate() + 30);
-    const d = (row && row.billDate) ? new Date(row.billDate) : null;
+    const d = (row && row.billDate) ? (__msLocalDate(row.billDate) || new Date(row.billDate)) : null;   // 8FH.2
     if (!d || isNaN(d.getTime())) return urgency === 'later'; // no date → "later" bucket
     if (urgency === 'past')  return d < today;
     if (urgency === 'month') return d >= today && d <= monthOut;
@@ -40831,9 +40943,10 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
     const RESET_GROUPS = {
         invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL' },
         purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL', apPendingUrgency: 'ALL' },
-        purchaseOrdersTab:   { poStatusFilter: 'ALL' },
-        contractsTab:        { portfolioStatusFilter: 'ALL' },
-        renewalsTab:         { renStatusFilter: 'ALL' },
+        // 8FH.2 — the WHOLE filter group of each page (a leftover client / OEM / window / search filter made the list a subset of the number clicked)
+        purchaseOrdersTab:   { poStatusFilter: 'ALL', poOemFilter: 'ALL', poSearch: '' },
+        contractsTab:        { portfolioStatusFilter: 'ALL', portfolioClientFilter: 'ALL', portfolioFyFilter: 'ALL' },
+        renewalsTab:         { renStatusFilter: 'ALL', renWindowFilter: '90', renClientFilter: 'ALL', renSearch: '' },
     };
     const finalState = Object.assign({}, RESET_GROUPS[tab] || {}, overrides);
     const ids = Object.keys(finalState);
@@ -40961,8 +41074,7 @@ function renderBusinessSnapshot() {
                 const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
                 const cycleRev = baseSell * (y.ratio || 0);
                 if (cycleRev <= 0) return;
-                const arInvs = (y.arInvoices && y.arInvoices.length > 0) ? y.arInvoices :
-                    ((y.clientInvoiceNo || y.actualInvoiceDate) ? [{ date: y.actualInvoiceDate || '', amount: cycleRev }] : []);
+                const arInvs = __msCycleArLive(y, c);   // 8FH.2 — one reader; a credit-noted invoice is not "invoiced this FY"
                 const raised = arInvs.filter(i => !!i.date);
                 // 8CS — mirror the 8CH base alignment used by the AR card: a single-invoice
                 // cycle uses the pre-GST cycleRev (not the GST-inclusive stored grandTotal),
@@ -40970,7 +41082,7 @@ function renderBusinessSnapshot() {
                 // cycles keep stored amounts (the known shared latent item).
                 const singleInvoiceCycle = raised.length < 2;
                 raised.forEach(inv => {
-                    const d = new Date(inv.date);
+                    const d = __msLocalDate(inv.date) || new Date(inv.date);   // 8FH.2
                     if (d >= fy.start && d <= fy.end) {
                         fyInvoicedBase += singleInvoiceCycle
                             ? cycleRev
@@ -40985,11 +41097,7 @@ function renderBusinessSnapshot() {
     const fyInvoiced = bsApplyTax(fyInvoicedBase, 'AR');
 
     // 2) Active contracts — today between c.start and c.endDate
-    const activeContracts = (Array.isArray(contracts) ? contracts : []).filter(c => {
-        if (!c || !c.start || !c.endDate) return false;
-        const s = new Date(c.start); const e = new Date(c.endDate);
-        return today >= s && today <= e;
-    });
+    const activeContracts = (Array.isArray(contracts) ? contracts : []).filter(c => isContractActive(c));   // 8FH.2 — the same test as the list this card opens
 
     // 3) Net cash position (real cash only — excludes future commitments)
     const netCash = recInvoicedTotal - payReceivedTotal;
@@ -41032,7 +41140,7 @@ function renderBusinessSnapshot() {
     const fyExpiring = (Array.isArray(contracts) ? contracts : []).filter(c => {
         if (!c || !c.endDate) return false;
         if (c.type === 'service') return false; // 8DD — one-time engagements never renew
-        const e = new Date(c.endDate);
+        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
         return e >= fy.start && e <= fy.end;
     });
     const renewedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Confirmed');
@@ -41040,7 +41148,7 @@ function renderBusinessSnapshot() {
     const renewedValueINR = renewedThisFY.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
     const buckets30 = []; const buckets60 = []; const buckets90 = [];
     fyExpiring.forEach(c => {
-        const e = new Date(c.endDate);
+        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
         const daysOut = Math.floor((e - today) / 86400000);
         if (daysOut < 0) return;
         if ((c.renewalStatus || 'Not Started') === 'Confirmed' || (c.renewalStatus || 'Not Started') === 'Lost') return;
@@ -41053,9 +41161,9 @@ function renderBusinessSnapshot() {
     const rnRowsEl = document.getElementById('bsRnRows');
     if (rnRowsEl) {
         rnRowsEl.innerHTML = `
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">≤ 30 days</span><span class="bs-tile-row-val">${buckets30.length}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">31-60 days</span><span class="bs-tile-row-val">${buckets60.length}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">61-90 days</span><span class="bs-tile-row-val">${buckets90.length}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '30' })"><span class="bs-tile-row-lbl">≤ 30 days</span><span class="bs-tile-row-val">${buckets30.length}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '60' })"><span class="bs-tile-row-lbl">31-60 days</span><span class="bs-tile-row-val">${buckets60.length}</span></div>
+            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '90' })"><span class="bs-tile-row-lbl">61-90 days</span><span class="bs-tile-row-val">${buckets90.length}</span></div>
         `;
     }
 
@@ -41063,7 +41171,7 @@ function renderBusinessSnapshot() {
     const acvTotal = activeContracts.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
     const newInFY = activeContracts.filter(c => {
         if (!c.start) return false;
-        const s = new Date(c.start);
+        const s = __msLocalDate(c.start) || new Date(c.start);   // 8FH.2
         return s >= fy.start && s <= fy.end;
     });
     const oemCounts = {};
@@ -41092,7 +41200,7 @@ function renderBusinessSnapshot() {
     const urgentRenewals = (Array.isArray(contracts) ? contracts : []).filter(c => {
         if (!c || !c.endDate) return false;
         if (c.type === 'service') return false; // 8DD — one-time engagements never renew
-        const e = new Date(c.endDate);
+        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
         const daysOut = Math.floor((e - today) / 86400000);
         if (daysOut < 0 || daysOut > 30) return false;
         const st = c.renewalStatus || 'Not Started';
@@ -41100,7 +41208,7 @@ function renderBusinessSnapshot() {
     }).map(c => ({
         label: c.client || '(no client)',
         sub: c.product || (c.oem ? getOemDisplayName(c.oem) : ''),
-        meta: `${Math.floor((new Date(c.endDate) - today) / 86400000)}d`,
+        meta: `${Math.floor(((__msLocalDate(c.endDate) || new Date(c.endDate)) - today) / 86400000)}d`,   // 8FH.2
         c
     }));
     const renEl = document.getElementById('bsActRenewals');
@@ -41160,7 +41268,7 @@ function renderBusinessSnapshot() {
         } else {
             const top = awaitingPOs.slice(0, 3);
             let html = top.map(p =>
-                `<div class="bs-action-item" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Acknowledged')"><span class="bs-action-item-lbl">${bsEsc(p.label)}${p.oem ? ' · ' + bsEsc(p.oem) : ''}</span><span class="bs-action-item-val">${bsFmtINRShort(p.value)}</span></div>`
+                `<div class="bs-action-item" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','${bsEsc((p.po && p.po.status) || 'Acknowledged')}')"><span class="bs-action-item-lbl">${bsEsc(p.label)}${p.oem ? ' · ' + bsEsc(p.oem) : ''}</span><span class="bs-action-item-val">${bsFmtINRShort(p.value)}</span></div>`
             ).join('');
             const more = awaitingPOs.length - 3;
             if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
@@ -41180,8 +41288,9 @@ function renderBusinessSnapshot() {
     wireClick('bsPayVal',         () => bsGotoTab('purchaseInvoicesTab', { apStatusFilter: 'INVOICED' }));
     wireClick('bsRecToIssueVal',  () => bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar'));
     wireClick('bsPayToReceiveVal',() => bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' }));
-    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab', null, null, 'ar'));
-    wireClick('bsPayCfWrap',      () => bsGotoTab('purchaseInvoicesTab'));
+    // 8FH.2 — the carry-forward figure opens the register on the unpaid rows dated before this FY (it showed the whole register)
+    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab', { arFyFilter: 'CF', arStatusFilter: 'INVOICED' }, null, 'ar'));
+    wireClick('bsPayCfWrap',      () => bsGotoTab('purchaseInvoicesTab', { apFyFilter: 'CF', apStatusFilter: 'INVOICED' }));
 
     // 8U item #9: BS bucket clicks now reset status to ALL and set the aging
     // filter to the bucket's key. Path 2 — without the status reset, a
@@ -41296,7 +41405,7 @@ function wbGatherBriefing() {
     cons.forEach(c => {
         if (!c || !c.endDate) return;
         if (c.type === 'service') return; // 8DD — one-time engagements never renew
-        const e = new Date(c.endDate);
+        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
         if (isNaN(e.getTime())) return;
         const days = Math.floor((e - today) / 86400000);
         const st = c.renewalStatus || 'Not Started';
@@ -42635,8 +42744,9 @@ function recomputeConsultantKPIs(filteredPayments) {
             : (parseFloat(p.totalAmount) || 0);
         if (p.status === 'Pending') {
             pendingTot += t; pendingCnt++;
-        } else if (p.status === 'Paid' && p.paidDate) {
-            const pd = new Date(p.paidDate);
+        } else if (p.status === 'Paid') {
+            // 8FH.2 — an undated Paid payment (the import's "amount paid, no date" rows) counts by its invoice date; it was in no card
+            const pd = __msLocalDate(p.paidDate || p.invoiceDate) || new Date(NaN);
             if (!isNaN(pd.getTime())) {
                 if (pd >= curMonthStart) { paidMtdTot += t; paidMtdCnt++; }
                 if (fy && pd >= fy.start && pd <= fy.end) { paidYtdTot += t; paidYtdCnt++; }
@@ -43251,7 +43361,7 @@ function onConPayStatusChange() {
     if (st === 'Paid') {
         const pdEl = document.getElementById('conPayPaidDate');
         if (pdEl && !pdEl.value) {
-            pdEl.value = new Date().toISOString().split('T')[0];
+            pdEl.value = __msTodayLocal();   // 8FH.2 — local date
         }
     }
 }
@@ -43875,7 +43985,7 @@ function exportConsultantPayments() {
             'Total (INR)': parseFloat(p.totalAmount) || 0,
             // 8ET — TDS kept back, and the amount actually paid (total less TDS; 0 until paid)
             'TDS (INR)': __msConPayTds(p),
-            'Amount Paid (INR)': p.paidDate ? ((parseFloat(p.totalAmount) || 0) - __msConPayTds(p)) : 0,
+            'Amount Paid (INR)': (p.status === 'Paid' || p.paidDate) ? ((parseFloat(p.totalAmount) || 0) - __msConPayTds(p)) : 0,   // 8FH.2 — by status, not the date
             'Status': p.status || '',
             'Paid Date': p.paidDate || '',
             'Payment Mode': p.paymentMode || '',
@@ -44394,6 +44504,18 @@ function _caExportToDate(s) {
     return d;
 }
 
+// 8FH.2 — the statuses the Sales sheet and the invoice bundle report: what the app stores. The old set named a
+// status that does not exist ('Credit-Note-Issued') and left 'Partially Paid' out, so part-paid invoices never
+// reached the CA and were re-emitted from the cycle ledger with no GST.
+const CA_EXPORT_SALES_STATUSES = ['Issued', 'Partially Paid', 'Paid', 'Credit Note Issued'];
+// 8FH.2 — the CRM invoice record with this number (case-insensitive; a live record before a cancelled one), or null.
+function _caExportInvoiceRecordByNumber(no) {
+    const k = String(no || '').trim().toLowerCase();
+    if (!k || typeof invoices === 'undefined' || !Array.isArray(invoices)) return null;
+    const hits = invoices.filter(i => i && String(i.invoiceNumber || '').trim().toLowerCase() === k);
+    return hits.find(i => i.status !== 'Cancelled') || hits[0] || null;
+}
+
 // Build the Sales sheet data rows. Returns { rows: [...], hyperlinks: {colK: [{row, url}, ...]} }
 function _caExportBuildSalesRows(rangeStart, rangeEnd) {
     const rows = [];
@@ -44402,11 +44524,25 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
 
     // ---- Pass 1: standalone invoices (Path B) ----
     if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
-        const eligibleStatuses = new Set(['Issued', 'Paid', 'Credit-Note-Issued']);
+        const eligibleStatuses = new Set(CA_EXPORT_SALES_STATUSES);   // 8FH.2
         invoices.forEach(inv => {
             if (!inv || !eligibleStatuses.has(inv.status)) return;
             const dateStr = inv.invoiceDate || '';
-            if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
+            const invInRange = !!dateStr && dateStr >= rangeStart && dateStr <= rangeEnd;
+            // 8FH.2 — a credit note is reported in the month it was issued, as a negative row after its invoice
+            // (review R6) a record set to 'Credit Note Issued' without the credit-note fields: the status change's day
+            let cnDateStr = '', cnDateNote = '';
+            if (inv.status === 'Credit Note Issued') {
+                cnDateStr = String(inv.creditNoteDate || '').slice(0, 10);
+                if (!cnDateStr) {
+                    const _h = (Array.isArray(inv.statusHistory) ? inv.statusHistory : []).filter(h => h && h.status === 'Credit Note Issued' && h.changedAt).pop();
+                    cnDateStr = __msTodayLocal(__msLocalDate((_h && _h.changedAt) || inv.cancelledAt || inv.updatedAt) || new Date(0));
+                    if (cnDateStr === '1970-01-01') cnDateStr = '';
+                    cnDateNote = ' — credit note date not recorded, taken from the status change';
+                }
+            }
+            const cnInRange = !!cnDateStr && cnDateStr >= rangeStart && cnDateStr <= rangeEnd;
+            if (!invInRange && !cnInRange) return;
 
             const c = (typeof contracts !== 'undefined' && !isNaN(parseInt(inv.linkedContractIdx)))
                 ? contracts[parseInt(inv.linkedContractIdx)] : null;
@@ -44459,8 +44595,26 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                 'PYMNT MODE': firstPayment ? (firstPayment.mode || firstPayment.paymentMode || '') : '',
                 'PAYMNT DETAILS': firstPayment ? (firstPayment.reference || firstPayment.paymentReference || '') : ''
             };
-            rows.push(row);
-            if (linkInfo.link) hyperlinks.push({ rowIndex: rows.length, url: linkInfo.link });
+            if (invInRange) {
+                rows.push(row);
+                if (linkInfo.link) hyperlinks.push({ rowIndex: rows.length, url: linkInfo.link });
+            }
+            if (cnInRange) {
+                // 8FH.2 — the credit note: the invoice's figures negated, under the credit note's number and date
+                const neg = v => -(parseFloat(v) || 0);
+                rows.push(Object.assign({}, row, {
+                    'SR. NO': rows.length + 1,
+                    'INVOICE DATE': _caExportToDate(cnDateStr),
+                    'INVOICE NO.': inv.creditNoteNumber || ('CN-' + (inv.invoiceNumber || '')),
+                    'ITEMS': 'CREDIT NOTE against invoice ' + (inv.invoiceNumber || '') + (inv.invoiceDate ? ' dated ' + inv.invoiceDate : '') + (inv.creditNoteReason ? ' — ' + inv.creditNoteReason : '') + cnDateNote,
+                    'CTS/QTY': '',
+                    'INR VALUE': neg(inv.subtotal), 'IGST': neg(inv.igst), 'CGST': neg(inv.cgst), 'SGST': neg(inv.sgst),
+                    'TOTAL GST': neg(inv.gstTotal), 'INVOICE VALUE': neg(inv.grandTotal),
+                    'TERMS (DAYS)': '', 'DUE DATE': null, 'RECEIVED DATE': null, 'AMOUNT RECEIVED': 0, 'USD:INR PAYMNT RECD DATE RATE': '',
+                    'BALANCE DUE': -Math.max(0, (parseFloat(inv.grandTotal) || 0) - (parseFloat(inv.amountPaid) || 0)),
+                    'PYMNT MODE': '', 'PAYMNT DETAILS': ''
+                }));
+            }
             if (inv.invoiceNumber) seenInvNos.add(String(inv.invoiceNumber).trim());
         });
     }
@@ -44472,29 +44626,36 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
             const businessHead = _caExportBusinessHeadForContract(c);
             const client = _caExportFindClient(c.client);
             const billTo2 = _caExportSalesBillTo(c.commercialModel, c.sourcedViaResellerKey, c.client, client);
-            // 8BC.1 — Sales-side currency handling. Almost always INR for clients
-            // but support USD-billed clients for completeness (handled the same way
-            // as AP side — costCurrency from contract, FX via getEffectiveFX).
-            const isUSDcontract = ((c && c.costCurrency) || 'USD') !== 'INR';
+            // 8FH.2 — the sales side is rupees: a ledger amount is never FX-converted (costCurrency is the OEM's cost
+            // currency; the old code multiplied every ledger-only client invoice of a USD-cost contract by the FX rate).
+            // A ledger entry whose number matches a CRM invoice record takes that record's figures (GST split, total,
+            // terms, due date); one the CRM has no record of has no GST recorded, and the row says so. Old-shape
+            // cycles (clientInvoiceNo / actualInvoiceDate on the cycle itself) are read the way the registers read them.
             c.billingYears.forEach((y, yIdx) => {
-                if (!y || !Array.isArray(y.arInvoices)) return;
-                y.arInvoices.forEach(ar => {
+                __msCycleArList(y, c).forEach(ar => {
                     if (!ar || !ar.invNo) return;
                     if (seenInvNos.has(String(ar.invNo).trim())) return;
                     const dateStr = ar.date || '';
                     if (!dateStr || dateStr < rangeStart || dateStr > rangeEnd) return;
-
-                    // FX resolution mirrors AP side
-                    const rawAmt = parseFloat(ar.amount) || 0;
-                    let fxRate = 1.0;
-                    if (isUSDcontract) {
-                        const apFx = parseFloat(ar.fx);
-                        if (apFx && apFx > 0) fxRate = apFx;
-                        else if (typeof getEffectiveFX === 'function') fxRate = getEffectiveFX(c, y, yIdx) || (c.baseFX || 83.5);
-                        else fxRate = c.baseFX || 83.5;
-                    }
-                    const usdValue = isUSDcontract ? rawAmt : 0;
-                    const inrValue = isUSDcontract ? Math.round(rawAmt * fxRate * 100) / 100 : rawAmt;
+                    let rec = _caExportInvoiceRecordByNumber(ar.invNo);
+                    // a live record is reported under its own invoice date (Pass 1, in this period or another); a
+                    // cancelled one is not reported at all; only a Draft's figures are borrowed here
+                    if (rec && (rec.status === 'Cancelled' || CA_EXPORT_SALES_STATUSES.indexOf(rec.status) >= 0)) return;
+                    const draftNoFigures = !!(rec && !(parseFloat(rec.grandTotal) > 0));   // (review R12) an empty Draft lends nothing
+                    if (draftNoFigures) rec = null;
+                    const ledgerAmt = parseFloat(ar.amount) || 0;
+                    const inrValue = rec ? (parseFloat(rec.subtotal) || 0) : ledgerAmt;
+                    const igst = rec ? (parseFloat(rec.igst) || 0) : 0;
+                    const cgst = rec ? (parseFloat(rec.cgst) || 0) : 0;
+                    const sgst = rec ? (parseFloat(rec.sgst) || 0) : 0;
+                    const gstTotal = rec ? (parseFloat(rec.gstTotal) || 0) : 0;
+                    const invValue = rec ? (parseFloat(rec.grandTotal) || 0) : ledgerAmt;
+                    const received = ar.paidDate ? invValue : (rec ? (parseFloat(rec.amountPaid) || 0) : 0);
+                    const recItems = rec ? (Array.isArray(rec.lineItems) ? rec.lineItems : []) : [];
+                    const items = rec
+                        ? ((recItems.map(li => (li && li.product) || '').filter(Boolean).join('  ') || (c.product || '')) + ' · CRM record is a Draft')
+                        : ((c.product || '') + ' · ledger entry, no GST recorded' + (draftNoFigures ? ' (the CRM record is a Draft without figures)' : ''));
+                    const termsM = rec ? String(rec.paymentTerms || '').match(/(\d+)/) : null;
 
                     const row = {
                         'SR. NO': rows.length + 1,
@@ -44508,19 +44669,19 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
                         'GST': billTo2.isResale ? _caExportClientGstin(billTo2.rec) : (_caExportClientGstin(client) || (c.clientGST || '')),
                         'AADHAR': (billTo2.rec && billTo2.rec.aadhaar && String(billTo2.rec.aadhaar).trim()) ? billTo2.rec.aadhaar : 'N/A',
                         'INVOICE NO.': ar.invNo || '',
-                        'ITEMS': c.product || '',
-                        'CTS/QTY': '',
-                        'USD VALUE': usdValue || '',
-                        'USD:INR INVOICE DATE RATE': isUSDcontract ? fxRate : '',
+                        'ITEMS': items,
+                        'CTS/QTY': rec ? (recItems.reduce((s, li) => s + (parseFloat(li && li.qty) || 0), 0) || '') : '',
+                        'USD VALUE': '',
+                        'USD:INR INVOICE DATE RATE': '',
                         'INR VALUE': inrValue,
-                        'IGST': 0, 'CGST': 0, 'SGST': 0, 'TOTAL GST': 0,
-                        'INVOICE VALUE': inrValue,
-                        'TERMS (DAYS)': '',
-                        'DUE DATE': null,
+                        'IGST': rec ? igst : '', 'CGST': rec ? cgst : '', 'SGST': rec ? sgst : '', 'TOTAL GST': rec ? gstTotal : '',   // (review R13) blank, not 0, where no GST is recorded
+                        'INVOICE VALUE': invValue,
+                        'TERMS (DAYS)': termsM ? parseInt(termsM[1]) : '',
+                        'DUE DATE': rec ? _caExportToDate(rec.dueDate) : null,
                         'RECEIVED DATE': _caExportToDate(ar.paidDate),
-                        'AMOUNT RECEIVED': ar.paidDate ? inrValue : 0,
+                        'AMOUNT RECEIVED': received,
                         'USD:INR PAYMNT RECD DATE RATE': '',
-                        'BALANCE DUE': ar.paidDate ? 0 : inrValue,
+                        'BALANCE DUE': Math.max(0, invValue - received),
                         'PYMNT MODE': '', 'PAYMNT DETAILS': ''
                     };
                     rows.push(row);
@@ -44534,6 +44695,8 @@ function _caExportBuildSalesRows(rangeStart, rangeEnd) {
 }
 
 // Build the Payments sheet data rows. Sources: contract apInvoices[] + consultantPayments[].
+// NOTE (8FH.2): not used by the export — generateCaExport builds the Payments rows itself (with
+// _caExportComputeApAmounts, TDS and the remittance rate). Kept for reference only; edit the live path.
 function _caExportBuildPaymentsRows(rangeStart, rangeEnd) {
     const rows = [];
     const hyperlinks = [];
@@ -44818,70 +44981,31 @@ function _caExportApplyFormatting(ws, sheetType, rowCount) {
         }
     }
 
-    // ---- 6. Per-row formulas (only where they match the computed value,
-    //         keeping the file behaviourally identical to writing literals). ----
+    // ---- 6. Per-row formulas — 8FH.2: a formula is written only where it evaluates to the literal already in the
+    //         cell (within a paisa), so the file reads the same whether or not it recalculates. The old loop wrote
+    //         P*18% on every inter-state invoice (a mixed-rate invoice re-taxed at 18 % of the whole subtotal), V+C
+    //         over the recorded due date, and Y−U — the wrong sign — for BALANCE DUE. ----
+    const _cv = cell => (cell && cell.v !== undefined && cell.v !== null && cell.v !== '') ? (cell.v instanceof Date ? (cell.v.getTime() - new Date(1899, 11, 30).getTime()) / 86400000 : (parseFloat(cell.v) || 0)) : 0;   // a Date as its Excel serial (review R11)
+    const _near = (a, b) => Math.abs(a - b) < 0.011;
+    const _setF = (cell, f, value) => { if (cell && _near(_cv(cell), value)) cell.f = f; };
     for (let r = 1; r <= rowCount; r++) {
         const rE = r + 1; // Excel 1-indexed row number
+        const cell = col => ws[`${col}${rE}`];
         if (sheetType === 'sales') {
-            // TOTAL GST = Q+R+S (always)
-            const tCell = ws[`T${rE}`];
-            if (tCell) tCell.f = `Q${rE}+R${rE}+S${rE}`;
-            // INVOICE VALUE = T+P (always)
-            const uCell = ws[`U${rE}`];
-            if (uCell) uCell.f = `T${rE}+P${rE}`;
-            // IGST = P*18% only when foreign-OEM (detected: IGST literal > 0 AND CGST = SGST = 0)
-            const qCell = ws[`Q${rE}`];
-            const rCell = ws[`R${rE}`];
-            const sCell = ws[`S${rE}`];
-            if (qCell && (parseFloat(qCell.v) || 0) > 0 &&
-                (!rCell || (parseFloat(rCell.v) || 0) === 0) &&
-                (!sCell || (parseFloat(sCell.v) || 0) === 0)) {
-                qCell.f = `P${rE}*18%`;
-            }
-            // DUE DATE = V+C only when both have values
-            const wCell = ws[`W${rE}`];
-            const vCell = ws[`V${rE}`];
-            const cCell = ws[`C${rE}`];
-            if (wCell && vCell && cCell && vCell.v && cCell.v) {
-                wCell.f = `V${rE}+C${rE}`;
-            }
-            // BALANCE DUE = Y-U only when Y has value (received)
-            const aaCell = ws[`AA${rE}`];
-            const yCell = ws[`Y${rE}`];
-            if (aaCell && yCell && parseFloat(yCell.v || 0) > 0) {
-                aaCell.f = `Y${rE}-U${rE}`;
-            }
+            const P = _cv(cell('P')), Q = _cv(cell('Q')), R = _cv(cell('R')), S = _cv(cell('S')), T = _cv(cell('T')), U = _cv(cell('U')), Y = _cv(cell('Y'));
+            _setF(cell('T'), `Q${rE}+R${rE}+S${rE}`, Q + R + S);                                   // TOTAL GST
+            _setF(cell('U'), `T${rE}+P${rE}`, T + P);                                              // INVOICE VALUE
+            if (Q > 0 && R === 0 && S === 0) _setF(cell('Q'), `P${rE}*18%`, P * 0.18);             // IGST — only when 18 % is what was charged
+            if (cell('W') && _cv(cell('V')) && _cv(cell('C'))) _setF(cell('W'), `V${rE}+C${rE}`, _cv(cell('C')) + _cv(cell('V')));   // DUE DATE = invoice date + terms
+            if (Y > 0) _setF(cell('AA'), `U${rE}-Y${rE}`, U - Y);                                  // BALANCE DUE = invoice value − received
         } else {
-            // Payments
-            // INR VALUE = P*O when USD VALUE > 0
-            const oCell = ws[`O${rE}`];
-            const qCellP = ws[`Q${rE}`];
-            if (qCellP && oCell && parseFloat(oCell.v || 0) > 0) {
-                qCellP.f = `P${rE}*O${rE}`;
-            }
-            // IGST = Q*18% when foreign-OEM (detected via RCM GST > 0)
-            const aaCellP = ws[`AA${rE}`];
-            const rCellP = ws[`R${rE}`];
-            if (rCellP && aaCellP && parseFloat(aaCellP.v || 0) > 0) {
-                rCellP.f = `Q${rE}*18%`;
-            }
-            // TOTAL GST = R+S+T (always)
-            const uCellP = ws[`U${rE}`];
-            if (uCellP) uCellP.f = `R${rE}+S${rE}+T${rE}`;
-            // PAYMENT VALUE = Q+U (always)
-            const vCellP = ws[`V${rE}`];
-            if (vCellP) vCellP.f = `Q${rE}+U${rE}`;
-            // RCM GST = U when foreign-OEM (RCM already > 0)
-            if (aaCellP && parseFloat(aaCellP.v || 0) > 0) {
-                aaCellP.f = `U${rE}`;
-            }
-            // DUE DATE = W+D when both have values
-            const acCell = ws[`AC${rE}`];
-            const wCellP = ws[`W${rE}`];
-            const dCell = ws[`D${rE}`];
-            if (acCell && wCellP && dCell && wCellP.v && dCell.v) {
-                acCell.f = `W${rE}+D${rE}`;
-            }
+            const O = _cv(cell('O')), P = _cv(cell('P')), Q = _cv(cell('Q')), R = _cv(cell('R')), S = _cv(cell('S')), T = _cv(cell('T')), U = _cv(cell('U')), AA = _cv(cell('AA'));
+            if (O > 0) _setF(cell('Q'), `P${rE}*O${rE}`, P * O);                                   // INR VALUE = USD × rate
+            if (AA > 0) _setF(cell('R'), `Q${rE}*18%`, Q * 0.18);                                  // RCM IGST at 18 %
+            _setF(cell('U'), `R${rE}+S${rE}+T${rE}`, R + S + T);                                   // TOTAL GST
+            _setF(cell('V'), `Q${rE}+U${rE}`, Q + U);                                              // PAYMENT VALUE
+            if (AA > 0) _setF(cell('AA'), `U${rE}`, U);                                            // RCM GST = TOTAL GST
+            if (cell('AC') && _cv(cell('W')) && _cv(cell('D'))) _setF(cell('AC'), `W${rE}+D${rE}`, _cv(cell('D')) + _cv(cell('W')));   // DUE DATE
         }
     }
 
@@ -44938,8 +45062,9 @@ async function generateCaExport() {
                 const oemPan = _caExportOemPan(effOem);
                 const oemTaxId = _caExportOemTaxId(effOem);
                 c.billingYears.forEach((y, yIdx) => {
-                    if (!y || !Array.isArray(y.apInvoices)) return;
-                    y.apInvoices.forEach(ap => {
+                    // 8FH.2 — old-shape cycles (oemInvoiceNo / oemInvoiceDate on the cycle itself) are read the way the
+                    // registers read them; they never reached this sheet before
+                    __msCycleApList(y, c, yIdx).forEach(ap => {
                         if (!ap || !ap.invNo) return;
                         const dateStr = ap.date || '';
                         if (!dateStr || dateStr < range.start || dateStr > range.end) return;
@@ -44970,7 +45095,7 @@ async function generateCaExport() {
                             'PAYMENT VALUE': paymentValue,
                             'TERMS (DAYS)': '',
                             'USD:INR PAYMNT DATE RATE': __msRmtPayRate(ap, amt.isUSDcontract),   // 8FC — the bank's rate recorded from the Payables page
-                            'AMOUNT PAID': ap.payDate ? (__msRmtPaidInr(ap, amt) + totalGst - amt.tds) : 0,   // 8ET — less TDS kept back; 8FC — at the recorded rate when there is one
+                            'AMOUNT PAID': ap.payDate ? (__msRmtPaidInr(ap, amt) + (amt.isForeignOem ? 0 : totalGst) - amt.tds) : 0,   // 8ET — less TDS kept back; 8FC — at the recorded rate when there is one; 8FH.2 — an overseas OEM's reverse-charge IGST is deposited with the government, never paid to the vendor
                             'TDS': amt.tds,
                             'RCM GST': amt.isForeignOem ? amt.igst : 0,
                             'DISCREPANCY': 0,
@@ -45013,7 +45138,7 @@ async function generateCaExport() {
                     'PAYMENT VALUE': subtotal + gstAmt,
                     'TERMS (DAYS)': con ? (con.defaultPaymentTermsDays || '') : '',
                     'USD:INR PAYMNT DATE RATE': '',
-                    'AMOUNT PAID': p.paidDate ? ((parseFloat(p.totalAmount) || (subtotal + gstAmt)) - __msConPayTds(p)) : 0,   // 8ET — less TDS
+                    'AMOUNT PAID': (p.status === 'Paid' || p.paidDate) ? ((parseFloat(p.totalAmount) || (subtotal + gstAmt)) - __msConPayTds(p)) : 0,   // 8ET — less TDS; 8FH.2 — by status too
                     'TDS': __msConPayTds(p), 'RCM GST': 0, 'DISCREPANCY': 0,
                     'DUE DATE': _caExportToDate(p.dueDate),
                     'PAYMENT DATE': _caExportToDate(p.paidDate)
@@ -45144,8 +45269,8 @@ async function generateCaExport() {
      { folder, kind:'zip'|'local'|'link'|'missing', label,
        filename?, dataUrl?, mimeType?, path?, url? }
    Date filtering mirrors the Excel builders exactly (string yyyy-mm-dd
-   compare against _caExportComputeRange; Sales statuses Issued/Paid/
-   Credit-Note-Issued).
+   compare against _caExportComputeRange; Sales statuses as
+   CA_EXPORT_SALES_STATUSES — 8FH.2).
    ====================================================================== */
 
 function _caExportGatherInvoiceFiles(rangeStart, rangeEnd) {
@@ -45157,7 +45282,7 @@ function _caExportGatherInvoiceFiles(rangeStart, rangeEnd) {
 
     // ---- 1) SALES INVOICES — mirror _caExportBuildSalesRows eligibility ----
     if (typeof invoices !== 'undefined' && Array.isArray(invoices)) {
-        var eligible = { 'Issued': 1, 'Paid': 1, 'Credit-Note-Issued': 1 };
+        var eligible = {}; CA_EXPORT_SALES_STATUSES.forEach(function (st) { eligible[st] = 1; });   // 8FH.2 — the Sales sheet's set
         invoices.forEach(function (inv) {
             if (!inv || !eligible[inv.status]) return;
             if (!inRange(inv.invoiceDate || '')) return;
@@ -45174,14 +45299,19 @@ function _caExportGatherInvoiceFiles(rangeStart, rangeEnd) {
                 g.items.push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — signed PDF referenced but file missing' });
                 return;
             }
-            // No signed PDF; fall back to a link on the matching AR cycle if present.
-            var arLink = '', arLocal = '';
-            if (typeof contracts !== 'undefined' && !isNaN(parseInt(inv.linkedContractIdx))) {
+            // No signed PDF; 8FH.2 — the PDF the Masters import placed on the record (inv.localPdfPath), else the
+            // linked cycle's entry through the Sales sheet's own resolver (old-shape cycles included), else any
+            // cycle of the linked contract whose ledger carries the number.
+            var arLink = '', arLocal = String(inv.localPdfPath || '').trim();
+            if (!arLocal) {
+                var lk = _caExportFindArLink(inv);
+                arLink = lk.link || ''; arLocal = lk.localPath || '';
+            }
+            if (!arLocal && !arLink && typeof contracts !== 'undefined' && !isNaN(parseInt(inv.linkedContractIdx))) {
                 var c = contracts[parseInt(inv.linkedContractIdx)];
                 if (c && Array.isArray(c.billingYears)) {
                     c.billingYears.forEach(function (by) {
-                        var arr = (by && by.arInvoices) || [];
-                        var m = arr.filter(function (x) { return x && x.invNo && String(x.invNo).trim() === String(inv.invoiceNumber).trim(); })[0];
+                        var m = __msCycleArList(by, c).filter(function (x) { return x && x.invNo && String(x.invNo).trim() === String(inv.invoiceNumber).trim(); })[0];
                         if (m) { arLink = m.link || ''; arLocal = m.localPath || ''; }
                     });
                 }
@@ -45191,14 +45321,35 @@ function _caExportGatherInvoiceFiles(rangeStart, rangeEnd) {
             else g.items.push({ folder: 'Sales Invoices', kind: 'missing', label: label + ' — no signed PDF / link recorded' });
         });
     }
+    // 8FH.2 — the client invoices the Sales sheet lists from the cycle ledgers (Pass 2: no live CRM record), with their
+    // file or link (review R5)
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
+        var eligible2 = {}; CA_EXPORT_SALES_STATUSES.forEach(function (st) { eligible2[st] = 1; });
+        var seenLedger = {};
+        contracts.forEach(function (c) {
+            if (!c || !Array.isArray(c.billingYears)) return;
+            c.billingYears.forEach(function (by) {
+                __msCycleArList(by, c).forEach(function (ar) {
+                    if (!ar || !ar.invNo || !inRange(ar.date || '')) return;
+                    var no = String(ar.invNo).trim();
+                    var rec = _caExportInvoiceRecordByNumber(no);
+                    if (rec && (rec.status === 'Cancelled' || eligible2[rec.status])) return;   // bundled under its own record (or not at all)
+                    if (seenLedger[no]) return; seenLedger[no] = 1;
+                    var lab2 = 'Sales Invoice ' + no + (c.client ? ' · ' + c.client : '') + ' (cycle ledger)';
+                    if (ar.localPath) { g.items.push({ folder: 'Sales Invoices', kind: 'local', label: lab2, path: ar.localPath }); g.localChecks.push({ path: ar.localPath }); }
+                    else if (ar.link) g.items.push({ folder: 'Sales Invoices', kind: 'link', label: lab2, url: ar.link });
+                    else g.items.push({ folder: 'Sales Invoices', kind: 'missing', label: lab2 + ' — no file/link recorded' });
+                });
+            });
+        });
+    }
 
     // ---- 2) OEM / PURCHASE INVOICES — mirror the Payments AP rows ----
     if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
         contracts.forEach(function (c, cIdx) {
             if (!c || !Array.isArray(c.billingYears)) return;
-            c.billingYears.forEach(function (by) {
-                if (!by || !Array.isArray(by.apInvoices)) return;
-                by.apInvoices.forEach(function (ap) {
+            c.billingYears.forEach(function (by, byIdx) {
+                __msCycleApList(by, c, byIdx).forEach(function (ap) {   // 8FH.2 — old-shape cycles included
                     if (!ap || !ap.invNo) return;
                     if (!inRange(ap.date || '')) return;
                     var lab = 'OEM Invoice ' + (ap.invNo || '(unnumbered)')
@@ -45703,7 +45854,7 @@ function populateARApFilters() {
     function fillFy(sel) {
         if (!sel) return;
         const cur = sel.value;
-        sel.innerHTML = '<option value="ALL">All Years</option>';
+        sel.innerHTML = '<option value="ALL">All Years</option><option value="CF"' + (cur === 'CF' ? ' selected' : '') + '>Before this FY (carry-forward)</option>';   // 8FH.2
         yearList.forEach(y => { const opt = document.createElement('option'); opt.value = y; opt.textContent = `FY ${y}`; if (y === cur) opt.selected = true; sel.appendChild(opt); });
     }
     function fillClient(sel) {
@@ -45812,8 +45963,8 @@ function getDaysOverdue(dueDate) { const now = new Date(); now.setHours(0, 0, 0,
 // classifier, retained for reference; no longer used for register buckets.)
 function getInvoiceAgeDays(invoiceDateStr) {
     if (!invoiceDateStr) return null;
-    const d = new Date(invoiceDateStr);
-    if (isNaN(d.getTime())) return null;
+    const d = __msLocalDate(invoiceDateStr);   // 8FH.2 — local midnight, like the "Days O/S" column: the buckets were a day short
+    if (!d) return null;
     const t = new Date(); t.setHours(0, 0, 0, 0);
     return Math.floor((t - d) / 86400000);
 }
@@ -46078,8 +46229,10 @@ function renderARApPage() {
     // RESET_GROUPS on any Snapshot navigation.
     const arUrgVal = (((document.getElementById('arPendingUrgency') || {}).value) || 'ALL');
     const apUrgVal = (((document.getElementById('apPendingUrgency') || {}).value) || 'ALL');
-    const arFyRange = arFyVal !== 'ALL' ? getFYRange(arFyVal) : null;
-    const apFyRange = apFyVal !== 'ALL' ? getFYRange(apFyVal) : null;
+    // 8FH.2 — 'CF' = everything dated before the current financial year (the Snapshot's carry-forward figure)
+    const _fyRangeFor = v => v === 'ALL' ? null : (v === 'CF' ? { start: new Date(1900, 0, 1), end: new Date(bsGetCurrentFYRange().start.getTime() - 1) } : getFYRange(v));
+    const arFyRange = _fyRangeFor(arFyVal);
+    const apFyRange = _fyRangeFor(apFyVal);
 
     let arRecords = []; let apRecords = [];
 
@@ -46116,15 +46269,14 @@ function renderARApPage() {
             const dueDate = getBillingDueDate(y); const daysOverdue = getDaysOverdue(dueDate);
 
             // Resolve the FY-bucket dates for this cycle (AR and AP separately)
-            const arFyDate = getArFYDate(c, y);
-            const apFyDate = getApFYDate(c, y);
+            // 8FH.2 — the carry-forward filter ('CF') goes by the invoice / bill date, as the Snapshot's figure does (review R7)
+            const arFyDate = getArFYDate(c, y, arFyVal === 'CF' ? 'invoice' : undefined);
+            const apFyDate = getApFYDate(c, y, apFyVal === 'CF' ? 'invoice' : undefined);
             const arInFy = !arFyRange || (arFyDate >= arFyRange.start && arFyDate <= arFyRange.end);
             const apInFy = !apFyRange || (apFyDate >= apFyRange.start && apFyDate <= apFyRange.end);
 
             if (cycleRev > 0 && arInFy && arClientOk) {
-                let arInvs = [];
-                if (y.arInvoices && y.arInvoices.length > 0) arInvs = y.arInvoices;
-                else if (y.clientInvoiceNo || y.actualInvoiceDate) arInvs = [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '', link: y.clientInvoiceLink || '' }];
+                let arInvs = __msCycleArLive(y, c);   // 8FH.2 — one reader for the ledger and the old-shape fields (the local path included); a cancelled / credit-noted invoice's row is not a receivable
 
                 // Build crossover badge (shown only if bill date & invoice/payment FY differ)
                 const crossoverBadge = buildCrossoverBadge(c, y);
@@ -46157,7 +46309,7 @@ function renderARApPage() {
                             cIdx, yIdx, client: c.client, product: c.product, cycle: y.cycle || yIdx + 1,
                             commercialModel: c.commercialModel || 'Direct',
                             sourcedViaResellerKey: c.sourcedViaResellerKey || '',
-                            cycleRev: invAmt, // per-invoice amount, not cycle total
+                            cycleRev: invAmt * __msArOpenFraction(inv), // per-invoice amount, not cycle total; 8FH.2 — a part-paid invoice: what is still open
                             dueDate,
                             daysOverdue: (invDaysOverdue !== null ? invDaysOverdue : -999),
                             actualInvoiceDate: inv.date || null,
@@ -46185,8 +46337,12 @@ function renderARApPage() {
                     const invoiceDaysOverdue = hasInvoice ? getInvoiceBasedDaysOverdue(actualInvoiceDate) : null;
                     const invoiceDueDate = hasInvoice ? getInvoiceDueDate(actualInvoiceDate) : null;
 
+                    // 8FH.2 — a paid date on the ledger row settles the cycle like the checkbox does (the split-row and
+                    // payables paths already read it; a single-row cycle showed OVERDUE beside its own payment date)
+                    const _datedAr = arInvs.filter(i => i && i.date);   // (review R15) a cleared-but-not-removed row decides nothing
+                    const ledgerPaid = _datedAr.length > 0 && _datedAr.every(i => i.paidDate);
                     let arStatus = 'PENDING';
-                    if (y.paid) arStatus = 'PAID';
+                    if (y.paid || ledgerPaid) arStatus = 'PAID';
                     else if (y.invoiceRaised || hasInvoice) {
                         // Invoice raised — aging is based on invoice date + 30 days
                         arStatus = (invoiceDaysOverdue !== null && invoiceDaysOverdue > 0) ? 'OVERDUE' : 'INVOICED';
@@ -46202,7 +46358,7 @@ function renderARApPage() {
                         // Phase 4C.2 — surface contract-level commercial routing for AR display (Q4 Option B)
                         commercialModel: c.commercialModel || 'Direct',
                         sourcedViaResellerKey: c.sourcedViaResellerKey || '',
-                        cycleRev,
+                        cycleRev: cycleRev * (arInvs.length === 1 ? __msArOpenFraction(arInvs[0]) : 1),   // 8FH.2 — a part-paid invoice: what is still open (review R10)
                         // Legacy fields — kept for existing consumers
                         dueDate,  // contract-schedule due date (used for "Invoices to be Raised" surfacing)
                         daysOverdue: (invoiceDaysOverdue !== null ? invoiceDaysOverdue : -999), // -999 = no invoice → not aged
@@ -46211,7 +46367,7 @@ function renderARApPage() {
                         invoiceDueDate,
                         invoiceDaysOverdue,
                         hasInvoice,
-                        status: arStatus, invoices: arInvs, paid: y.paid,
+                        status: arStatus, invoices: arInvs, paid: !!(y.paid || ledgerPaid),
                         invoiceRaised: y.invoiceRaised || hasInvoice,
                         crossoverBadge: crossoverBadge, billDate: billDate, arFyDate: arFyDate
                     });
@@ -46219,14 +46375,10 @@ function renderARApPage() {
             }
 
             if (cycleCostUSD > 0 && apInFy && apClientOk) {
-                let apInvs = [];
-                if (y.apInvoices && y.apInvoices.length > 0) apInvs = y.apInvoices;
-                // Bug fix #20a — Legacy fallback now requires an actual OEM invoice
-                // DATE before synthesizing a record. Previously a stale
-                // y.oemInvoiceNo with no date would fake "Received & Unpaid"
-                // status (caused JK Cement most-recent-cycle to show as Unpaid
-                // even though no invoice had been entered).
-                else if (y.oemInvoiceDate) apInvs = [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate, amount: cycleCostUSD, fx: effFX, payDate: y.oemPaymentDate || '', link: y.oemInvoiceLink || '' }];
+                // Bug fix #20a — the legacy fallback requires an actual OEM invoice DATE before synthesizing a record
+                // (a stale y.oemInvoiceNo with no date faked "Received & Unpaid"). 8FH.2 — one reader (__msCycleApList),
+                // with the local path.
+                let apInvs = __msCycleApList(y, c, yIdx);
 
                 // Bug fix #20a — Defensive: drop empty/incomplete rows so a
                 // ghost row in y.apInvoices (e.g., a cleared-but-not-removed
@@ -46444,7 +46596,13 @@ function renderARApPage() {
                 daysDisplay = '<span style="color:var(--warning);">Due today</span>';
             }
             // Linked Invoice lookup (Phase 3 T-INV-3) — reverse-links to dedicated Invoices module
-            const linkedInv = (typeof findInvoiceForContractCycle === 'function') ? findInvoiceForContractCycle(r.cIdx, r.yIdx) : null;
+            // 8FH.2 — a row that carries its own ledger number (a split-billing row, a hand-entered row) shows the
+            // invoice of that number; the cycle lookup (first linked invoice) is for a cycle-level row only, so the
+            // second row of a split cycle no longer shows the first row's invoice with a "differs" triangle.
+            const _isSplitRow = (r.invoiceIdx !== undefined && r.invoiceIdx !== null);
+            const _recByNo = (inv.invNo && typeof _caExportInvoiceRecordByNumber === 'function') ? _caExportInvoiceRecordByNumber(inv.invNo) : null;
+            const _byNo = (_recByNo && _recByNo.status !== 'Cancelled') ? _recByNo : null;
+            const linkedInv = _byNo || ((!_isSplitRow && typeof findInvoiceForContractCycle === 'function') ? findInvoiceForContractCycle(r.cIdx, r.yIdx) : null);
             // 8AU — append paperclip pin for signed-PDF if attached
             const linkedInvPin = linkedInv ? window.__msSignedInvoicePin(linkedInv) : '';
             // 8DO — single merged "Invoice" column. Prefers the formal linked
@@ -46793,28 +46951,31 @@ function renderClientSummary() {
             const fxPl = bookCostINR - cycleCostINR; const dueDate = getBillingDueDate(y); const daysOverdue = getDaysOverdue(dueDate);
 
             if (!yearlyData[fy]) yearlyData[fy] = { rev: 0, cost: 0, margin: 0, fxPl: 0, fxSum: 0, fxCount: 0 };
-            yearlyData[fy].rev += cycleRev; yearlyData[fy].cost += cycleCostINR; yearlyData[fy].margin += (cycleRev - cycleCostINR); yearlyData[fy].fxPl += fxPl; yearlyData[fy].fxSum += effFX; yearlyData[fy].fxCount++;
+            yearlyData[fy].rev += cycleRev; yearlyData[fy].cost += cycleCostINR; yearlyData[fy].margin += (cycleRev - cycleCostINR); yearlyData[fy].fxPl += fxPl; if (c.costCurrency !== 'INR') { yearlyData[fy].fxSum += effFX; yearlyData[fy].fxCount++; }   // 8FH.2
 
-            if (isInRange(bd, activeRange)) { totalRev += cycleRev; totalCost += cycleCostINR; totalFxPl += fxPl; fxSumWeighted += effFX; fxSumCount++; }
+            if (isInRange(bd, activeRange)) { totalRev += cycleRev; totalCost += cycleCostINR; totalFxPl += fxPl; if (c.costCurrency !== 'INR') { fxSumWeighted += effFX; fxSumCount++; } }   // 8FH.2 — foreign-currency cycles only
 
             if (cycleRev > 0) {
-                let arInvs = y.arInvoices && y.arInvoices.length > 0 ? y.arInvoices : (y.clientInvoiceNo || y.actualInvoiceDate ? [{ invNo: y.clientInvoiceNo || '', date: y.actualInvoiceDate || '', amount: cycleRev, paidDate: y.paymentDate || '', link: y.clientInvoiceLink || '' }] : []);
+                let arInvs = __msCycleArLive(y, c);   // 8FH.2 — one reader (the local path included); a cancelled / credit-noted invoice's row is not a receivable
                 // Invoice-date-based aging (Phase 2 T2.5)
                 const actualInvoiceDate = arInvs.find(i => i.date) ? arInvs.find(i => i.date).date : null;
                 const hasInvoice = !!actualInvoiceDate;
                 const invoiceDaysOverdue = hasInvoice ? getInvoiceBasedDaysOverdue(actualInvoiceDate) : null;
                 const invoiceDueDate = hasInvoice ? getInvoiceDueDate(actualInvoiceDate) : null;
+                const _datedAr = arInvs.filter(i => i && i.date); const ledgerPaid = _datedAr.length > 0 && _datedAr.every(i => i.paidDate);   // 8FH.2 — as on the Receivables register (review R15: a ghost row decides nothing)
                 let arStatus = 'PENDING';
-                if (y.paid) arStatus = 'PAID';
+                if (y.paid || ledgerPaid) arStatus = 'PAID';
                 else if (y.invoiceRaised || hasInvoice) arStatus = (invoiceDaysOverdue !== null && invoiceDaysOverdue > 0) ? 'OVERDUE' : 'INVOICED';
-                if (y.paid && arInvs.length > 0 && arInvs[0].date && arInvs[0].paidDate) { const raised = new Date(arInvs[0].date); const paid = new Date(arInvs[0].paidDate); const days = Math.floor((paid - raised) / (1000 * 60 * 60 * 24)); if (days >= 0) { dsoSum += days; dsoCount++; } }
-                arRecords.push({ globalIdx, yIdx, cycle: y.cycle || yIdx + 1, cycleRev, dueDate, daysOverdue: (invoiceDaysOverdue !== null ? invoiceDaysOverdue : -999), actualInvoiceDate, invoiceDueDate, invoiceDaysOverdue, hasInvoice, status: arStatus, invoices: arInvs, paid: y.paid, bd });
+                if ((y.paid || ledgerPaid) && arInvs.length > 0 && arInvs[0].date && arInvs[0].paidDate) { const raised = new Date(arInvs[0].date); const paid = new Date(arInvs[0].paidDate); const days = Math.floor((paid - raised) / (1000 * 60 * 60 * 24)); if (days >= 0) { dsoSum += days; dsoCount++; } }
+                arRecords.push({ globalIdx, yIdx, cycle: y.cycle || yIdx + 1, cycleRev, dueDate, daysOverdue: (invoiceDaysOverdue !== null ? invoiceDaysOverdue : -999), actualInvoiceDate, invoiceDueDate, invoiceDaysOverdue, hasInvoice, status: arStatus, invoices: arInvs, paid: !!(y.paid || ledgerPaid), bd });
             }
 
             if (baseCost > 0) {
-                let apInvs = y.apInvoices && y.apInvoices.length > 0 ? y.apInvoices : (y.oemInvoiceNo || y.oemInvoiceDate ? [{ invNo: y.oemInvoiceNo || '', date: y.oemInvoiceDate || '', amount: baseCost * y.ratio, fx: effFX, payDate: y.oemPaymentDate || '', link: y.oemInvoiceLink || '' }] : []);
-                let apStatus = y.vendorPaid ? 'SETTLED' : (apInvs.some(i => i.date) ? 'INVOICED' : 'PENDING');
-                apRecords.push({ globalIdx, yIdx, cycle: y.cycle || yIdx + 1, cycleCostUSD: baseCost * y.ratio, cycleCostINR, effFX, dueDate, status: apStatus, invoices: apInvs, vendorPaid: y.vendorPaid, product: c.product, bd });
+                let apInvs = __msCycleApList(y, c, yIdx);   // 8FH.2 — as the Payables register reads it (a bill needs a date; the local path carried)
+                // 8FH.2 — a bill with a payment date is settled, as on the Payables register (this said RECEIVED beside the payment date)
+                const _datedAp = apInvs.filter(i => i && (i.date || i.payDate)); const allPaid = _datedAp.length > 0 && _datedAp.every(i => i.payDate);   // (review R15)
+                let apStatus = (y.vendorPaid || allPaid) ? 'SETTLED' : (apInvs.some(i => i.date) ? 'INVOICED' : 'PENDING');
+                apRecords.push({ globalIdx, yIdx, cycle: y.cycle || yIdx + 1, cycleCostUSD: baseCost * y.ratio, cycleCostINR, effFX, dueDate, status: apStatus, invoices: apInvs, vendorPaid: !!(y.vendorPaid || allPaid), product: c.product, bd, costCurrency: c.costCurrency || 'USD' });
             }
         });
     });
@@ -46824,7 +46985,7 @@ function renderClientSummary() {
     document.getElementById('cs_rev').innerText = fmt(totalRev); document.getElementById('cs_cost').innerText = fmt(totalCost); document.getElementById('cs_margin').innerText = fmt(totalMargin);
     document.getElementById('cs_marginPct').innerText = `${marginPct.toFixed(1)}%`; document.getElementById('cs_marginPct').style.color = marginPct >= 15 ? 'var(--success)' : (marginPct < 10 ? 'var(--danger)' : 'var(--warning)');
 
-    const activeContracts = clientContracts.filter(c => c.endDate ? new Date(c.endDate) >= now : true);
+    const activeContracts = clientContracts.filter(c => isContractActive(c));   // 8FH.2
     document.getElementById('cs_activeContracts').innerText = activeContracts.length; document.getElementById('cs_licenses').innerText = clientContracts.reduce((s, c) => s + (parseInt(c.licenses) || 0), 0).toLocaleString();
     document.getElementById('cs_avgFx').innerText = avgFX > 0 ? avgFX.toFixed(2) : '—';
     const fxPlEl = document.getElementById('cs_fxPl'); if (fxPlEl) { fxPlEl.innerText = fmt(Math.abs(totalFxPl)); fxPlEl.style.color = totalFxPl >= 0 ? 'var(--success)' : 'var(--danger)'; }
@@ -46848,7 +47009,7 @@ function renderClientSummary() {
         const productMap = {};
         clientContracts.forEach(c => {
             if (!productMap[c.product]) {
-                const isActive = c.endDate ? new Date(c.endDate) >= now : true; let annualRev = 0, annualCost = 0;
+                const isActive = isContractActive(c); let annualRev = 0, annualCost = 0;   // 8FH.2
                 if (c.billingYears) { c.billingYears.forEach((y, yIdx) => { const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0; const baseCost2 = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0; const effFX2 = getEffectiveFX(c, y, yIdx); annualRev += baseSell * y.ratio; annualCost += baseCost2 * y.ratio * effFX2; }); }
                 const term = c.term || 12; productMap[c.product] = { licenses: parseInt(c.licenses) || 0, annualRev: annualRev, annualCost: annualCost, status: isActive }; // 8W — drop × (12/term) extrapolation; values are now contract totals (margin % is invariant either way). Keys kept as-is to minimize diff.
             } else productMap[c.product].licenses += parseInt(c.licenses) || 0;
@@ -46916,12 +47077,12 @@ function renderClientSummary() {
     const csApStatusBody = document.getElementById('csApStatusBody');
     if (csApStatusBody) {
         const filteredAP = activeRange ? apRecords.filter(r => isInRange(r.bd, activeRange)) : apRecords;
-        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;">$${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${r.effFX ? r.effFX.toFixed(2) : '—'}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
+        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;">${(r.costCurrency || 'USD') === 'INR' ? '₹' : '$'}${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${(r.costCurrency || 'USD') === 'INR' ? '—' : (r.effFX ? r.effFX.toFixed(2) : '—')}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
     }
 
     const csRenewalTimeline = document.getElementById('csRenewalTimeline');
     if (csRenewalTimeline) {
-        const renewals = clientContracts.filter(c => c.endDate).map((c, i) => { const endD = new Date(c.endDate); const daysLeft = Math.floor((endD - now) / (1000 * 60 * 60 * 24)); return { product: c.product, endDate: endD, daysLeft, idx: contracts.indexOf(c) }; }).sort((a, b) => a.endDate - b.endDate);
+        const renewals = clientContracts.filter(c => c.endDate).map((c, i) => { const endD = __msLocalDate(c.endDate) || new Date(c.endDate); const daysLeft = __msDaysBetween(now, endD); return { product: c.product, endDate: endD, daysLeft, idx: contracts.indexOf(c) }; }).sort((a, b) => a.endDate - b.endDate);
         if (renewals.length === 0) csRenewalTimeline.innerHTML = '<div style="color:var(--text-dim); text-align:center; padding:20px; font-style:italic;">No renewal data available.</div>';
         else csRenewalTimeline.innerHTML = renewals.map(r => { const isExpired = r.daysLeft < 0; const isUrgent = !isExpired && r.daysLeft <= 30; const isWarning = !isExpired && !isUrgent && r.daysLeft <= 90; const dotColor = isExpired ? 'var(--text-dim)' : isUrgent ? 'var(--danger)' : isWarning ? 'var(--warning)' : 'var(--success)'; const badge = isExpired ? '<span class="badge pending">Expired</span>' : isUrgent ? `<span class="badge warn">Renew in ${r.daysLeft}d</span>` : isWarning ? `<span class="badge pending">${r.daysLeft}d left</span>` : `<span class="badge ok">${r.daysLeft}d left</span>`; return `<div class="timeline-item" onclick="jumpToContract(${r.idx})" style="cursor:pointer;"><div class="timeline-dot" style="background:${dotColor};"></div><div class="timeline-content"><div class="timeline-title">${r.product}</div><div class="timeline-detail">Expires ${formatDateReadable(r.endDate)} &nbsp; ${badge}</div></div></div>`; }).join('');
     }
@@ -46931,7 +47092,7 @@ function renderClientSummary() {
         const risks = []; const opportunities = [];
         if (marginPct < 10) risks.push({ icon: 'triangle-exclamation', color: 'var(--danger)', text: `Critical: Margin is ${marginPct.toFixed(1)}% — below 10% threshold.` }); else if (marginPct < 15) risks.push({ icon: 'exclamation-circle', color: 'var(--warning)', text: `Caution: Margin at ${marginPct.toFixed(1)}%.` });
         if (clientDso > 60) risks.push({ icon: 'clock', color: 'var(--danger)', text: `High DSO: Avg collection takes ${clientDso} days.` }); else if (clientDso > 30) risks.push({ icon: 'clock', color: 'var(--warning)', text: `Moderate DSO: ${clientDso} days average collection.` });
-        const urgentRenewals = clientContracts.filter(c => { if (!c.endDate) return false; const d = Math.floor((new Date(c.endDate) - now) / (1000 * 60 * 60 * 24)); return d >= 0 && d <= 60; });
+        const urgentRenewals = clientContracts.filter(c => { if (!c.endDate) return false; const d = __msDaysBetween(now, c.endDate); return d !== null && d >= 0 && d <= 60; });   // 8FH.2 — calendar days (review R3)
         if (urgentRenewals.length > 0) risks.push({ icon: 'calendar-times', color: 'var(--warning)', text: `${urgentRenewals.length} contract(s) expiring within 60 days.` });
         if (totalFxPl < 0) risks.push({ icon: 'dollar-sign', color: 'var(--danger)', text: `FX Headwind: ₹${Math.abs(totalFxPl).toLocaleString('en-IN', {maximumFractionDigits:0})} extra cost due to depreciation.` });
         if (marginPct >= 20) opportunities.push({ icon: 'trending-up', color: 'var(--success)', text: `Strong ${marginPct.toFixed(1)}% margin — ideal candidate for upsell.` });
@@ -46949,7 +47110,7 @@ function renderClientSummary() {
     const csContractBody = document.getElementById('csContractBody');
     if (csContractBody) {
         csContractBody.innerHTML = clientContracts.map((c, i) => {
-            const globalIdx = contracts.indexOf(c); const isActive = c.endDate ? new Date(c.endDate) >= now : true; let annualRev = 0, annualCost = 0, months = 0;
+            const globalIdx = contracts.indexOf(c); const isActive = isContractActive(c); let annualRev = 0, annualCost = 0, months = 0;   // 8FH.2
             // Bug fix #36 — Compute FX Impact and FX Impact % per contract for the
             // two new columns. Mirrors the per-cycle calculation from the Detailed
             // Financial Performance table (line ~13013): fxImpact = baseInrCost − cycleCost,
@@ -46973,7 +47134,7 @@ function renderClientSummary() {
     if (marginPct < 10) healthScore -= 30; else if (marginPct < 15) healthScore -= 15;
     if (clientDso > 60) healthScore -= 25; else if (clientDso > 30) healthScore -= 10;
     if (arRecords.some(r => r.daysOverdue > 30 && !r.paid)) healthScore -= 20;
-    if (clientContracts.some(c => c.endDate && new Date(c.endDate) < now) && activeContracts.length === 0) healthScore -= 15;
+    if (clientContracts.some(c => !isContractActive(c)) && activeContracts.length === 0) healthScore -= 15;   // 8FH.2 (review R3)
     healthScore = Math.max(0, Math.min(100, healthScore));
 
     const healthEl = document.getElementById('csHealthScore'); const healthRing = document.getElementById('csHealthRing'); const healthLabel = document.getElementById('csHealthLabel');
@@ -49765,7 +49926,7 @@ var MS_EXP_GROUPS = [
     { id: 'other', label: 'Not expenses', hint: 'Own transfers, card bills, GST paid, partners, car loan principal, deposits' }
 ];
 var MS_EXP_ACCTS = [
-    { id: 'HDFC_BANK', label: 'HDFC Bank' }, { id: 'ICICI_BANK', label: 'ICICI Bank' },
+    { id: 'HDFC_BANK', label: 'HDFC Bank' }, { id: 'HDFC_OD', label: 'HDFC Bank OD' }, { id: 'ICICI_BANK', label: 'ICICI Bank' },   // 8FH.2 — HDFC OD (the engine writes it; the page showed the raw id and could not filter on it)
     { id: 'YES_CURRENT', label: 'YES Bank Current' }, { id: 'YES_OD', label: 'YES Bank OD' },
     { id: 'AMEX_CARD', label: 'AMEX card' }, { id: 'HDFC_CARD', label: 'HDFC card' },
     { id: 'CASH', label: 'Cash' }, { id: 'PERSONAL', label: 'Paid personally' }
@@ -49832,7 +49993,7 @@ function __msExpLegacyHead(id, remark) {
     return id;
 }
 function __msExpHeadLabel(id) { var h = __msExpHead(id); return h ? h.label : 'Other'; }
-function __msExpAcctLabel(id) { for (var i = 0; i < MS_EXP_ACCTS.length; i++) if (MS_EXP_ACCTS[i].id === id) return MS_EXP_ACCTS[i].label; return String(id || ''); }
+function __msExpAcctLabel(id) { for (var i = 0; i < MS_EXP_ACCTS.length; i++) if (MS_EXP_ACCTS[i].id === id) return MS_EXP_ACCTS[i].label; if (typeof __msBsAcctLabel === 'function') { try { var _l = __msBsAcctLabel(id); if (_l && _l !== String(id || '')) return _l; } catch (e) {} } return String(id || ''); }   // 8FH.2 — an account the statements page knows gets its name
 // The head a line counts under: yours (moved), else your rule for its remark, else the CA pack's.
 function __msExpEffHead(ln) {
     if (ln.o && __msExpHead(ln.o)) return ln.o;
@@ -50663,7 +50824,7 @@ function __msExpLines(fy) {
     return st.lines.filter(function (ln) {
         if (ui.acct !== 'ALL' && ln.a !== ui.acct) return false;
         if (!q) return true;
-        if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
+        if (/^\d+(\.\d+)?$/.test(qn) && (Math.abs(Number(ln.m) - parseFloat(qn)) < 0.005 || String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;   // 8FH.2 — "14,160.00" finds 14160
         var hay = [ln.r, ln.t, ln.n, __msExpHeadLabel(__msExpEffHead(ln)), __msExpAcctLabel(ln.a), __msExpBills(ln).map(function (b) { return b.vendor; }).join(' '), ln.x ? ln.x.party : '', __msExpPartText(ln)].join(' ').toLowerCase();
         return hay.indexOf(q) !== -1;
     });
@@ -52157,7 +52318,7 @@ function __msExpPickerDraw() {
         if (ln.s === 'manual' || ln.dc !== 'D') return false;
         if (months && months.indexOf(ln.d.slice(0, 7)) === -1 && months.indexOf(ln.f || '') === -1) return false;
         if (!q) return true;
-        if (/^\d+(\.\d+)?$/.test(qn) && (String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;
+        if (/^\d+(\.\d+)?$/.test(qn) && (Math.abs(Number(ln.m) - parseFloat(qn)) < 0.005 || String(ln.m).indexOf(qn) === 0 || String(Math.round(ln.m)) === qn)) return true;   // 8FH.2 — "14,160.00" finds 14160
         return (ln.t + ' ' + (ln.r || '') + ' ' + __msExpAcctLabel(ln.a)).toLowerCase().indexOf(q) !== -1;
     });
     rows.sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : (b.m - a.m); });
@@ -54929,6 +55090,7 @@ function __msExpTdsInApp(fy) {
     if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (k) { if (k && k.id) names[k.id] = k.name || k.displayName || ''; });
     if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) {
         if (!p || p.tdsAmount === null || p.tdsAmount === undefined || p.tdsAmount === '') return;
+        if (p.status !== 'Paid') return;   // 8FH.2 — TDS is deducted at payment; a Pending payment has deposited nothing yet
         var d = String(p.paidDate || p.invoiceDate || '');
         add(d.slice(0, 7), Number(p.tdsAmount) || 0, names[p.consultantId] || 'consultant');
     });
@@ -55037,7 +55199,7 @@ function __msExpTaxHtml(fy) {
     all.forEach(function (c) { if (!c.read) return; var ym = __msExpChRow(c), col = __msExpChCol(c); if (!ym || !col) return; if (!rows[ym]) rows[ym] = {}; (rows[ym][col] = rows[ym][col] || []).push(c); });
     var tot = {}, extras = 0;
     MS_EXP_CH_COLS.forEach(function (col) { tot[col.id] = 0; });
-    all.forEach(function (c) { var col = __msExpChCol(c); if (col && c.total) tot[col] += c.total; extras += (c.amounts.interest || 0) + (c.amounts.penalty || 0) + (c.amounts.fee || 0); });
+    all.forEach(function (c) { var col = __msExpChCol(c); if (col && c.total && c.read && __msExpChRow(c)) tot[col] += c.total; extras += (c.amounts.interest || 0) + (c.amounts.penalty || 0) + (c.amounts.fee || 0); });   // 8FH.2 — the Year row sums the month rows (a challan listed as not placed in a month is not in it)
     html += '<div class="table-scroll-wrap"><table id="msExpTaxTable" style="font-size:12px;"><thead><tr><th style="white-space:nowrap;">Month</th>'
         + MS_EXP_CH_COLS.map(function (col) { return '<th>' + __msExpEsc(col.label) + (col.sub ? '<div style="font-size:10px; font-weight:400; color:var(--text-dim);">' + __msExpEsc(col.sub) + '</div>' : '') + '</th>'; }).join('') + '</tr></thead><tbody>';
     var yms = [];
