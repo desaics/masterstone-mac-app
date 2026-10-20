@@ -6813,6 +6813,9 @@ function _writeLocalPathBack(f, newPath) {
     }
 }
 
+// 8FI — the Files page (main block) writes links through the same function
+window.__msWriteLocalPathBack = _writeLocalPathBack;
+
 window.__msSetMissingLocalFile = async function (idx) {
     var f = (window.__msMissingLocalFiles || [])[idx];
     if (!f) return;
@@ -7569,6 +7572,8 @@ window.__msRenderMissingOneDriveLinks = function () {
        Document Pack as .zip with an INDEX.txt checklist. -->
   <div class="nav-item" title="Document Export" onclick="showTab('docExportTab')"><i class="fas fa-box-archive"></i> Document Export</div>
   <!-- 8FD — Import from the Masters: what the engine read from Files/Masters, the PDFs and the bank lines, proposed for the app. -->
+  <!-- 8FI — Files: the app's records against the Files folders (the engine's list of every document file). -->
+  <div class="nav-item" title="Files" onclick="showTab('filesTab')"><i class="fas fa-folder-tree"></i> Files</div>
   <div class="nav-item" title="Import" onclick="showTab('importTab')"><i class="fas fa-file-import"></i> Import</div>
 
   <div class="nav-section-header">Admin</div>
@@ -11445,7 +11450,7 @@ window.__msRenderMissingOneDriveLinks = function () {
         <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open" style="color:var(--warning);"></i> Missing Local Files <span style="font-size:12px; font-weight:400; color:var(--text-dim);">· all clients</span></h3>
         <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingLocalFiles()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
       </div>
-      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has a reference or link but no local file attached yet. Click <strong>Set local file</strong> to point it at the file on disk — it saves straight to that record, so you don't have to open each contract.</div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has a reference or link but no local file attached yet. Click <strong>Set local file</strong> to point it at the file on disk — it saves straight to that record, so you don't have to open each contract. <a href="javascript:void(0)" onclick="showTab('filesTab'); return false;" style="color:var(--accent-cyan);"><i class="fas fa-folder-tree"></i> Tools › Files</a> sets every record against the engine's list of the Files folders and links what matches in one go.</div>
       <div id="missingLocalFilesBody"></div>
     </div>
     <div class="card" style="margin-bottom:20px;">
@@ -11641,6 +11646,11 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div id="importTab" class="hidden">
   <div id="msImpRoot"></div>
 </div><!-- end #importTab -->
+
+<!-- 8FI — Files: the records against the Files folders (drawn by renderFilesPage) -->
+<div id="filesTab" class="hidden">
+  <div id="msFilRoot"></div>
+</div><!-- end #filesTab -->
 
 <!-- ============================================================================
      8YZ — CONSULTANT PAYMENT FORM (full-page tab, mirrors Invoice form pattern)
@@ -14027,7 +14037,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FH.3-2026-10-20";   // 8FH.3 — the build the schema meta and the System Controls page name (was a stale April stamp)
+const MASTERSTONE_APP_BUILD = "8FI-2026-10-20";   // 8FI — the build the schema meta and the System Controls page name
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -20368,7 +20378,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab,#importTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab,#importTab,#filesTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -20586,6 +20596,10 @@ function showTab(tab) {
     // Phase 8FD — Import from the Masters: draw the page; read the engine's list (again after two minutes or on Refresh).
     if (tab === 'importTab') {
         try { __msImpOnTab(); } catch (e) { console.warn('Import tab error:', e); }
+    }
+    // 8FI — Files: draw the page; read the engine's list (again after two minutes, on Refresh, or while it is missing).
+    if (tab === 'filesTab') {
+        try { __msFilOnTab(); } catch (e) { console.warn('Files tab error:', e); }
     }
 
     // Phase 8EH — show/hide the "invoice draft in progress" pill.
@@ -52833,6 +52847,590 @@ function exportRemittancesExcel() {
     __msRmtToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Remittances exported — <strong>' + __msRmtEsc(fname) + '</strong>', 4000);
 }
 // =================== /Phase 8FC — Remittances abroad on the Payables page ===================
+
+// =================== Phase 8FI — Files: the records against the Files folders (Tools › Files) (20 Oct 2026) ===================
+// ============================================================================
+// 8FI — Tools › Files: the app's records against the Files folders (Oct 2026)
+// ============================================================================
+// The CA-pack engine lists every document file under Files/ (names, sizes, dates — no file is opened) in
+// _engine/app_files/index.json (app_files.py, run with every CA pack or on its own). This page reads that list and
+// sets it against the records that should have a file: the contracts' internal POs, OEM quotes, client POs, sales
+// ledger rows and OEM bills; the proposals; the purchase orders; the invoices; the consultant invoices. For each
+// record it finds the file it is linked to (and whether that file is still where the record says), the file in the
+// folder its number matches, or nothing at all — and "Link" writes the matched path onto the record, exactly as the
+// Document Export's "Missing Local Files" card does by hand (8DV's _writeLocalPathBack). Nothing is copied, moved or
+// renamed; nothing is written anywhere but the record.
+var MS_FIL_APP_DIR = '/_engine/app_files';
+var MS_FIL_FRESH_MS = 2 * 60 * 1000;
+var MS_FIL_FOLDERS = ['Client POs', 'Internal POs', 'OEM Quotes', 'Purchase Invoices', 'Sales Invoices', 'Proposals'];           // the folders the records cover
+var MS_FIL_ENGINE_FOLDERS = ['Payments', 'FIRC & e-BRC', 'Expenses', 'TDS & GST Challans', 'Bank Statements', 'Masters'];      // the engine ties these itself
+var MS_FIL_BUCKET = { contract: 'ms_pro_v210', proposal: 'ms_proposals_v1', po: 'ms_purchase_orders_v1', invoice: 'ms_invoices_v1', conpay: 'ms_consultant_payments_v1' };   // the store each kind saves to
+var MS_FIL_HOW = { number: 'by its number', token: 'by a short number in the name', serial: 'by the serial and the date', name: 'by the file name' };
+var __msFil = { idx: null, reading: false, again: false, at: 0, error: '', missing: false, root: '', filesRoot: '', rev: 0, plan: null, planRev: -1, planSig: '', retries: 0, exists: {}, checking: {},
+                ui: { open: { none: true, found: true, stale: true, choose: true, linked: false, unclaimed: false, drafts: false }, folder: 'ALL', q: '', qt: null }, busy: false, attHooked: false };
+
+function __msFilTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
+function __msFilTabOpen() { var tab = document.getElementById('filesTab'); return !!(tab && !tab.classList.contains('hidden')); }
+function __msFilLog(level, msg, data) { try { if (typeof diag === 'function') diag(level, 'Files: ' + msg, data || {}); } catch (e) {} }
+function __msFilEsc(s) { return (typeof pEsc === 'function') ? pEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function __msFilToast(html, ms) { try { if (typeof showProspectToast === 'function') showProspectToast(html, ms || 4000); } catch (e) {} }
+function __msFilNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+function __msFilAbs(rel) { var root = __msFil.filesRoot || ''; return root ? root + '/' + String(rel || '').replace(/^\/+/, '') : ''; }
+// review R7 — the Files root compared case-insensitively and in one Unicode form (macOS paths; a picker's NFD)
+function __msFilKey(p) { try { return String(p || '').normalize('NFC').toLowerCase(); } catch (e) { return String(p || '').toLowerCase(); } }
+function __msFilRel(abs) { var root = __msFil.filesRoot || ''; abs = String(abs || '').trim(); if (!root || __msFilKey(abs).indexOf(__msFilKey(root) + '/') !== 0) return null; return abs.slice(root.length + 1); }
+function __msFilAgo(iso) { return (typeof __msExpAgo === 'function') ? __msExpAgo(iso) : String(iso || ''); }
+function __msFilDate(iso) { return (iso && typeof formatDateReadable === 'function') ? formatDateReadable(iso) : String(iso || ''); }
+
+// ---- the engine's list ------------------------------------------------------------------------
+function __msFilFileOk(f) {
+    if (!f || typeof f !== 'object' || typeof f.path !== 'string' || !f.path || f.path.charAt(0) === '/' || /(^|\/)\.\.(\/|$)/.test(f.path)) return false;
+    if (typeof f.folder !== 'string' || typeof f.name !== 'string' || !f.name) return false;
+    if (typeof f.norm !== 'string' || !Array.isArray(f.toks) || !Array.isArray(f.dates)) return false;
+    return true;
+}
+function __msFilIndexOk(d) {
+    if (!d || typeof d !== 'object' || d.kind !== 'masterstone-files-index' || d.format !== 1 || !Array.isArray(d.files) || typeof d.root !== 'string') return null;
+    var dropped = 0;
+    var files = d.files.filter(function (f) { var o = __msFilFileOk(f); if (!o) dropped++; return o; }).map(function (f) {
+        return { path: f.path, folder: f.folder, fy: String(f.fy || ''), sub: String(f.sub || ''), name: f.name, ext: String(f.ext || ''), size: Number(f.size) || 0, mtime: Number(f.mtime) || 0,
+                 norm: f.norm, toks: f.toks.map(String), dates: f.dates.map(String) };
+    });
+    return { kind: d.kind, format: d.format, sig: String(d.sig || ''), made: String(d.made || ''), scanned: String(d.scanned || ''), root: d.root.replace(/\/+$/, ''),
+             folders: (d.folders && typeof d.folders === 'object') ? d.folders : {}, files: files, skipped: Array.isArray(d.skipped) ? d.skipped : [], stats: d.stats || {}, dropped: dropped };
+}
+async function __msFilRead(force) {
+    if (__msFil.reading) { __msFil.again = __msFil.again || !!force; return; }
+    if (!force && __msFil.at && Date.now() - __msFil.at < MS_FIL_FRESH_MS) return;
+    var t = __msFilTauri();
+    if (!t || typeof __msExpCaPackPath !== 'function' || typeof __msExpReadJson !== 'function') {
+        __msFil.idx = null; __msFil.error = ''; __msFil.missing = true; __msFil.at = Date.now();
+        __msFilRefreshIfOpen();
+        return;
+    }
+    __msFil.reading = true;
+    __msFilRefreshIfOpen();
+    try {
+        var root = await __msExpCaPackPath();
+        __msFil.root = root || '';
+        var fr = String(root || '').replace(/\/+$/, '').replace(/\/[^\/]+$/, '');
+        if (fr !== __msFil.filesRoot) { __msFil.filesRoot = fr; __msFil.plan = null; }
+        if (!root) { __msFil.error = 'The app could not work out where your CA Pack folder is.'; __msFil.missing = false; return; }
+        var r = await __msExpReadJson(root + MS_FIL_APP_DIR + '/index.json');
+        if (!r.ok) {
+            if (r.missing && typeof __msExp !== 'undefined' && __msExp && __msExp.state !== 'ready' && __msFil.retries < 3) {
+                __msFil.retries++;
+                setTimeout(function () { __msFil.at = 0; if (__msFilTabOpen()) __msFilRead(false); }, 3000);
+            }
+            if (r.missing) { if (!__msFil.idx) __msFil.missing = true; __msFil.error = __msFil.idx ? 'The engine\'s list is no longer at ' + root + MS_FIL_APP_DIR + ' — what was read before is shown.' : ''; }
+            else { __msFil.missing = false; __msFil.error = 'The engine\'s list ' + r.error + '.' + (__msFil.idx ? ' What was read before is shown.' : ''); }
+            return;
+        }
+        var idx = __msFilIndexOk(r.data);
+        if (!idx) { __msFil.missing = false; __msFil.error = 'The engine\'s list is not in the expected shape.' + (__msFil.idx ? ' What was read before is shown.' : ''); return; }
+        var changed = !__msFil.idx || __msFil.idx.sig !== idx.sig;
+        __msFil.idx = idx; __msFil.error = ''; __msFil.missing = false;
+        if (changed) { __msFil.rev++; __msFil.plan = null; }
+        __msFilLog('INFO', changed ? 'the list was read' : 'the list was read again (unchanged)', { files: idx.files.length, made: idx.made, scanned: idx.scanned, dropped: idx.dropped });
+    } catch (e) {
+        __msFil.error = 'The engine\'s list could not be read (' + String((e && e.message) || e) + ').';
+        __msFilLog('WARN', 'the list could not be read', { error: __msFil.error });
+    } finally {
+        __msFil.reading = false;
+        __msFil.at = Date.now();
+        var again = __msFil.again;
+        __msFil.again = false;
+        __msFilRefreshIfOpen();
+        if (again) __msFilRead(true);
+    }
+}
+function __msFilRefreshIfOpen() { if (!__msFilTabOpen()) return; try { renderFilesPage(); } catch (e) { __msFilLog('WARN', 'redraw failed', { error: String((e && e.message) || e) }); } }
+// Called by showTab: draw, read the list (again after two minutes, on Refresh, or on every visit while it is missing).
+function __msFilOnTab() {
+    __msFilStyles();
+    __msFil.plan = null;
+    if (!__msFil.reading && (__msFil.missing || !__msFil.at || Date.now() - __msFil.at >= MS_FIL_FRESH_MS)) __msFilRead(!!__msFil.missing);
+    renderFilesPage();
+}
+
+// ---- the records that should have a file --------------------------------------------------------
+// review BUG-2 — a record with a number, a path OR a link is in (8DV's rule): a linked client PO with no number was
+// reported as a file no record claims, and its path was never checked.
+function __msFilRecords() {
+    var out = [];
+    var has = function (v) { return !!(v && String(v).trim()); };
+    var any = function () { for (var i = 0; i < arguments.length; i++) if (has(arguments[i])) return true; return false; };
+    var attOk = function (type, id, attId) {
+        if (!attId || !id || typeof getAttachmentsFor !== 'function') return false;
+        var atts = getAttachmentsFor(type, String(id)) || [];
+        return atts.some(function (a) { return a && a.id === attId && a.dataUrl; });
+    };
+    var anyAtt = function (type, id, pred) {       // review P2 — proposals and purchase orders have their own upload zones
+        if (!id || typeof getAttachmentsFor !== 'function') return false;
+        return (getAttachmentsFor(type, String(id)) || []).some(function (a) { return a && a.dataUrl && (!pred || pred(a)); });
+    };
+    var crmNos = {};   // the numbers that have an invoice record that is a document (not a Draft — review N10)
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (inv) { if (inv && has(inv.invoiceNumber) && inv.status !== 'Draft') crmNos[__msFilNorm(inv.invoiceNumber)] = 1; });
+    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) contracts.forEach(function (c, cIdx) {
+        if (!c) return;
+        var client = c.client || '(unnamed)', product = c.product || '';
+        if (any(c.internalPO, c.internalPOLocalPath, c.internalPOLink)) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'internalPOLocalPath', docType: 'Internal PO', folder: 'Internal POs', ref: c.internalPO || '', path: c.internalPOLocalPath || '', link: c.internalPOLink || '',
+            uploaded: attOk('internalpo', 'c' + cIdx + '_internalpo', c.internalPOUploadAttId), date: c.start || '', client: client, context: product });
+        if (any(c.oemQuote, c.oemQuoteLocalPath, c.oemQuoteLink)) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'oemQuoteLocalPath', docType: 'OEM quote', folder: 'OEM Quotes', ref: c.oemQuote || '', path: c.oemQuoteLocalPath || '', link: c.oemQuoteLink || '',
+            uploaded: false, date: c.start || '', client: client, context: product });
+        if (Array.isArray(c.clientPOs) && c.clientPOs.length) {
+            c.clientPOs.forEach(function (po, i) {
+                if (po && any(po.poNo, po.localPath, po.poLink)) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOs[].localPath', arrIdx: i, docType: 'Client PO', folder: 'Client POs', ref: po.poNo || '', path: po.localPath || '', link: po.poLink || '',
+                    uploaded: attOk('clientpo', po.cpoId, po.uploadAttId), date: po.poDate || c.start || '', client: client, context: product });
+            });
+        } else if (any(c.clientPO, c.clientPOLocalPath, c.clientPOLink)) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOLocalPath', docType: 'Client PO', folder: 'Client POs', ref: c.clientPO || '', path: c.clientPOLocalPath || '', link: c.clientPOLink || '',
+            uploaded: false, date: c.start || '', client: client, context: product });
+        (Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (by, yi) {
+            if (!by) return;
+            var cyc = product + ' · ' + (by.fy || ('Cycle ' + (yi + 1)));
+            var ars = (Array.isArray(by.arInvoices) && by.arInvoices.length) ? by.arInvoices : null;
+            if (ars) ars.forEach(function (ar, i) {
+                if (!ar || !any(ar.invNo, ar.localPath, ar.link) || (has(ar.invNo) && crmNos[__msFilNorm(ar.invNo)])) return;      // a number with an invoice record: the record is the document's home
+                out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].arInvoices[].localPath', cycleIdx: yi, arrIdx: i, docType: 'Sales invoice (ledger)', folder: 'Sales Invoices', ref: ar.invNo || '', path: ar.localPath || '', link: ar.link || '',
+                    uploaded: false, date: ar.date || by.actualInvoiceDate || '', client: client, context: cyc });
+            });
+            else if (any(by.clientInvoiceNo, by.clientInvoiceLocalPath, by.clientInvoiceLink) && !(has(by.clientInvoiceNo) && crmNos[__msFilNorm(by.clientInvoiceNo)])) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].clientInvoiceLocalPath', cycleIdx: yi, docType: 'Sales invoice (ledger)', folder: 'Sales Invoices', ref: by.clientInvoiceNo || '', path: by.clientInvoiceLocalPath || '', link: by.clientInvoiceLink || '',
+                uploaded: false, date: by.actualInvoiceDate || by.billDate || '', client: client, context: cyc });
+            var aps = (Array.isArray(by.apInvoices) && by.apInvoices.length) ? by.apInvoices : null;
+            if (aps) aps.forEach(function (ap, i) {
+                if (!ap || !any(ap.invNo, ap.localPath, ap.link)) return;
+                out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].apInvoices[].localPath', cycleIdx: yi, arrIdx: i, docType: 'OEM bill', folder: 'Purchase Invoices', ref: ap.invNo || '', path: ap.localPath || '', link: ap.link || '',
+                    uploaded: attOk('apinvoice', ap.apId, ap.uploadAttId), date: ap.date || '', client: client, context: cyc });
+            });
+            else if (any(by.oemInvoiceNo, by.oemInvoiceLocalPath, by.oemInvoiceLink)) out.push({ kind: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].oemInvoiceLocalPath', cycleIdx: yi, docType: 'OEM bill', folder: 'Purchase Invoices', ref: by.oemInvoiceNo || '', path: by.oemInvoiceLocalPath || '', link: by.oemInvoiceLink || '',
+                uploaded: false, date: by.oemInvoiceDate || by.billDate || '', client: client, context: cyc });
+        });
+    });
+    if (typeof proposals !== 'undefined' && Array.isArray(proposals)) proposals.forEach(function (p) {
+        if (!p || !any(p.proposalNumber, p.externalLinkLocalPath, p.externalLink)) return;
+        out.push({ kind: 'proposal', entityId: p.id, fieldDescriptor: 'externalLinkLocalPath', docType: 'Proposal', folder: 'Proposals', ref: p.proposalNumber || '', path: p.externalLinkLocalPath || '', link: p.externalLink || '',
+            uploaded: anyAtt('proposal', p.id), date: p.issueDate || String(p.createdAt || '').slice(0, 10), client: p.clientName || '', context: p.subject || '', status: p.status || '', draft: p.status === 'Draft' });
+    });
+    if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) purchaseOrders.forEach(function (po) {
+        if (!po || !any(po.poNumber, po.externalLinkLocalPath, po.externalLink)) return;
+        out.push({ kind: 'po', entityId: po.id, fieldDescriptor: 'externalLinkLocalPath', docType: 'Purchase order', folder: 'Internal POs', ref: po.poNumber || '', path: po.externalLinkLocalPath || '', link: po.externalLink || '',
+            uploaded: anyAtt('po', po.id), date: po.issueDate || po.poDate || String(po.createdAt || '').slice(0, 10), client: po.clientName || po.oemName || '', context: po.subject || po.oemName || '', status: po.status || '', draft: po.status === 'Draft' });
+    });
+    if (typeof invoices !== 'undefined' && Array.isArray(invoices)) invoices.forEach(function (inv) {
+        if (!inv || !any(inv.invoiceNumber, inv.localPdfPath)) return;
+        out.push({ kind: 'invoice', entityId: inv.id, fieldDescriptor: 'localPdfPath', docType: 'Invoice', folder: 'Sales Invoices', ref: inv.invoiceNumber || '', path: inv.localPdfPath || '', link: '',
+            uploaded: attOk('invoice', inv.id, inv.signedPdfAttachmentId), date: inv.invoiceDate || '', client: inv.clientName || '', context: inv.subject || '', status: inv.status || '', draft: inv.status === 'Draft' });
+    });
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) {
+        var cons = {};
+        if (typeof consultants !== 'undefined' && Array.isArray(consultants)) consultants.forEach(function (c) { if (c && c.id) cons[c.id] = c; });
+        consultantPayments.forEach(function (cp) {
+            if (!cp || !any(cp.invoiceNumber, cp.localPath, cp.link)) return;
+            var con = cons[cp.consultantId] || {};
+            var name = con.name || con.company || '';
+            // review P2 — the payment's upload zones hold the invoice ("Invoice …") and other papers; only the invoice counts
+            out.push({ kind: 'conpay', entityId: cp.id, fieldDescriptor: 'localPath', docType: 'Consultant invoice', folder: 'Purchase Invoices', ref: cp.invoiceNumber || '', path: cp.localPath || '', link: cp.link || '',
+                uploaded: anyAtt('consultant_payment', cp.id, function (a) { return /^invoice/i.test(String(a.description || '')); }), date: cp.invoiceDate || '', client: name, context: cp.period || cp.description || '', hint: name });
+        });
+    }
+    return out;
+}
+
+// ---- matching a record to the folder's files -------------------------------------------------------
+// In order, stopping at the first rule that finds anything (review R1): the whole number inside the file name
+// ("Q-244243", "29000509", "MS-PROP-2627061003", "C0001"), then a long number of it alone ("MS-INV-262706005" ↔
+// "Tax Invoice_JKCEMENTS_262706005.pdf"; a run that reads as a date — 202405, 141025 — is never a key); a short
+// number as an exact token of the name; a serial with the record's date ("01/26-27/MS" dated 8 May 2026 ↔
+// "Vikas_STS_01_08_05_2026.pdf" — only for a number that starts with its serial, never for "21-22/WD104"); for a stale
+// path, the same file name elsewhere in the folder (a name with a number or a date in it). The tokens of a file's own
+// date never count as a serial (review BUG-1: 21-22/WD104 was matched to WD103's file by "21", its day). Several
+// candidates: the record's date, then the consultant's name, narrow them. Each match says how it was made (`how`).
+function __msFilDateRun(k) {                       // 202405 (yyyymm) or 141025 / 311225 (ddmmyy): a date, not a number
+    if (k.length !== 6) return false;
+    var y = +k.slice(0, 4), m1 = +k.slice(4, 6), d = +k.slice(0, 2), m2 = +k.slice(2, 4);
+    return (y >= 1990 && y <= 2099 && m1 >= 1 && m1 <= 12) || (d >= 1 && d <= 31 && m2 >= 1 && m2 <= 12);
+}
+function __msFilStemToks(f) {                      // the name's tokens without the tokens of its own dates
+    if (f._stoks) return f._stoks;
+    var t = f.toks.slice();
+    f.dates.forEach(function (iso) {
+        var y = iso.slice(0, 4), mo = iso.slice(5, 7), d = iso.slice(8, 10);
+        // each form once ("23" is both d and String(+d)): a serial that equals the day is not eaten twice
+        [y, mo, d, String(+mo), String(+d)].filter(function (x, i, arr) { return arr.indexOf(x) === i; }).forEach(function (x) { var i = t.indexOf(x); if (i !== -1) t.splice(i, 1); });
+    });
+    f._stoks = t;
+    return t;
+}
+function __msFilMatch(rec, pool) {
+    var ref = String(rec.ref || '');
+    var n = __msFilNorm(ref);
+    var how = '', m = [];
+    if (n.length >= 5) {
+        var keys = [n];
+        (ref.match(/\d{6,}/g) || []).forEach(function (k) { if (k !== n && !__msFilDateRun(k)) keys.push(k); });
+        for (var i = 0; i < keys.length && !m.length; i++) { var k = keys[i]; if (k.length >= 5) m = pool.filter(function (f) { return f.norm.indexOf(k) !== -1; }); }
+        if (m.length) how = 'number';
+    }
+    if (!m.length && n.length >= 2 && n.length < 5) { m = pool.filter(function (f) { return __msFilStemToks(f).indexOf(n) !== -1; }); if (m.length) how = 'token'; }
+    if (!m.length && rec.date && /^\s*0*\d{1,4}\s*(\/|-|$)/.test(ref) && !/^\s*\d{2}-\d{2}\//.test(ref)) {
+        var first = (ref.match(/^\s*0*(\d{1,4})/) || [])[1];
+        if (first) { m = pool.filter(function (f) { return f.dates.indexOf(rec.date) !== -1 && __msFilStemToks(f).some(function (t) { return t.replace(/^0+/, '') === first; }); }); if (m.length) how = 'serial'; }
+    }
+    if (!m.length && rec.path) {
+        var base = String(rec.path).split('/').pop();
+        if (/\d{3,}/.test(base)) { var bl = __msFilKey(base); m = pool.filter(function (f) { return __msFilKey(f.name) === bl; }); if (m.length) how = 'name'; }
+    }
+    if (m.length > 1 && rec.date) { var m2 = m.filter(function (f) { return f.dates.indexOf(rec.date) !== -1; }); if (m2.length) m = m2; }
+    if (m.length > 1 && rec.hint) { var h = __msFilNorm(rec.hint).slice(0, 5); var m3 = m.filter(function (f) { return h && f.norm.indexOf(h) !== -1; }); if (m3.length) m = m3; }
+    m.how = how;
+    return m;
+}
+// Every record with its state: linked (the path is in the list) · uploaded (a copy in the app) · found (one file in
+// the folder, not linked) · choose (several) · stale (the path is not in the list; a match may be offered) ·
+// outside (the path is outside the Files folder) · none (nothing anywhere). Rebuilt when the list, the records
+// (rev) or the attachments' load state change (review R2: the plan built before the attachments had loaded called
+// every upload "found").
+function __msFilPlan() {
+    var idx = __msFil.idx;
+    if (!idx) return null;
+    var attState = (window.__msAttLoad && window.__msAttLoad.state) || 'none';
+    var sig = idx.sig + '|' + __msFil.rev + '|' + attState;
+    if (__msFil.plan && __msFil.planSig === sig) return __msFil.plan;
+    if (!__msFil.attHooked && typeof window.__msWhenAttachmentsLoaded === 'function') { __msFil.attHooked = true; window.__msWhenAttachmentsLoaded(function () { __msFil.plan = null; __msFilRefreshIfOpen(); }); }
+    var byPath = {}, pools = {};
+    idx.files.forEach(function (f) { byPath[f.path] = f; (pools[f.folder] = pools[f.folder] || []).push(f); });
+    var recs = __msFilRecords();
+    var claimed = {};
+    recs.forEach(function (r, i) {
+        r.i = i;
+        var pool = pools[r.folder] || [];
+        var rel = __msFilRel(r.path);
+        r.m = __msFilMatch(r, pool);
+        r.how = r.m.how || '';
+        r.sure = r.how === 'number';                      // review BUG-1 (3): only a match by the number goes into Link all
+        if (r.path && rel && byPath[rel]) { r.state = 'linked'; r.file = byPath[rel]; }
+        else if (r.path && !rel) { r.state = r.m.length > 1 ? 'choose' : 'outside'; r.file = null; }
+        else if (r.path) { r.state = r.m.length > 1 ? 'choose' : 'stale'; r.file = null; }
+        else if (r.uploaded) { r.state = 'uploaded'; r.file = r.m.length === 1 ? r.m[0] : null; }
+        else if (r.m.length === 1) { r.state = 'found'; r.file = r.m[0]; }
+        else if (r.m.length > 1) { r.state = 'choose'; r.file = null; }
+        else { r.state = 'none'; r.file = null; }
+        if (r.state === 'linked') claimed[rel] = 1;
+        r.m.forEach(function (f) { claimed[f.path] = 1; });
+    });
+    // review P3 — a Word draft beside its PDF is the same document: claimed when the PDF is
+    MS_FIL_FOLDERS.forEach(function (fo) {
+        (pools[fo] || []).forEach(function (f) {
+            if (!/\.docx?$/i.test(f.name) || claimed[f.path]) return;
+            var pdf = f.path.replace(/\.docx?$/i, '.pdf');
+            if (byPath[pdf] && claimed[pdf]) claimed[f.path] = 1;
+        });
+    });
+    var byState = {}, byFolder = {};
+    recs.forEach(function (r) {
+        var st = r.draft && (r.state === 'none') ? 'draft' : r.state;
+        r.st = st;
+        (byState[st] = byState[st] || []).push(r);
+        var bf = byFolder[r.folder] = byFolder[r.folder] || { none: 0, found: 0, stale: 0, choose: 0, outside: 0, linked: 0, uploaded: 0, draft: 0 };
+        bf[st] = (bf[st] || 0) + 1;
+    });
+    var unclaimed = {};
+    MS_FIL_FOLDERS.forEach(function (fo) { unclaimed[fo] = (pools[fo] || []).filter(function (f) { return !claimed[f.path]; }); });
+    var plan = { recs: recs, byState: byState, byFolder: byFolder, unclaimed: unclaimed, pools: pools, byPath: byPath, attState: attState,
+                 attention: (byState.none || []).length + (byState.found || []).length + (byState.stale || []).length + (byState.choose || []).length + (byState.outside || []).length };
+    __msFil.plan = plan; __msFil.planSig = sig; __msFil.planRev = __msFil.rev;
+    __msFilCheckPaths(plan);
+    return plan;
+}
+// review R5 — a path the list lacks is asked of the Mac once: it may exist (a file added since the pack ran, a folder
+// the engine skips, a type it does not list) or be gone. The answer shows on the row; "Point all" leaves the existing ones.
+function __msFilCheckPaths(plan) {
+    var t = __msFilTauri(); if (!t) return;
+    var todo = (plan.byState.stale || []).concat(plan.byState.outside || [], plan.byState.choose || []).map(function (r) { return r.path; })
+        .filter(function (p) { return p && __msFil.exists[p] === undefined && !__msFil.checking[p]; });
+    if (!todo.length) return;
+    var left = todo.length;
+    todo.forEach(function (p) {
+        __msFil.checking[p] = true;
+        t.invoke('check_file_exists', { path: p }).then(function (r) { __msFil.exists[p] = !!(r && (r === true || r.exists === true)); })
+            .catch(function () { __msFil.exists[p] = null; })
+            .then(function () { delete __msFil.checking[p]; if (--left === 0) __msFilRefreshIfOpen(); });
+    });
+}
+
+// ---- linking ------------------------------------------------------------------------------------
+function __msFilRecord(i) { var P = __msFil.plan; return (P && P.recs[i]) || null; }
+// review P1 — a store the bridge has paused (unreadable or stale at launch) takes the localStorage write and refuses
+// the database write silently: the 8FH.1 gate Import consults is consulted here too, and the save is read back.
+function __msFilWritable(kind) {
+    var key = MS_FIL_BUCKET[kind];
+    if (key && typeof window.__msBucketWritable === 'function' && !window.__msBucketWritable(key)) {
+        throw new Error('the ' + ({ contract: 'contracts', proposal: 'proposals', po: 'purchase orders', invoice: 'invoices', conpay: 'consultant payments' })[kind] + ' store is paused this session (it could not be read at launch) — nothing was changed');
+    }
+}
+function __msFilWrite(r, abs) {
+    __msFilWritable(r.kind);
+    var saved;
+    if (r.kind === 'contract' || r.kind === 'proposal' || r.kind === 'po') {
+        if (typeof window.__msWriteLocalPathBack !== 'function') throw new Error('the link writer is not available');
+        window.__msWriteLocalPathBack({ entityType: r.kind, entityIdx: r.entityIdx, entityId: r.entityId, fieldDescriptor: r.fieldDescriptor, cycleIdx: r.cycleIdx, arrIdx: r.arrIdx }, abs);
+        saved = r.kind === 'contract' ? (typeof persistData === 'function' ? persistData() : undefined) : r.kind === 'proposal' ? (typeof saveProposals === 'function' ? saveProposals() : undefined) : (typeof savePurchaseOrders === 'function' ? savePurchaseOrders() : undefined);
+    } else if (r.kind === 'invoice') {
+        var inv = (typeof invoices !== 'undefined' ? invoices : []).find(function (x) { return x && x.id === r.entityId; });
+        if (!inv) throw new Error('Invoice not found: ' + r.entityId);
+        inv.localPdfPath = abs;
+        saved = (typeof saveInvoices === 'function') ? saveInvoices() : undefined;
+    } else if (r.kind === 'conpay') {
+        var cp = (typeof consultantPayments !== 'undefined' ? consultantPayments : []).find(function (x) { return x && x.id === r.entityId; });
+        if (!cp) throw new Error('Consultant payment not found: ' + r.entityId);
+        cp.localPath = abs;
+        saved = (typeof saveConsultantPayments === 'function') ? saveConsultantPayments() : undefined;
+    } else throw new Error('Unknown record kind: ' + r.kind);
+    if (saved === false) throw new Error('the save was refused (storage full?) — the link is not kept');
+    // read back: the store holds the path
+    var key = MS_FIL_BUCKET[r.kind], stored = '';
+    try { stored = String(localStorage.getItem(key) || ''); } catch (e) { stored = ''; }
+    if (key && stored && stored.indexOf(JSON.stringify(abs).slice(1, -1)) === -1) throw new Error('the save did not take — the link is not in the store');
+}
+function __msFilLinkOne(r, f) {
+    var abs = __msFilAbs(f.path);
+    if (!abs) throw new Error('the Files folder is not known');
+    var before = r.path || '';
+    __msFilWrite(r, abs);
+    __msFilLog('INFO', 'linked a record to its file', { record: r.docType + ' ' + (r.ref || '(no number)'), client: r.client, file: f.path, how: r.how || '', was: before });
+    return abs;
+}
+function __msFilAfterLinks(n, what, touchedContracts) {
+    __msFil.rev++; __msFil.plan = null;
+    renderFilesPage();
+    if (n) __msFilToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> ' + (n === 1 && what ? 'Linked <strong>' + __msFilEsc(what) + '</strong>.' : n + ' record' + (n === 1 ? '' : 's') + ' linked to ' + (n === 1 ? 'its file' : 'their files') + '.'), 4500);
+    if (touchedContracts) { try { if (typeof renderContracts === 'function') renderContracts(); } catch (e) {} }
+}
+function __msFilFail(r, e) {
+    __msFilLog('ERROR', 'link failed', { record: r ? r.docType + ' ' + (r.ref || '(no number)') : '', error: String((e && e.message) || e) });
+    __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Could not link: ' + __msFilEsc(String((e && e.message) || e)), 6000);
+}
+function __msFilLink(i) {
+    var r = __msFilRecord(i); if (!r) return;
+    var f = r.file || (r.m && r.m.length === 1 ? r.m[0] : null);      // a stale path: the one file found
+    if (!f) return;
+    try { __msFilLinkOne(r, f); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract'); }
+    catch (e) { __msFilFail(r, e); }
+}
+function __msFilChoose(i, j) {
+    var r = __msFilRecord(i); if (!r || !r.m || !r.m[j]) return;
+    try { __msFilLinkOne(r, r.m[j]); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract'); }
+    catch (e) { __msFilFail(r, e); }
+}
+// Link every record whose one match was made by its number (review BUG-1: a match by a serial, a short token or the
+// file's name stays a per-row Link, where the name can be seen). `states` is one state or a list (review BUG-3: one
+// question for the stale and the outside paths together). The question lists what will be linked. Nothing is copied
+// or moved. Held while the attached files are still loading (review R2).
+async function __msFilLinkAll(states) {
+    var P = __msFil.plan; if (!P || __msFil.busy) return;
+    states = Array.isArray(states) ? states : [states];
+    if (window.__msAttLoad && window.__msAttLoad.state === 'loading') { __msFilToast('<i class="fas fa-circle-info"></i> The attached files are still loading — try again in a moment.', 4000); return; }
+    var list = [];
+    states.forEach(function (st) { (P.byState[st] || []).forEach(function (r) { if (r.m && r.m.length === 1 && r.sure && __msFilVisible(r) && __msFil.exists[r.path] !== true) list.push(r); }); });
+    if (!list.length) return;
+    var pointing = states.indexOf('found') === -1;
+    var what = (pointing ? 'point ' : 'link ') + list.length + ' record' + (list.length === 1 ? '' : 's') + (pointing ? ' at the file' : ' to the file') + (list.length === 1 ? '' : 's') + ' found in the folders' + (pointing ? ' (the old path' + (list.length === 1 ? '' : 's') + ' will be replaced)' : '');
+    var lines = list.slice(0, 40).map(function (r) { return '• ' + r.docType + ' ' + (r.ref || '(no number)') + (r.client ? ' · ' + r.client : '') + ' → ' + r.m[0].name; });
+    if (list.length > 40) lines.push('… and ' + (list.length - 40) + ' more');
+    var yes = true;
+    if (typeof __msAsk === 'function') yes = await __msAsk('Link what matches?\n\nThis will ' + what + ':\n\n' + lines.join('\n') + '\n\nNothing is copied, moved or renamed; each link is written on the record and noted in the diagnostic log.', { ok: pointing ? 'Point them' : 'Link', cancel: 'Cancel' });
+    if (!yes) return;
+    __msFil.busy = true;
+    var n = 0, errs = [], touched = false;
+    try {
+        list.forEach(function (r) { try { __msFilLinkOne(r, r.m[0]); n++; if (r.kind === 'contract') touched = true; } catch (e) { errs.push(r.docType + ' ' + (r.ref || '(no number)') + ': ' + String((e && e.message) || e)); } });
+    } finally { __msFil.busy = false; }
+    __msFilLog(errs.length ? 'WARN' : 'INFO', 'Link all: done', { states: states, linked: n, failed: errs });
+    __msFilAfterLinks(n, n === 1 ? list[0].docType + ' ' + (list[0].ref || '(no number)') : '', touched);
+    if (errs.length) __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> ' + errs.length + ' could not be linked — see the diagnostic log.', 6000);
+}
+function __msFilOpen(rel) { var abs = __msFilAbs(rel); if (!abs) return; if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(abs); else __msFilToast('<i class="fas fa-circle-info"></i> Files open in the Masterstone app on the Mac.', 3500); }
+function __msFilOpenPath(abs) { if (!abs) return; if (typeof window.__msOpenLocalFile === 'function') window.__msOpenLocalFile(abs); }
+function __msFilOpenFolder(folder) {
+    var abs = __msFilAbs(folder); if (!abs) return;
+    var t = __msFilTauri();
+    if (!t) { __msFilToast('<i class="fas fa-circle-info"></i> The folders open in the Masterstone app on the Mac.', 3500); return; }
+    t.invoke('open_local_file', { path: abs }).then(function (r) { if (!r || !r.ok) __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> ' + __msFilEsc((r && r.error) || 'The folder could not be opened.'), 4500); }).catch(function (e) { __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> ' + __msFilEsc(String((e && e.message) || e)), 4500); });
+}
+function __msFilOpenRec(i) {
+    var r = __msFilRecord(i); if (!r) return;
+    try {
+        if (r.kind === 'contract') { if (typeof __msGoToContractRow === 'function') { showTab('contractsTab'); __msGoToContractRow(r.entityIdx); } else if (typeof jumpToContract === 'function') jumpToContract(r.entityIdx); }
+        else if (r.kind === 'proposal') { showTab('proposalsTab'); if (typeof openProposalDetail === 'function') openProposalDetail(r.entityId); }
+        else if (r.kind === 'po') { showTab('purchaseOrdersTab'); if (typeof openPODetail === 'function') openPODetail(r.entityId); }
+        else if (r.kind === 'invoice') { showTab('invoicesTab'); if (typeof openInvoiceDetail === 'function') openInvoiceDetail(r.entityId); }
+        else if (r.kind === 'conpay') { if (typeof openConsultantPaymentForm === 'function') openConsultantPaymentForm(r.entityId); }
+    } catch (e) { __msFilLog('WARN', 'open record failed', { error: String((e && e.message) || e) }); }
+}
+
+// ---- the page -----------------------------------------------------------------------------------
+function __msFilStyles() {
+    if (typeof __msImpStyles === 'function') __msImpStyles();
+    if (document.getElementById('msFilStyle')) return;
+    var st = document.createElement('style'); st.id = 'msFilStyle';
+    st.textContent = '.ms-fil-chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.ms-fil-chips .arap-subtab{padding:6px 12px}.ms-fil-chips .arap-subtab .n{font-size:10.5px;color:var(--text-dim);margin-left:4px}'
+        + '.ms-fil-file{font-family:var(--font-mono,monospace);font-size:11.5px;word-break:break-all}a.ms-fil-file{color:var(--accent-cyan);text-decoration:none}a.ms-fil-file:hover{text-decoration:underline}.ms-fil-path{font-family:var(--font-mono,monospace);font-size:10.5px;color:var(--text-dim);word-break:break-all}a.ms-fil-path:hover{text-decoration:underline}'
+        + '.ms-fil-st{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:999px;font-weight:600;white-space:nowrap}.ms-fil-st.none{background:rgba(220,60,60,.12);color:var(--danger)}.ms-fil-st.found{background:rgba(0,200,100,.12);color:var(--success)}'
+        + '.ms-fil-st.stale,.ms-fil-st.outside{background:rgba(255,180,0,.14);color:var(--warning)}.ms-fil-st.choose{background:rgba(120,120,255,.12);color:var(--purple)}.ms-fil-st.linked,.ms-fil-st.uploaded{background:var(--accent-tint-low,rgba(0,200,200,.12));color:var(--accent-cyan)}'
+        + '.ms-fil-pick{margin:0;padding:0;list-style:none}.ms-fil-pick li{display:flex;gap:8px;align-items:center;margin:2px 0}.ms-fil-pick li button{white-space:nowrap;flex:none}.ms-fil-strip .v.warn{color:var(--warning)}.ms-fil-strip .v.bad{color:var(--danger)}'
+        + '.ms-fil-eng{display:flex;gap:14px;flex-wrap:wrap;font-size:12px}.ms-fil-eng span{color:var(--text-dim)}';
+    document.head.appendChild(st);
+}
+function __msFilSetFolder(f) { __msFil.ui.folder = f; renderFilesPage(); }
+function __msFilSearch(q) { __msFil.ui.q = String(q || ''); clearTimeout(__msFil.ui.qt); __msFil.ui.qt = setTimeout(function () { renderFilesPage(); var el = document.getElementById('msFilQ'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 120); }
+function __msFilToggle(sec) { __msFil.ui.open[sec] = !__msFil.ui.open[sec]; renderFilesPage(); }
+function __msFilVisible(r) {
+    if (__msFil.ui.folder !== 'ALL' && r.folder !== __msFil.ui.folder) return false;
+    var q = __msFil.ui.q.trim().toLowerCase();
+    if (!q) return true;
+    var hay = [r.ref, r.client, r.context, r.docType, r.path, r.file && r.file.name].concat((r.m || []).map(function (f) { return f.name; })).join(' ').toLowerCase();
+    return hay.indexOf(q) !== -1;
+}
+function __msFilSecHead(key, title, n, extra) {
+    var open = !!__msFil.ui.open[key];
+    return '<h3 tabindex="0" role="button" aria-expanded="' + (open ? 'true' : 'false') + '" onclick="__msFilToggle(\'' + key + '\')" onkeydown="if (event.key === \'Enter\' || event.key === \' \') { event.preventDefault(); __msFilToggle(\'' + key + '\'); }"><i class="fas fa-chevron-' + (open ? 'down' : 'right') + '" style="font-size:11px; color:var(--text-dim);"></i> ' + title + ' <span class="n">' + n + '</span>' + (extra || '') + '</h3>';
+}
+function __msFilRecCell(r) {
+    var bits = [r.client, r.context, r.date ? __msFilDate(r.date) : '', r.status].filter(function (x) { return x && String(x).trim(); }).map(__msFilEsc);
+    return '<div><b>' + __msFilEsc(r.docType) + '</b> <span class="ms-fil-file">' + (r.ref ? __msFilEsc(r.ref) : '<span class="ms-imp-note">(no number)</span>') + '</span>' + (r.uploaded && r.state !== 'uploaded' ? ' <span class="ms-fil-st uploaded" title="A copy is uploaded in the app">also uploaded</span>' : '') + '</div>'
+        + '<div class="ms-imp-note">' + bits.join(' · ') + '</div>';
+}
+function __msFilFileCell(f, how) {
+    if (!f) return '<span class="ms-imp-note">—</span>';
+    return '<a href="javascript:void(0)" class="ms-fil-file" data-path="' + __msFilEsc(f.path) + '" onclick="__msFilOpen(this.dataset.path); return false;" title="Open ' + __msFilEsc(f.path) + '"><i class="fas fa-paperclip" style="font-size:10px;"></i> ' + __msFilEsc(f.name) + '</a>'
+        + '<div class="ms-imp-note">' + __msFilEsc(f.folder + (f.fy ? ' › ' + f.fy : '') + (f.sub ? ' › ' + f.sub : '')) + (how && how !== 'number' ? ' · <span class="ms-imp-warn">matched ' + __msFilEsc(MS_FIL_HOW[how] || how) + ' — look before linking</span>' : '') + '</div>';
+}
+// review R5 — what the Mac said about a path the list lacks
+function __msFilPathNote(r) {
+    if (r.state === 'outside') return 'outside the Files folder';
+    var ex = __msFil.exists[r.path];
+    if (ex === true) return 'exists, but is not in the engine\'s list (made ' + __msFilEsc(__msFilAgo(__msFil.idx.made)) + ') — a file added since, or a folder or type the list leaves out; run the CA pack or app_files.py, then Refresh';
+    if (ex === false) return 'not found — moved, renamed or gone';
+    return 'not in the engine\'s list' + (ex === undefined && __msFil.checking[r.path] ? ' — checking…' : '');
+}
+function __msFilRows(list, cols) {
+    return list.map(function (r) {
+        return '<tr>' + cols.map(function (c) { return '<td class="wrap">' + c(r) + '</td>'; }).join('') + '</tr>';
+    }).join('');
+}
+function __msFilTable(heads, rows) {
+    return '<div style="overflow-x:auto;"><table class="ms-imp-table"><thead><tr>' + heads.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+function __msFilOpenBtn(r) { return '<button class="btn btn-ghost btn-sm" onclick="__msFilOpenRec(' + r.i + ')" title="Open the record"><i class="fas fa-arrow-up-right-from-square"></i></button>'; }
+function __msFilFolderBtn(r) { return '<button class="btn btn-ghost btn-sm" data-folder="' + __msFilEsc(r.folder) + '" onclick="__msFilOpenFolder(this.dataset.folder)" title="Open the ' + __msFilEsc(r.folder) + ' folder in Finder"><i class="fas fa-folder-open"></i></button>'; }
+function renderFilesPage() {
+    var root = document.getElementById('msFilRoot');
+    if (!root) return;
+    __msFilStyles();
+    var S = __msFil;
+    var head = '<div class="dashboard-sticky-top"><div class="page-header" style="margin-bottom:0;">'
+        + '<h2 style="margin:0;"><i class="fas fa-folder-tree" style="color:var(--accent-cyan); margin-right:8px;"></i> Files</h2>'
+        + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + '<button class="btn btn-ghost" id="msFilRefreshBtn" onclick="__msFilRead(true)"' + (S.reading ? ' disabled' : '') + ' title="Read the engine\'s list again (after a CA pack run, or after running app_files.py)"><i class="fas fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
+        + '</div></div></div>'
+        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack lists every document file under <b>Files</b> (names and dates only). This page sets that list against the app\'s records — internal and client POs, OEM quotes and bills, sales invoices, proposals, purchase orders, consultant invoices — and shows what has no file, what is in the folder but not linked, and which files no record claims. <b>Link</b> writes the file\'s path on the record; nothing is copied, moved or renamed.</p>';
+    if (S.missing && !S.idx) {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (__msFilTauri() ? '<i class="fas fa-circle-info"></i> The engine\'s list is not there yet. Run the CA pack once (it writes <code>_engine/app_files/index.json</code>) — or <code>python3 app_files.py "&lt;CA Pack&gt;"</code> on its own — then click Refresh.' + (S.error ? ' ' + __msFilEsc(S.error) : '') : '<i class="fas fa-circle-info"></i> The Files folders live on the Mac; open this page in the Masterstone app.') + '</div>';
+        return;
+    }
+    if (!S.idx) {
+        root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (S.error ? '<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> ' + __msFilEsc(S.error) : '<i class="fas fa-spinner fa-spin"></i> Reading the engine\'s list…') + '</div>';
+        return;
+    }
+    var P = __msFilPlan();
+    if (!P) { root.innerHTML = head; return; }
+    var idx = S.idx;
+    var html = head;
+    // the status line
+    var parts = [idx.files.length + ' files in ' + Object.keys(idx.folders).filter(function (k) { return idx.folders[k] && idx.folders[k].present; }).length + ' folders'];
+    if (idx.made) parts.push('the list last changed ' + __msFilEsc(__msFilAgo(idx.made)) + (idx.scanned && idx.scanned !== idx.made ? ', checked ' + __msFilEsc(__msFilAgo(idx.scanned)) : ''));
+    if (idx.root && S.filesRoot && __msFilKey(idx.root) !== __msFilKey(S.filesRoot)) parts.push('<span class="ms-imp-warn" title="' + __msFilEsc(idx.root) + '">the list was made on another folder than this Mac\'s Files — the paths here are this Mac\'s</span>');
+    if (S.error) parts.push('<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msFilEsc(S.error) + '</span>');
+    if (idx.dropped) parts.push('<span class="ms-imp-warn">' + idx.dropped + ' odd entr' + (idx.dropped === 1 ? 'y' : 'ies') + ' in the list dropped</span>');
+    html += '<div id="msFilStatus" class="ms-imp-note" style="margin-bottom:4px;">' + parts.join(' · ') + '</div>';
+    // the strip
+    var cnt = function (k) { return (P.byState[k] || []).length; };
+    var cell = function (k, v, cls, sub) { return '<div><div class="k">' + k + '</div><div class="v' + (cls ? ' ' + cls : '') + '">' + v + '</div>' + (sub ? '<div class="ms-imp-note">' + sub + '</div>' : '') + '</div>'; };
+    var uncl = MS_FIL_FOLDERS.reduce(function (n, fo) { return n + P.unclaimed[fo].length; }, 0);
+    html += '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div class="ms-imp-strip ms-fil-strip" id="msFilStrip">'
+        + cell('No file anywhere', cnt('none'), cnt('none') ? 'bad' : '', 'no upload, no path, nothing in the folder')
+        + cell('In the folder, not linked', cnt('found'), cnt('found') ? 'warn' : '', 'one file matches')
+        + cell('Path not in Files', cnt('stale') + cnt('outside'), (cnt('stale') + cnt('outside')) ? 'warn' : '', 'the record points elsewhere')
+        + cell('Choose between files', cnt('choose'), cnt('choose') ? 'warn' : '', 'two or more match')
+        + cell('Linked', cnt('linked') + cnt('uploaded'), '', cnt('uploaded') + ' as an upload in the app')
+        + cell('Files no record claims', uncl, '', 'in the six folders the records cover')
+        + '</div></div>';
+    // folder chips
+    html += '<div class="ms-fil-chips" id="msFilChips">' + ['ALL'].concat(MS_FIL_FOLDERS).map(function (fo) {
+        var bf = fo === 'ALL' ? null : (P.byFolder[fo] || {});
+        var n = fo === 'ALL' ? P.attention : ((bf.none || 0) + (bf.found || 0) + (bf.stale || 0) + (bf.choose || 0) + (bf.outside || 0));
+        return '<div class="arap-subtab' + (fo === S.ui.folder ? ' active' : '') + '" data-folder="' + __msFilEsc(fo) + '" onclick="__msFilSetFolder(this.dataset.folder)">' + (fo === 'ALL' ? 'All folders' : __msFilEsc(fo)) + '<span class="n">' + n + '</span></div>';
+    }).join('') + '</div>';
+    html += '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
+        + '<input type="text" id="msFilQ" value="' + __msFilEsc(S.ui.q) + '" placeholder="Search number, client, file name…" style="flex:1; min-width:220px; max-width:380px;" oninput="__msFilSearch(this.value)">'
+        + '<span class="ms-imp-note">A record is matched to a file by the number in the file\'s name (or a serial and the date). Open a file with its paperclip; open the folder in Finder with the folder button.</span></div></div>';
+    var vis = function (k) { return (P.byState[k] || []).filter(__msFilVisible); };
+    // 1. nothing anywhere
+    var L = vis('none');
+    html += '<div class="ms-imp-sec" id="msFilSecNone">' + __msFilSecHead('none', 'No file anywhere', L.length)
+        + (S.ui.open.none ? (L.length ? __msFilTable(['Folder', 'Record', 'Link / note', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return /^https?:\/\//i.test(r.link || '') ? '<a href="' + __msFilEsc(r.link) + '" class="ms-imp-pin" target="_blank" rel="noopener"><i class="fas fa-link"></i> OneDrive link</a>' : '<span class="ms-imp-note">no link either</span>'; }, function (r) { return '<span style="white-space:nowrap;">' + __msFilOpenBtn(r) + ' ' + __msFilFolderBtn(r) + '</span>'; }]))
+            : '<div class="ms-imp-note" style="padding:8px 0;">Every record has a file, an upload or a match in its folder.</div>') : '') + '</div>';
+    // 2. found, not linked
+    L = vis('found');
+    var sureN = L.filter(function (r) { return r.sure; }).length;
+    html += '<div class="ms-imp-sec" id="msFilSecFound">' + __msFilSecHead('found', 'In the folder, not linked', L.length, sureN ? ' <button class="btn btn-primary btn-sm" style="margin-left:8px;" onclick="event.stopPropagation(); __msFilLinkAll(\'found\')" title="Links the records whose file carries their number; the others are linked one by one"><i class="fas fa-link"></i> Link all ' + sureN + (sureN < L.length ? ' by number' : '') + '</button>' : '')
+        + (S.ui.open.found ? (L.length ? __msFilTable(['Folder', 'Record', 'File in the folder', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return __msFilFileCell(r.file, r.how); }, function (r) { return '<span style="white-space:nowrap;"><button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')"><i class="fas fa-link"></i> Link</button> ' + __msFilOpenBtn(r) + '</span>'; }]))
+            : '<div class="ms-imp-note" style="padding:8px 0;">Nothing waiting to be linked.</div>') : '') + '</div>';
+    // 3. stale / outside
+    L = vis('stale').concat(vis('outside'));
+    var pointN = L.filter(function (r) { return r.m.length === 1 && r.sure && S.exists[r.path] !== true; }).length;
+    html += '<div class="ms-imp-sec" id="msFilSecStale">' + __msFilSecHead('stale', 'Path not in Files', L.length, pointN ? ' <button class="btn btn-ghost btn-sm" style="margin-left:8px;" onclick="event.stopPropagation(); __msFilLinkAll([\'stale\', \'outside\'])" title="Re-points the records whose found file carries their number and whose old path is gone"><i class="fas fa-link"></i> Point all ' + pointN + ' at the files found</button>' : '')
+        + (S.ui.open.stale ? (L.length ? __msFilTable(['Folder', 'Record', 'The record points at', 'In the folder', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
+            function (r) { return '<a href="javascript:void(0)" class="ms-fil-path" data-path="' + __msFilEsc(r.path) + '" onclick="__msFilOpenPath(this.dataset.path); return false;">' + __msFilEsc(r.path) + '</a><div class="ms-imp-note">' + __msFilPathNote(r) + '</div>'; },
+            function (r) { return r.m.length === 1 ? __msFilFileCell(r.m[0], r.how) : '<span class="ms-imp-note">' + (r.ref ? 'nothing matches the number' : 'no number to match on') + '</span>'; },
+            function (r) { return '<span style="white-space:nowrap;">' + (r.m.length === 1 ? '<button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')" title="Point the record at this file"><i class="fas fa-link"></i> Point here</button> ' : '') + __msFilOpenBtn(r) + '</span>'; }]))
+            : '<div class="ms-imp-note" style="padding:8px 0;">Every linked record points at a file in Files.</div>') : '') + '</div>';
+    // 4. choose
+    L = vis('choose');
+    html += '<div class="ms-imp-sec" id="msFilSecChoose">' + __msFilSecHead('choose', 'Choose between files', L.length)
+        + (S.ui.open.choose ? (L.length ? __msFilTable(['Folder', 'Record', 'Files that match', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
+            function (r) { return '<ul class="ms-fil-pick">' + r.m.map(function (f, j) { return '<li><button class="btn btn-ghost btn-sm" onclick="__msFilChoose(' + r.i + ', ' + j + ')" title="Link this file"><i class="fas fa-link"></i> This one</button><div style="flex:1; min-width:0;">' + __msFilFileCell(f, r.how) + '</div></li>'; }).join('') + '</ul>' + (r.path ? '<div class="ms-imp-note">the record points at ' + __msFilEsc(r.path) + ' — ' + __msFilPathNote(r) + '</div>' : ''); },
+            __msFilOpenBtn]))
+            : '<div class="ms-imp-note" style="padding:8px 0;">Nothing to choose.</div>') : '') + '</div>';
+    // 5. linked
+    L = vis('linked').concat(vis('uploaded'));
+    html += '<div class="ms-imp-sec" id="msFilSecLinked">' + __msFilSecHead('linked', 'Linked', L.length)
+        + (S.ui.open.linked ? (L.length ? __msFilTable(['Folder', 'Record', 'File', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
+            function (r) { return r.state === 'uploaded' ? '<span class="ms-fil-st uploaded">uploaded in the app</span>' + (r.file ? '<div class="ms-imp-note">also in the folder: ' + __msFilEsc(r.file.name) + '</div>' : '') : __msFilFileCell(r.file); }, __msFilOpenBtn]))
+            : '<div class="ms-imp-note" style="padding:8px 0;">—</div>') : '') + '</div>';
+    // 6. unclaimed files
+    var unclVis = MS_FIL_FOLDERS.filter(function (fo) { return S.ui.folder === 'ALL' || S.ui.folder === fo; });
+    var unclN = unclVis.reduce(function (n, fo) { return n + P.unclaimed[fo].length; }, 0);
+    html += '<div class="ms-imp-sec" id="msFilSecUnclaimed">' + __msFilSecHead('unclaimed', 'Files no record claims', unclN)
+        + (S.ui.open.unclaimed ? unclVis.map(function (fo) {
+            var files = P.unclaimed[fo].filter(function (f) { var q = S.ui.q.trim().toLowerCase(); return !q || f.path.toLowerCase().indexOf(q) !== -1; });
+            if (!files.length) return '';
+            var byFy = {}; files.forEach(function (f) { (byFy[f.fy || '(no FY folder)'] = byFy[f.fy || '(no FY folder)'] || []).push(f); });
+            return '<div class="ms-imp-card"><div class="ms-imp-kv"><b>' + __msFilEsc(fo) + '</b> · ' + files.length + ' file' + (files.length === 1 ? '' : 's') + ' no record claims <button class="btn btn-ghost btn-sm" data-folder="' + __msFilEsc(fo) + '" onclick="__msFilOpenFolder(this.dataset.folder)" title="Open the folder in Finder"><i class="fas fa-folder-open"></i></button></div>'
+                + Object.keys(byFy).sort().reverse().map(function (fy) { return '<div class="ms-imp-note" style="margin-top:6px;"><b>' + __msFilEsc(fy) + '</b></div><div>' + byFy[fy].map(function (f) { return '<div><a href="javascript:void(0)" class="ms-fil-file" data-path="' + __msFilEsc(f.path) + '" onclick="__msFilOpen(this.dataset.path); return false;"><i class="fas fa-paperclip" style="font-size:10px;"></i> ' + __msFilEsc(f.name) + '</a></div>'; }).join('') + '</div>'; }).join('')
+                + '</div>';
+        }).join('') + (unclN ? '' : '<div class="ms-imp-note" style="padding:8px 0;">Every file in these folders is claimed by a record.</div>') : '') + '</div>';
+    // 7. drafts
+    L = vis('draft');
+    html += '<div class="ms-imp-sec" id="msFilSecDrafts">' + __msFilSecHead('drafts', 'Drafts — no document expected yet', L.length)
+        + (S.ui.open.drafts ? (L.length ? __msFilTable(['Folder', 'Record', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, __msFilOpenBtn])) : '<div class="ms-imp-note" style="padding:8px 0;">—</div>') : '') + '</div>';
+    // 8. the engine's own folders
+    html += '<div class="card" style="padding:10px 16px; margin-top:6px;"><div class="ms-imp-kv" style="margin-bottom:4px;"><b>The folders the CA pack ties itself</b></div><div class="ms-fil-eng">'
+        + MS_FIL_ENGINE_FOLDERS.map(function (fo) { var f = idx.folders[fo]; return '<span><b style="color:var(--text-main);">' + __msFilEsc(fo) + '</b> ' + (f && f.present ? f.files + ' file' + (f.files === 1 ? '' : 's') : 'not there') + '</span>'; }).join('')
+        + '</div><div class="ms-imp-note" style="margin-top:6px;">Bills and tax challans are placed on their statement lines on the <a href="javascript:void(0)" onclick="showTab(\'expensesTab\'); return false;">Expenses</a> page (the Bills panel lists what is not placed); the remittances and FIRCs on the <a href="javascript:void(0)" onclick="showTab(\'purchaseInvoicesTab\'); return false;">Payables</a> page; the Masters\' rows and PDFs on <a href="javascript:void(0)" onclick="showTab(\'importTab\'); return false;">Import</a>.</div></div>';
+    root.innerHTML = html;
+}
+// =================== /Phase 8FI — Files ===================
 
 // =================== Phase 8FD — Import from the Masters (Tools › Import) (10 Oct 2026) ===================
 // The engine (CA Pack/_engine/app_import.py, run by the CA pack) reads every Sales and Payments row of
