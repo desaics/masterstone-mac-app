@@ -6680,98 +6680,10 @@ body.tauri-runtime:not(.mac-app-mode) .ms-cutover-banner { top: 0; }
         return list;
     }
 
-// ============ Phase 8DV — Central "Missing Local Files" manager ============
-// Lists every document across ALL clients that has a reference number or a
-// link but no local file path yet, and lets you point each at a file on disk
-// from one place (Document Export → Client Document Pack). Mirrors the broken-
-// link sweeper's traversal + write-back, but inverted (missing instead of set).
-
-window.__msMissingLocalFiles = [];
-
-function _collectMissingLocalPaths() {
-    var list = [];
-    var has = function (ref, link) { return !!((ref && String(ref).trim()) || (link && String(link).trim())); };
-    var hasLink = function (link) { return !!(link && String(link).trim()); };
-    var noPath = function (p) { return !(p && String(p).trim()); };
-
-    // ----- Contracts -----
-    if (typeof contracts !== 'undefined' && Array.isArray(contracts)) {
-        contracts.forEach(function (c, cIdx) {
-            if (!c) return;
-            var client = c.client || '(unnamed)';
-            var product = c.product || '';
-            var ctxBase = client + (product ? ' · ' + product : '');
-
-            if (has(c.internalPO, c.internalPOLink) && noPath(c.internalPOLocalPath)) {
-                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'internalPOLocalPath',
-                    client: client, docType: 'Internal PO', context: product, ref: c.internalPO || '', link: c.internalPOLink || '', label: ctxBase + ' · Internal PO' });
-            }
-            if (has(c.oemQuote, c.oemQuoteLink) && noPath(c.oemQuoteLocalPath)) {
-                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'oemQuoteLocalPath',
-                    client: client, docType: 'OEM Quote', context: product, ref: c.oemQuote || '', link: c.oemQuoteLink || '', label: ctxBase + ' · OEM Quote' });
-            }
-            if (Array.isArray(c.clientPOs) && c.clientPOs.length > 0) {
-                c.clientPOs.forEach(function (po, poIdx) {
-                    if (po && has(po.poNo, po.poLink) && noPath(po.localPath)) {
-                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOs[].localPath', arrIdx: poIdx,
-                            client: client, docType: 'Client PO', context: product, ref: po.poNo || '', link: po.poLink || '', label: ctxBase + ' · Client PO ' + (po.poNo || '#' + (poIdx + 1)) });
-                    }
-                });
-            } else if (has(c.clientPO, c.clientPOLink) && noPath(c.clientPOLocalPath)) {
-                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'clientPOLocalPath',
-                    client: client, docType: 'Client PO', context: product, ref: c.clientPO || '', link: c.clientPOLink || '', label: ctxBase + ' · Client PO' });
-            }
-            if (Array.isArray(c.billingYears)) {
-                c.billingYears.forEach(function (by, yIdx) {
-                    if (!by) return;
-                    var fy = by.fy || ('Year ' + (yIdx + 1));
-                    var pfx = (product ? product + ' · ' : '') + fy;
-                    if (Array.isArray(by.arInvoices) && by.arInvoices.length > 0) {
-                        by.arInvoices.forEach(function (inv, arIdx) {
-                            if (inv && has(inv.invNo, inv.link) && noPath(inv.localPath)) {
-                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].arInvoices[].localPath', cycleIdx: yIdx, arrIdx: arIdx,
-                                    client: client, docType: 'Client Invoice', context: pfx, ref: inv.invNo || '', link: inv.link || '', label: ctxBase + ' · ' + fy + ' · Client Inv ' + (inv.invNo || '#' + (arIdx + 1)) });
-                            }
-                        });
-                    } else if (has(by.clientInvoiceNo, by.clientInvoiceLink) && noPath(by.clientInvoiceLocalPath)) {
-                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].clientInvoiceLocalPath', cycleIdx: yIdx,
-                            client: client, docType: 'Client Invoice', context: pfx, ref: by.clientInvoiceNo || '', link: by.clientInvoiceLink || '', label: ctxBase + ' · ' + fy + ' · Client Inv' });
-                    }
-                    if (Array.isArray(by.apInvoices) && by.apInvoices.length > 0) {
-                        by.apInvoices.forEach(function (inv, apIdx) {
-                            if (inv && has(inv.invNo, inv.link) && noPath(inv.localPath)) {
-                                list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].apInvoices[].localPath', cycleIdx: yIdx, arrIdx: apIdx,
-                                    client: client, docType: 'OEM Invoice', context: pfx, ref: inv.invNo || '', link: inv.link || '', label: ctxBase + ' · ' + fy + ' · OEM Inv ' + (inv.invNo || '#' + (apIdx + 1)) });
-                            }
-                        });
-                    } else if (has(by.oemInvoiceNo, by.oemInvoiceLink) && noPath(by.oemInvoiceLocalPath)) {
-                        list.push({ entityType: 'contract', entityIdx: cIdx, fieldDescriptor: 'billingYears[].oemInvoiceLocalPath', cycleIdx: yIdx,
-                            client: client, docType: 'OEM Invoice', context: pfx, ref: by.oemInvoiceNo || '', link: by.oemInvoiceLink || '', label: ctxBase + ' · ' + fy + ' · OEM Inv' });
-                    }
-                });
-            }
-        });
-    }
-    // ----- Proposals (only those that reference an external original) -----
-    if (typeof proposals !== 'undefined' && Array.isArray(proposals)) {
-        proposals.forEach(function (p) {
-            if (p && hasLink(p.externalLink) && noPath(p.externalLinkLocalPath)) {
-                list.push({ entityType: 'proposal', entityId: p.id, fieldDescriptor: 'externalLinkLocalPath',
-                    client: p.clientName || '(no client)', docType: 'Proposal', context: (p.subject || ''), ref: p.proposalNumber || '', link: p.externalLink || '', label: (p.proposalNumber || '(unnumbered)') + ' · ' + (p.clientName || '(no client)') });
-            }
-        });
-    }
-    // ----- Standalone POs -----
-    if (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders)) {
-        purchaseOrders.forEach(function (po) {
-            if (po && hasLink(po.externalLink) && noPath(po.externalLinkLocalPath)) {
-                list.push({ entityType: 'po', entityId: po.id, fieldDescriptor: 'externalLinkLocalPath',
-                    client: po.clientName || po.oemName || '(no context)', docType: 'Purchase Order', context: (po.oemName || ''), ref: po.poNumber || '', link: po.externalLink || '', label: (po.poNumber || '(unnumbered)') + ' · ' + (po.clientName || po.oemName || '') });
-            }
-        });
-    }
-    return list;
-}
+// ============ Phase 8DV — the local-path writer ============
+// 8DV's "Missing Local Files" card (Document Export → Client Document Pack) listed every document with a number or a
+// link but no local path and let a file be picked for it. 8FJ folded that into Tools › Files, which sets the records
+// against the engine's list of the Files folders and links what is sure by itself; the writer stays, for the Files page.
 
 // Write a newly-picked local path back to the correct record + persist.
 // Mirrors the broken-link sweeper's clear() field mapping, but sets instead.
@@ -6815,67 +6727,6 @@ function _writeLocalPathBack(f, newPath) {
 
 // 8FI — the Files page (main block) writes links through the same function
 window.__msWriteLocalPathBack = _writeLocalPathBack;
-
-window.__msSetMissingLocalFile = async function (idx) {
-    var f = (window.__msMissingLocalFiles || [])[idx];
-    if (!f) return;
-    try {
-        var t = getTauri();
-        if (!t || !t.invoke) { showActionToast('Tauri runtime unavailable — needs the Mac app context.', 'error'); return; }
-        var r = await t.invoke('pick_file', { title: 'Select local file for ' + (f.docType || 'document') + (f.ref ? ' ' + f.ref : '') });
-        if (!r || !r.ok || !r.path) { if (r && r.error) showActionToast('Pick file error: ' + r.error, 'error'); return; }
-        _writeLocalPathBack(f, r.path);
-        if (typeof showProspectToast === 'function') showProspectToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Local file set for <strong>' + pEsc(f.docType + (f.ref ? ' ' + f.ref : '')) + '</strong>.', 4500);
-        window.__msRenderMissingLocalFiles();
-        if (typeof renderContracts === 'function') { try { renderContracts(); } catch (e) {} }
-    } catch (e) {
-        showActionToast('Could not set local file: ' + e, 'error');
-    }
-};
-
-window.__msRenderMissingLocalFiles = function () {
-    var host = document.getElementById('missingLocalFilesBody');
-    if (!host) return;
-    var raw = _collectMissingLocalPaths();
-    window.__msMissingLocalFiles = raw;
-    if (!raw.length) {
-        host.innerHTML = '<div style="padding:22px; text-align:center; color:var(--text-dim); font-size:13px;"><i class="fas fa-check-circle" style="color:var(--success); font-size:22px; display:block; margin-bottom:8px;"></i>Every document with a reference or link already has a local file set.</div>';
-        return;
-    }
-    // index-tagged then sorted by client, then doc type
-    var rows = raw.map(function (f, i) { return { f: f, i: i }; });
-    rows.sort(function (a, b) {
-        var ca = (a.f.client || '').toLowerCase(), cb = (b.f.client || '').toLowerCase();
-        if (ca !== cb) return ca < cb ? -1 : 1;
-        return (a.f.docType || '').localeCompare(b.f.docType || '');
-    });
-    var clients = {};
-    raw.forEach(function (f) { clients[f.client || ''] = true; });
-    var nClients = Object.keys(clients).length;
-
-    var trs = rows.map(function (x) {
-        var f = x.f, idx = x.i;
-        var refHtml = f.ref ? '<span style="font-family:monospace; font-size:11.5px;">' + pEsc(f.ref) + '</span>' : '<span style="color:var(--text-dim); font-style:italic; font-size:11px;">(no ref)</span>';
-        var linkIcon = (f.link && String(f.link).trim()) ? ' <i class="fas fa-link" title="Has URL link: ' + pEsc(f.link) + '" style="color:var(--accent-cyan); font-size:10px; margin-left:5px;"></i>' : '';
-        return '<tr style="border-bottom:1px solid var(--glass-border);">'
-            + '<td style="padding:8px 10px; font-size:12px; white-space:nowrap;">' + pEsc(f.client || '—') + '</td>'
-            + '<td style="padding:8px 10px;"><span class="stage-badge" style="font-size:10px; background:var(--accent-tint-low); color:var(--accent-cyan);">' + pEsc(f.docType) + '</span></td>'
-            + '<td style="padding:8px 10px;">' + refHtml + linkIcon + '</td>'
-            + '<td style="padding:8px 10px; font-size:11px; color:var(--text-dim);">' + pEsc(f.context || '') + '</td>'
-            + '<td style="padding:8px 10px; text-align:right; white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="window.__msSetMissingLocalFile(' + idx + ')" title="Browse to the file on disk and link it"><i class="fas fa-folder-open" style="color:var(--accent-cyan);"></i> Set local file</button></td>'
-            + '</tr>';
-    }).join('');
-
-    host.innerHTML = '<div style="font-size:12px; margin-bottom:12px;"><strong style="color:var(--warning);">' + raw.length + '</strong> document' + (raw.length === 1 ? '' : 's') + ' across <strong>' + nClients + '</strong> client' + (nClients === 1 ? '' : 's') + ' have a reference or link but no local file attached.</div>'
-        + '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">'
-        + '<thead><tr style="border-bottom:2px solid var(--glass-border); text-align:left;">'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Client</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Document</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Reference</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Detail</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim); text-align:right;">Action</th>'
-        + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
-};
 
 // ============ Phase 8EG — Central "Missing OneDrive Links" manager ============
 // The inverse of the Missing-Local-Files sweeper: every contract-level document
@@ -6956,6 +6807,8 @@ function _collectMissingOneDriveLinks() {
 // Write a pasted OneDrive link back to the correct record + persist. Mirrors
 // _writeLocalPathBack's field map, but sets the *Link field instead of *LocalPath.
 function _writeOneDriveLinkBack(f, newLink) {
+    // 8FJ (review RISK-9): a paused contracts store refuses the database write silently — refuse here, as every other write does
+    if (typeof window.__msBucketWritable === 'function' && !window.__msBucketWritable('ms_pro_v210')) throw new Error('the contracts store is paused this session (it could not be read at launch) — nothing was changed');
     if (f.entityType === 'contract') {
         var c = (typeof contracts !== 'undefined') ? contracts[f.entityIdx] : null;
         if (!c) throw new Error('Contract not found at index ' + f.entityIdx);
@@ -7042,49 +6895,14 @@ function _msInvoiceLinkageGaps(contractIdx, cycleIdx) {
     return gaps;
 }
 
-function _collectUnlinkedInvoices() {
-    var out = [];
-    if (typeof invoices === 'undefined' || !Array.isArray(invoices)) return out;
-    invoices.forEach(function (inv) {
-        if (!inv || !_msInvoiceNeedsLinkage(inv.status)) return;
-        var gaps = _msInvoiceLinkageGaps(inv.linkedContractIdx, inv.linkedCycleYearIdx);
-        if (gaps.length) out.push({ inv: inv, gaps: gaps });
-    });
-    return out;
-}
+// 8FJ — the main block (the invoice form's save-time warning, the Files page) reaches the two helpers through window
+window.__msInvoiceNeedsLinkage = _msInvoiceNeedsLinkage;
+window.__msInvoiceLinkageGaps = _msInvoiceLinkageGaps;
 
+// 8FJ — the card sits on Tools › Files and is drawn by the Files page (a client with no contract told from a contract
+// whose cycle is free; a one-click tie where the app is sure); its Refresh button still calls this.
 window.__msRenderUnlinkedInvoices = function () {
-    var host = document.getElementById('unlinkedInvoicesBody');
-    if (!host) return;
-    var list = _collectUnlinkedInvoices();
-    if (!list.length) {
-        host.innerHTML = '<div style="padding:18px; text-align:center; color:var(--text-dim); font-size:12.5px;">'
-            + '<i class="fas fa-check-circle" style="color:var(--success); font-size:20px; display:block; margin-bottom:6px;"></i>'
-            + 'Every issued invoice is linked to a contract and a billing cycle.</div>';
-        return;
-    }
-    var trs = list.map(function (x) {
-        var inv = x.inv;
-        return '<tr style="border-bottom:1px solid var(--glass-border);">'
-            + '<td style="padding:8px 10px; font-family:monospace; font-size:11.5px; white-space:nowrap;">' + pEsc(inv.invoiceNumber || '(no number)') + '</td>'
-            + '<td style="padding:8px 10px; font-size:12px;">' + pEsc(inv.clientName || '\u2014') + '</td>'
-            + '<td style="padding:8px 10px; font-size:11.5px; white-space:nowrap;">' + (inv.invoiceDate && typeof formatDateReadable === 'function' ? formatDateReadable(inv.invoiceDate) : pEsc(inv.invoiceDate || '\u2014')) + '</td>'
-            + '<td style="padding:8px 10px;"><span class="stage-badge" style="font-size:10px;">' + pEsc(inv.status || '') + '</span></td>'
-            + '<td style="padding:8px 10px; font-size:11.5px; color:var(--warning);">' + pEsc(x.gaps.join(' + ')) + '</td>'
-            + '<td style="padding:8px 10px; text-align:right; white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="openInvoiceForm(\'' + inv.id + '\')" title="Open this invoice and set its linkage"><i class="fas fa-pen" style="color:var(--accent-cyan);"></i> Fix</button></td>'
-            + '</tr>';
-    }).join('');
-    host.innerHTML = '<div style="font-size:12px; margin-bottom:12px;"><strong style="color:var(--warning);">' + list.length + '</strong> invoice'
-        + (list.length === 1 ? '' : 's') + ' will export without a OneDrive hyperlink, and with BUSINESS HEAD as "SERVICE", until the linkage is set.</div>'
-        + '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">'
-        + '<thead><tr style="border-bottom:2px solid var(--glass-border); text-align:left;">'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Invoice</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Client</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Date</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Status</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim);">Missing</th>'
-        + '<th style="padding:8px 10px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-dim); text-align:right;">Action</th>'
-        + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+    if (typeof window.__msFilRenderTies === 'function') { try { window.__msFilRenderTies(); } catch (e) { console.warn('invoices card:', e); } }
 };
 
 window.__msRenderMissingOneDriveLinks = function () {
@@ -11406,7 +11224,6 @@ window.__msRenderMissingOneDriveLinks = function () {
   <div class="arap-subtab-strip" style="display:flex; gap:6px; border-bottom:1px solid var(--glass-border); margin-bottom:24px; padding-bottom:0;">
     <div id="docExpSubtabRemitBtn" class="arap-subtab active" onclick="showDocExportSubtab('remit')"><i class="fas fa-money-check-dollar" style="color:var(--accent-cyan);"></i> Remittance Bundle</div>
     <div id="docExpSubtabClientBtn" class="arap-subtab" onclick="showDocExportSubtab('client')"><i class="fas fa-user-tag" style="color:var(--purple);"></i> Client Document Pack</div>
-    <div id="docExpSubtabLinksBtn" class="arap-subtab" onclick="showDocExportSubtab('links')"><i class="fas fa-link" style="color:var(--accent-cyan);"></i> Missing Links</div>
   </div>
 
   <!-- ===== Mode A: Remittance Bundle (per contract/deal) ===== -->
@@ -11445,14 +11262,8 @@ window.__msRenderMissingOneDriveLinks = function () {
 
   <!-- ===== Mode B: Client Document Pack ===== -->
   <div id="docExpClientSection" style="display:none;">
-    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--warning);">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open" style="color:var(--warning);"></i> Missing Local Files <span style="font-size:12px; font-weight:400; color:var(--text-dim);">· all clients</span></h3>
-        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingLocalFiles()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
-      </div>
-      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has a reference or link but no local file attached yet. Click <strong>Set local file</strong> to point it at the file on disk — it saves straight to that record, so you don't have to open each contract. <a href="javascript:void(0)" onclick="showTab('filesTab'); return false;" style="color:var(--accent-cyan);"><i class="fas fa-folder-tree"></i> Tools › Files</a> sets every record against the engine's list of the Files folders and links what matches in one go.</div>
-      <div id="missingLocalFilesBody"></div>
-    </div>
+    <!-- 8FJ — the "Missing Local Files" card moved to Tools › Files, which links what is sure by itself -->
+    <div class="card" id="missingLocalFilesPointer" style="margin-bottom:20px; padding:12px 16px; font-size:12.5px; color:var(--text-dim);"><i class="fas fa-folder-tree" style="color:var(--accent-cyan);"></i> Documents with no file on disk are listed — and linked by themselves where the file carries the record's number — on <a href="javascript:void(0)" onclick="showTab('filesTab'); return false;" style="color:var(--accent-cyan);">Tools › Files</a>; the ones left need a look there before a pack is made.</div>
     <div class="card" style="margin-bottom:20px;">
       <h3 style="margin:0 0 14px 0; border:none; padding:0;"><i class="fas fa-user-tag"></i> Pick a client</h3>
       <div style="display:grid; grid-template-columns: 1fr 200px 1fr; gap:14px; align-items:end;">
@@ -11484,29 +11295,6 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div id="docExpClientPreview"></div>
   </div>
 
-  <!-- ===== Missing Links (8EG): paste OneDrive links for docs that have a number but no link ===== -->
-  <div id="docExpLinksSection" style="display:none;">
-    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--accent-cyan);">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-link" style="color:var(--accent-cyan);"></i> Missing OneDrive Links <span style="font-size:12px; font-weight:400; color:var(--text-dim);">\u00b7 all clients</span></h3>
-        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingOneDriveLinks()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
-      </div>
-      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has an invoice / PO / quote number but no OneDrive link yet. Paste the shareable link into a row and click <strong>Save</strong> \u2014 or paste several and click <strong>Save all pasted</strong>. It writes straight to that record, so the CA Export will hyperlink the invoice number the next time you generate it.</div>
-      <div id="missingOneDriveLinksBody"></div>
-    </div>
-
-    <!-- Phase 8EI — invoices whose contract/cycle linkage is incomplete. These
-         export with no hyperlink and the wrong BUSINESS HEAD, so they belong
-         next to the missing-link list rather than being discovered in Excel. -->
-    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--warning);">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-unlink" style="color:var(--warning);"></i> Invoices Not Linked to a Contract <span style="font-size:12px; font-weight:400; color:var(--text-dim);">\u00b7 affects CA Export</span></h3>
-        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderUnlinkedInvoices()" title="Re-scan"><i class="fas fa-sync"></i> Refresh</button>
-      </div>
-      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">The CA Export reads an invoice's OneDrive link from its contract's billing cycle, and takes BUSINESS HEAD from the contract. An issued invoice missing either one exports with a bare invoice number and BUSINESS HEAD as \u201cSERVICE\u201d. Click <strong>Fix</strong> to open the invoice and set its Linked Contract and Billing Cycle.</div>
-      <div id="unlinkedInvoicesBody"></div>
-    </div>
-  </div>
 
 </div>
 <!-- ===================== /Phase 8BV — Document Export ===================== -->
@@ -11650,6 +11438,29 @@ window.__msRenderMissingOneDriveLinks = function () {
 <!-- 8FI — Files: the records against the Files folders (drawn by renderFilesPage) -->
 <div id="filesTab" class="hidden">
   <div id="msFilRoot"></div>
+  <!-- 8FJ — from Document Export's Missing Links tab: the OneDrive links to paste (8EG) and the invoices with no contract (8EI) -->
+  <div id="msFilMore">
+    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--accent-cyan);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-link" style="color:var(--accent-cyan);"></i> Missing OneDrive Links <span style="font-size:12px; font-weight:400; color:var(--text-dim);">· all clients</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderMissingOneDriveLinks()" title="Re-scan all clients"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">Every document across all clients that has an invoice / PO / quote number but no OneDrive link yet. Paste the shareable link into a row and click <strong>Save</strong> — or paste several and click <strong>Save all pasted</strong>. It writes straight to that record, so the CA Export will hyperlink the invoice number the next time you generate it.</div>
+      <div id="missingOneDriveLinksBody"></div>
+    </div>
+
+    <!-- Phase 8EI — invoices whose contract/cycle linkage is incomplete (they export with no hyperlink and BUSINESS HEAD
+         "SERVICE"). 8FJ: drawn by the Files page — a client with no contract in the app told from a contract whose cycle
+         is free, and a one-click tie where the app is sure. -->
+    <div class="card" style="margin-bottom:20px; border-top:3px solid var(--warning);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-unlink" style="color:var(--warning);"></i> Invoices not tied to a contract <span style="font-size:12px; font-weight:400; color:var(--text-dim);">· affects CA Export</span></h3>
+        <button class="btn btn-ghost btn-sm" onclick="window.__msRenderUnlinkedInvoices()" title="Re-scan"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:14px;">The CA Export reads an invoice's OneDrive link from its contract's billing cycle, and takes BUSINESS HEAD from the contract; an issued invoice with neither exports with a bare invoice number and BUSINESS HEAD “SERVICE”. For a client who has a contract in the app, the page says which cycle the invoice belongs to where it can: <strong>Tie</strong> sets the invoice's Linked Contract and Billing Cycle (the sure ones are tied by themselves with the files above); <strong>Open invoice</strong> for the rest. A client with no contract in the app is a service invoice — SERVICE is right for it.</div>
+      <div id="unlinkedInvoicesBody"></div>
+    </div>
+  </div>
 </div><!-- end #filesTab -->
 
 <!-- ============================================================================
@@ -14037,7 +13848,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FI-2026-10-20";   // 8FI — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FJ-2026-10-21";   // 8FJ — the build the schema meta and the System Controls page name
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -33390,10 +33201,12 @@ async function saveInvoiceFromForm() {
     // cancelled invoices are exempt; the warning never blocks a save.
     try {
         const _st8ei = (document.getElementById('invStatus') || {}).value || '';
-        if (_msInvoiceNeedsLinkage(_st8ei)) {
+        // 8FJ — through window: the helpers live in the shim's scope, and the bare names here threw (inside this try) on every save
+        // 8FJ (review RISK-7): a client with no contract in the app gets no question — it is a service invoice, SERVICE is right for it
+        if (typeof window.__msInvoiceNeedsLinkage === 'function' && window.__msInvoiceNeedsLinkage(_st8ei) && (typeof __msFilClientHasContract !== 'function' || __msFilClientHasContract((document.getElementById('invClient') || {}).value))) {
             const _c8ei = (document.getElementById('invLinkedContractIdx') || {}).value || '';
             const _y8ei = (document.getElementById('invLinkedCycleYearIdx') || {}).value || '';
-            const _missing8ei = _msInvoiceLinkageGaps(_c8ei, _y8ei);
+            const _missing8ei = window.__msInvoiceLinkageGaps(_c8ei, _y8ei);
             if (_missing8ei.length) {
                 if (!(await __msAsk('This invoice has no ' + _missing8ei.join(' and ') + '.\n\n'
                     + 'In the CA Export that means no OneDrive hyperlink on the invoice number, '
@@ -48333,17 +48146,7 @@ function showDocExportSubtab(which) {
     if (clientS) clientS.style.display = (which === 'client') ? '' : 'none';
     if (remitB) remitB.classList.toggle('active', which === 'remit');
     if (clientB) clientB.classList.toggle('active', which === 'client');
-    var linksS = document.getElementById('docExpLinksSection');
-    var linksB = document.getElementById('docExpSubtabLinksBtn');
-    if (linksS) linksS.style.display = (which === 'links') ? '' : 'none';
-    if (linksB) linksB.classList.toggle('active', which === 'links');
-    if (which === 'client' && typeof window.__msRenderMissingLocalFiles === 'function') {
-        try { window.__msRenderMissingLocalFiles(); } catch (e) {}
-    }
-    if (which === 'links' && typeof window.__msRenderMissingOneDriveLinks === 'function') {
-        try { window.__msRenderMissingOneDriveLinks(); } catch (e) {}
-        try { if (typeof window.__msRenderUnlinkedInvoices === 'function') window.__msRenderUnlinkedInvoices(); } catch (e) {}
-    }
+    // 8FJ — the "Missing Links" tab and the "Missing Local Files" card moved to Tools › Files
 }
 
 function initDocExportTab() {
@@ -52848,7 +52651,8 @@ function exportRemittancesExcel() {
 }
 // =================== /Phase 8FC — Remittances abroad on the Payables page ===================
 
-// =================== Phase 8FI — Files: the records against the Files folders (Tools › Files) (20 Oct 2026) ===================
+
+// =================== Phase 8FI/8FJ — Files: the records against the Files folders (Tools › Files) (20–21 Oct 2026) ===================
 // ============================================================================
 // 8FI — Tools › Files: the app's records against the Files folders (Oct 2026)
 // ============================================================================
@@ -52860,6 +52664,12 @@ function exportRemittancesExcel() {
 // folder its number matches, or nothing at all — and "Link" writes the matched path onto the record, exactly as the
 // Document Export's "Missing Local Files" card does by hand (8DV's _writeLocalPathBack). Nothing is copied, moved or
 // renamed; nothing is written anywhere but the record.
+// 8FJ (21 Oct 2026) — the one "what is missing" page: the Document Export's "Missing Local Files" card is folded in
+// (an upload's folder copy is linkable; a link on an invoice also fills the ledger row of its contract; "Pick file…"
+// opens the Mac's picker for a file the matching cannot find), its "Missing OneDrive Links" and "Invoices Not Linked
+// to a Contract" cards sit under the sections (the second one now tells a client with no contract from a contract
+// whose cycle is free, and ties an invoice to its cycle), and what is sure is linked by itself at launch and when the
+// page opens — one toast, every write in the diagnostic log, "Undo" on the page, a switch to turn it off.
 var MS_FIL_APP_DIR = '/_engine/app_files';
 var MS_FIL_FRESH_MS = 2 * 60 * 1000;
 var MS_FIL_FOLDERS = ['Client POs', 'Internal POs', 'OEM Quotes', 'Purchase Invoices', 'Sales Invoices', 'Proposals'];           // the folders the records cover
@@ -52867,7 +52677,8 @@ var MS_FIL_ENGINE_FOLDERS = ['Payments', 'FIRC & e-BRC', 'Expenses', 'TDS & GST 
 var MS_FIL_BUCKET = { contract: 'ms_pro_v210', proposal: 'ms_proposals_v1', po: 'ms_purchase_orders_v1', invoice: 'ms_invoices_v1', conpay: 'ms_consultant_payments_v1' };   // the store each kind saves to
 var MS_FIL_HOW = { number: 'by its number', token: 'by a short number in the name', serial: 'by the serial and the date', name: 'by the file name' };
 var __msFil = { idx: null, reading: false, again: false, at: 0, error: '', missing: false, root: '', filesRoot: '', rev: 0, plan: null, planRev: -1, planSig: '', retries: 0, exists: {}, checking: {},
-                ui: { open: { none: true, found: true, stale: true, choose: true, linked: false, unclaimed: false, drafts: false }, folder: 'ALL', q: '', qt: null }, busy: false, attHooked: false };
+                ui: { open: { none: true, found: true, stale: true, choose: true, linked: false, unclaimed: false, drafts: false, nocontract: false }, folder: 'ALL', q: '', qt: null }, busy: false, attHooked: false,
+                auto: { running: false, doneSig: '', last: null, attHooked: false, launching: false, waitTimer: null, rootWarned: '' } };   // 8FJ — automatic linking: the run in progress, the list it last ran on, what it wrote (for Undo)
 
 function __msFilTauri() { return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ? window.__TAURI__.core : null; }
 function __msFilTabOpen() { var tab = document.getElementById('filesTab'); return !!(tab && !tab.classList.contains('hidden')); }
@@ -52942,6 +52753,7 @@ async function __msFilRead(force) {
         __msFil.again = false;
         __msFilRefreshIfOpen();
         if (again) __msFilRead(true);
+        else if (__msFil.idx) __msFilAutoMaybe(__msFil.auto.launching ? 'launch' : 'read');     // 8FJ — a list is in: link what is sure
     }
 }
 function __msFilRefreshIfOpen() { if (!__msFilTabOpen()) return; try { renderFilesPage(); } catch (e) { __msFilLog('WARN', 'redraw failed', { error: String((e && e.message) || e) }); } }
@@ -52951,6 +52763,8 @@ function __msFilOnTab() {
     __msFil.plan = null;
     if (!__msFil.reading && (__msFil.missing || !__msFil.at || Date.now() - __msFil.at >= MS_FIL_FRESH_MS)) __msFilRead(!!__msFil.missing);
     renderFilesPage();
+    __msFilRenderMore();            // 8FJ — the OneDrive links and the invoices with no contract (from Document Export)
+    __msFilAutoMaybe('open');       // 8FJ — link what is sure, by itself (a read in progress calls this when it is done)
 }
 
 // ---- the records that should have a file --------------------------------------------------------
@@ -53147,7 +52961,9 @@ function __msFilPlan() {
 function __msFilCheckPaths(plan) {
     var t = __msFilTauri(); if (!t) return;
     var todo = (plan.byState.stale || []).concat(plan.byState.outside || [], plan.byState.choose || []).map(function (r) { return r.path; })
-        .filter(function (p) { return p && __msFil.exists[p] === undefined && !__msFil.checking[p]; });
+        .concat(__msFilTwinPaths(plan.recs))                                                                                            // review RISK-3
+        .concat((plan.byState.found || []).concat(plan.byState.uploaded || [], plan.byState.stale || [], plan.byState.outside || []).filter(function (r) { return r.m && r.m.length === 1 && r.sure; }).map(function (r) { return __msFilAbs(r.m[0].path); }))   // review RISK-10: the file about to be written
+        .filter(function (p, i, arr) { return p && arr.indexOf(p) === i && __msFil.exists[p] === undefined && !__msFil.checking[p]; });
     if (!todo.length) return;
     var left = todo.length;
     todo.forEach(function (p) {
@@ -53168,9 +52984,9 @@ function __msFilWritable(kind) {
         throw new Error('the ' + ({ contract: 'contracts', proposal: 'proposals', po: 'purchase orders', invoice: 'invoices', conpay: 'consultant payments' })[kind] + ' store is paused this session (it could not be read at launch) — nothing was changed');
     }
 }
-function __msFilWrite(r, abs) {
+function __msFilWrite(r, abs, noTwins) {
     __msFilWritable(r.kind);
-    var saved;
+    var saved, twins = [];
     if (r.kind === 'contract' || r.kind === 'proposal' || r.kind === 'po') {
         if (typeof window.__msWriteLocalPathBack !== 'function') throw new Error('the link writer is not available');
         window.__msWriteLocalPathBack({ entityType: r.kind, entityIdx: r.entityIdx, entityId: r.entityId, fieldDescriptor: r.fieldDescriptor, cycleIdx: r.cycleIdx, arrIdx: r.arrIdx }, abs);
@@ -53191,14 +53007,71 @@ function __msFilWrite(r, abs) {
     var key = MS_FIL_BUCKET[r.kind], stored = '';
     try { stored = String(localStorage.getItem(key) || ''); } catch (e) { stored = ''; }
     if (key && stored && stored.indexOf(JSON.stringify(abs).slice(1, -1)) === -1) throw new Error('the save did not take — the link is not in the store');
+    // 8FJ — the contract's ledger row that carries an invoice's number is the same document: it takes the path too
+    if (r.kind === 'invoice' && abs && !noTwins) twins = __msFilTwinFill(inv.invoiceNumber, abs);
+    return twins;
+}
+// 8FJ — the ledger rows (a cycle's arInvoices[], or the legacy clientInvoiceNo) that carry this number and have no
+// path, or a path the list lacks, take the file's path; a row that already points at a listed file is left alone.
+// review RISK-3: a row whose path is not listed takes the new one only when the Mac said that file is gone (an empty
+// path always does); a path not yet asked about is left alone.
+function __msFilTwinFill(no, abs) {
+    var n = __msFilNorm(no);
+    if (!n || typeof contracts === 'undefined' || !Array.isArray(contracts)) return [];
+    try { __msFilWritable('contract'); } catch (e) { __msFilLog('WARN', 'the ledger row did not take the path: ' + String((e && e.message) || e), { number: no }); return []; }
+    var twins = [];
+    contracts.forEach(function (c, ci) {
+        if (!c || !Array.isArray(c.billingYears)) return;
+        c.billingYears.forEach(function (by, yi) {
+            if (!by) return;
+            if (Array.isArray(by.arInvoices) && by.arInvoices.length) by.arInvoices.forEach(function (ar, ai) {
+                if (ar && __msFilNorm(ar.invNo) === n && (ar.localPath || '') !== abs && __msFilRowFree(ar.localPath)) { twins.push({ ci: ci, yi: yi, ai: ai, client: c.client || '', before: ar.localPath || '' }); ar.localPath = abs; }
+            });
+            else if (__msFilNorm(by.clientInvoiceNo) === n && (by.clientInvoiceLocalPath || '') !== abs && __msFilRowFree(by.clientInvoiceLocalPath)) { twins.push({ ci: ci, yi: yi, ai: -1, client: c.client || '', before: by.clientInvoiceLocalPath || '' }); by.clientInvoiceLocalPath = abs; }
+        });
+    });
+    if (twins.length) {
+        var ok = (typeof persistData === 'function') ? persistData() : undefined;
+        if (ok === false) __msFilLog('WARN', 'the contracts save was refused after a ledger row took the path', { number: no });
+        else __msFilLog('INFO', 'the ledger row took the path too', { number: no, rows: twins.length });
+    }
+    return twins;
+}
+function __msFilPathListed(p) { var rel = __msFilRel(p); return !!(rel && __msFil.idx && __msFil.idx.files.some(function (f) { return f.path === rel; })); }
+function __msFilRowFree(p) { p = String(p || '').trim(); return !p || (!__msFilPathListed(p) && __msFil.exists[p] === false); }
+// the ledger rows that carry an invoice record's number and point at a file the list lacks: asked of the Mac with the stale paths
+function __msFilTwinPaths(recs) {
+    var out = [];
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts)) return out;
+    var nos = {}; recs.forEach(function (r) { if (r.kind === 'invoice' && r.ref && (r.state === 'found' || r.state === 'uploaded' || r.state === 'stale' || r.state === 'outside')) nos[__msFilNorm(r.ref)] = 1; });
+    contracts.forEach(function (c) { (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (by) {
+        if (!by) return;
+        if (Array.isArray(by.arInvoices) && by.arInvoices.length) by.arInvoices.forEach(function (ar) { var p = ar && String(ar.localPath || '').trim(); if (ar && p && nos[__msFilNorm(ar.invNo)] && !__msFilPathListed(p)) out.push(p); });
+        else { var q = String(by.clientInvoiceLocalPath || '').trim(); if (q && nos[__msFilNorm(by.clientInvoiceNo)] && !__msFilPathListed(q)) out.push(q); }
+    }); });
+    return out;
 }
 function __msFilLinkOne(r, f) {
     var abs = __msFilAbs(f.path);
     if (!abs) throw new Error('the Files folder is not known');
     var before = r.path || '';
-    __msFilWrite(r, abs);
-    __msFilLog('INFO', 'linked a record to its file', { record: r.docType + ' ' + (r.ref || '(no number)'), client: r.client, file: f.path, how: r.how || '', was: before });
+    r.twins = __msFilWrite(r, abs);
+    __msFilLog('INFO', 'linked a record to its file', { record: r.docType + ' ' + (r.ref || '(no number)'), client: r.client, file: f.path, how: r.how || '', was: before, ledgerRows: (r.twins || []).length });
     return abs;
+}
+// 8FJ — a file the matching cannot find (or finds twice): the Mac's picker, as the Document Export's "Set local file" did
+async function __msFilPick(i) {
+    var r = __msFilRecord(i); if (!r) return;
+    var t = __msFilTauri();
+    if (!t) { __msFilToast('<i class="fas fa-circle-info"></i> Files are picked in the Masterstone app on the Mac.', 3500); return; }
+    try {
+        var res = await t.invoke('pick_file', { title: 'Select the file for ' + r.docType + (r.ref ? ' ' + r.ref : '') });
+        if (!res || !res.ok || !res.path) { if (res && res.error) __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--warning);"></i> ' + __msFilEsc(res.error), 5000); return; }
+        var before = r.path || '';
+        var twins = __msFilWrite(r, res.path);
+        __msFilLog('INFO', 'linked a record to a picked file', { record: r.docType + ' ' + (r.ref || '(no number)'), client: r.client, file: res.path, was: before, ledgerRows: twins.length });
+        __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract' || twins.length > 0);
+    } catch (e) { __msFilFail(r, e); }
 }
 function __msFilAfterLinks(n, what, touchedContracts) {
     __msFil.rev++; __msFil.plan = null;
@@ -53214,12 +53087,12 @@ function __msFilLink(i) {
     var r = __msFilRecord(i); if (!r) return;
     var f = r.file || (r.m && r.m.length === 1 ? r.m[0] : null);      // a stale path: the one file found
     if (!f) return;
-    try { __msFilLinkOne(r, f); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract'); }
+    try { __msFilLinkOne(r, f); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract' || (r.twins && r.twins.length > 0)); }
     catch (e) { __msFilFail(r, e); }
 }
 function __msFilChoose(i, j) {
     var r = __msFilRecord(i); if (!r || !r.m || !r.m[j]) return;
-    try { __msFilLinkOne(r, r.m[j]); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract'); }
+    try { __msFilLinkOne(r, r.m[j]); __msFilAfterLinks(1, r.docType + ' ' + (r.ref || '(no number)'), r.kind === 'contract' || (r.twins && r.twins.length > 0)); }
     catch (e) { __msFilFail(r, e); }
 }
 // Link every record whose one match was made by its number (review BUG-1: a match by a serial, a short token or the
@@ -53243,7 +53116,7 @@ async function __msFilLinkAll(states) {
     __msFil.busy = true;
     var n = 0, errs = [], touched = false;
     try {
-        list.forEach(function (r) { try { __msFilLinkOne(r, r.m[0]); n++; if (r.kind === 'contract') touched = true; } catch (e) { errs.push(r.docType + ' ' + (r.ref || '(no number)') + ': ' + String((e && e.message) || e)); } });
+        list.forEach(function (r) { try { __msFilLinkOne(r, r.m[0]); n++; if (r.kind === 'contract' || (r.twins && r.twins.length)) touched = true; } catch (e) { errs.push(r.docType + ' ' + (r.ref || '(no number)') + ': ' + String((e && e.message) || e)); } });
     } finally { __msFil.busy = false; }
     __msFilLog(errs.length ? 'WARN' : 'INFO', 'Link all: done', { states: states, linked: n, failed: errs });
     __msFilAfterLinks(n, n === 1 ? list[0].docType + ' ' + (list[0].ref || '(no number)') : '', touched);
@@ -53283,7 +53156,7 @@ function __msFilStyles() {
 }
 function __msFilSetFolder(f) { __msFil.ui.folder = f; renderFilesPage(); }
 function __msFilSearch(q) { __msFil.ui.q = String(q || ''); clearTimeout(__msFil.ui.qt); __msFil.ui.qt = setTimeout(function () { renderFilesPage(); var el = document.getElementById('msFilQ'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 120); }
-function __msFilToggle(sec) { __msFil.ui.open[sec] = !__msFil.ui.open[sec]; renderFilesPage(); }
+function __msFilToggle(sec) { __msFil.ui.open[sec] = !__msFil.ui.open[sec]; if (sec === 'nocontract') __msFilRenderTies(); else renderFilesPage(); }
 function __msFilVisible(r) {
     if (__msFil.ui.folder !== 'ALL' && r.folder !== __msFil.ui.folder) return false;
     var q = __msFil.ui.q.trim().toLowerCase();
@@ -53307,8 +53180,8 @@ function __msFilFileCell(f, how) {
 }
 // review R5 — what the Mac said about a path the list lacks
 function __msFilPathNote(r) {
-    if (r.state === 'outside') return 'outside the Files folder';
     var ex = __msFil.exists[r.path];
+    if (r.state === 'outside' || (r.path && !__msFilRel(r.path))) return 'outside the Files folder' + (ex === false ? ' — not found there' : ex === true ? ' — the file is there' : '');
     if (ex === true) return 'exists, but is not in the engine\'s list (made ' + __msFilEsc(__msFilAgo(__msFil.idx.made)) + ') — a file added since, or a folder or type the list leaves out; run the CA pack or app_files.py, then Refresh';
     if (ex === false) return 'not found — moved, renamed or gone';
     return 'not in the engine\'s list' + (ex === undefined && __msFil.checking[r.path] ? ' — checking…' : '');
@@ -53322,6 +53195,7 @@ function __msFilTable(heads, rows) {
     return '<div style="overflow-x:auto;"><table class="ms-imp-table"><thead><tr>' + heads.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 function __msFilOpenBtn(r) { return '<button class="btn btn-ghost btn-sm" onclick="__msFilOpenRec(' + r.i + ')" title="Open the record"><i class="fas fa-arrow-up-right-from-square"></i></button>'; }
+function __msFilPickBtn(r) { return __msFilTauri() ? '<button class="btn btn-ghost btn-sm" onclick="__msFilPick(' + r.i + ')" title="Choose the file on the Mac and write its path on the record"><i class="fas fa-folder-open"></i> Pick file…</button> ' : ''; }
 function __msFilFolderBtn(r) { return '<button class="btn btn-ghost btn-sm" data-folder="' + __msFilEsc(r.folder) + '" onclick="__msFilOpenFolder(this.dataset.folder)" title="Open the ' + __msFilEsc(r.folder) + ' folder in Finder"><i class="fas fa-folder-open"></i></button>'; }
 function renderFilesPage() {
     var root = document.getElementById('msFilRoot');
@@ -53331,9 +53205,11 @@ function renderFilesPage() {
     var head = '<div class="dashboard-sticky-top"><div class="page-header" style="margin-bottom:0;">'
         + '<h2 style="margin:0;"><i class="fas fa-folder-tree" style="color:var(--accent-cyan); margin-right:8px;"></i> Files</h2>'
         + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + (S.auto.last && S.auto.last.items.length ? '<button class="btn btn-ghost" id="msFilUndoBtn" onclick="__msFilUndo()" title="Put back what the automatic linking wrote (' + __msFilEsc(S.auto.last.at) + ')"><i class="fas fa-rotate-left"></i> Undo automatic linking (' + S.auto.last.items.length + ', ' + __msFilEsc(__msFilAgo(S.auto.last.at)) + ')</button>' : '')
         + '<button class="btn btn-ghost" id="msFilRefreshBtn" onclick="__msFilRead(true)"' + (S.reading ? ' disabled' : '') + ' title="Read the engine\'s list again (after a CA pack run, or after running app_files.py)"><i class="fas fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
         + '</div></div></div>'
-        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack lists every document file under <b>Files</b> (names and dates only). This page sets that list against the app\'s records — internal and client POs, OEM quotes and bills, sales invoices, proposals, purchase orders, consultant invoices — and shows what has no file, what is in the folder but not linked, and which files no record claims. <b>Link</b> writes the file\'s path on the record; nothing is copied, moved or renamed.</p>';
+        + '<p class="ms-imp-note" style="margin:0 0 6px;">The CA pack lists every document file under <b>Files</b> (names and dates only). This page sets that list against the app\'s records — internal and client POs, OEM quotes and bills, sales invoices, proposals, purchase orders, consultant invoices — and shows what has no file, what is in the folder but not linked, and which files no record claims. <b>Link</b> writes the file\'s path on the record; nothing is copied, moved or renamed.</p>'
+        + '<div class="ms-imp-note" id="msFilAutoSwitch" style="display:flex; gap:8px; align-items:flex-start; margin:0 0 10px;"><input type="checkbox" id="msFilAutoChk"' + (__msFilAutoOn() ? ' checked' : '') + ' onchange="__msFilAutoSet(this.checked)" style="margin-top:3px; flex:none;"><label for="msFilAutoChk" style="font-family:inherit; text-transform:none; letter-spacing:0; font-size:inherit; font-weight:inherit; color:inherit; cursor:pointer; margin:0;">Link what is sure by itself — at launch and when this page opens: a file that carries the record\'s number, a moved file found by its number, an upload\'s folder copy, an invoice whose number a contract\'s own ledger carries. Each run is one message and is written to the diagnostic log; Undo (above) puts the previous values back.' + (__msFilAutoDecided() ? '' : ' <b>The first run is asked for on this page.</b>') + '</label></div>';
     if (S.missing && !S.idx) {
         root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (__msFilTauri() ? '<i class="fas fa-circle-info"></i> The engine\'s list is not there yet. Run the CA pack once (it writes <code>_engine/app_files/index.json</code>) — or <code>python3 app_files.py "&lt;CA Pack&gt;"</code> on its own — then click Refresh.' + (S.error ? ' ' + __msFilEsc(S.error) : '') : '<i class="fas fa-circle-info"></i> The Files folders live on the Mac; open this page in the Masterstone app.') + '</div>';
         return;
@@ -53349,7 +53225,7 @@ function renderFilesPage() {
     // the status line
     var parts = [idx.files.length + ' files in ' + Object.keys(idx.folders).filter(function (k) { return idx.folders[k] && idx.folders[k].present; }).length + ' folders'];
     if (idx.made) parts.push('the list last changed ' + __msFilEsc(__msFilAgo(idx.made)) + (idx.scanned && idx.scanned !== idx.made ? ', checked ' + __msFilEsc(__msFilAgo(idx.scanned)) : ''));
-    if (idx.root && S.filesRoot && __msFilKey(idx.root) !== __msFilKey(S.filesRoot)) parts.push('<span class="ms-imp-warn" title="' + __msFilEsc(idx.root) + '">the list was made on another folder than this Mac\'s Files — the paths here are this Mac\'s</span>');
+    if (idx.root && S.filesRoot && !__msFilSameFolder(idx.root, S.filesRoot)) parts.push('<span class="ms-imp-warn" title="' + __msFilEsc(idx.root) + '">the list was made on another folder than this Mac\'s Files — the paths here are this Mac\'s; nothing is linked by itself</span>');
     if (S.error) parts.push('<span style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> ' + __msFilEsc(S.error) + '</span>');
     if (idx.dropped) parts.push('<span class="ms-imp-warn">' + idx.dropped + ' odd entr' + (idx.dropped === 1 ? 'y' : 'ies') + ' in the list dropped</span>');
     html += '<div id="msFilStatus" class="ms-imp-note" style="margin-bottom:4px;">' + parts.join(' · ') + '</div>';
@@ -53378,13 +53254,13 @@ function renderFilesPage() {
     // 1. nothing anywhere
     var L = vis('none');
     html += '<div class="ms-imp-sec" id="msFilSecNone">' + __msFilSecHead('none', 'No file anywhere', L.length)
-        + (S.ui.open.none ? (L.length ? __msFilTable(['Folder', 'Record', 'Link / note', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return /^https?:\/\//i.test(r.link || '') ? '<a href="' + __msFilEsc(r.link) + '" class="ms-imp-pin" target="_blank" rel="noopener"><i class="fas fa-link"></i> OneDrive link</a>' : '<span class="ms-imp-note">no link either</span>'; }, function (r) { return '<span style="white-space:nowrap;">' + __msFilOpenBtn(r) + ' ' + __msFilFolderBtn(r) + '</span>'; }]))
+        + (S.ui.open.none ? (L.length ? __msFilTable(['Folder', 'Record', 'Link / note', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return /^https?:\/\//i.test(r.link || '') ? '<a href="' + __msFilEsc(r.link) + '" class="ms-imp-pin" target="_blank" rel="noopener"><i class="fas fa-link"></i> OneDrive link</a>' : '<span class="ms-imp-note">no link either</span>'; }, function (r) { return '<span style="white-space:nowrap;">' + __msFilPickBtn(r) + __msFilOpenBtn(r) + ' ' + __msFilFolderBtn(r) + '</span>'; }]))
             : '<div class="ms-imp-note" style="padding:8px 0;">Every record has a file, an upload or a match in its folder.</div>') : '') + '</div>';
     // 2. found, not linked
     L = vis('found');
     var sureN = L.filter(function (r) { return r.sure; }).length;
     html += '<div class="ms-imp-sec" id="msFilSecFound">' + __msFilSecHead('found', 'In the folder, not linked', L.length, sureN ? ' <button class="btn btn-primary btn-sm" style="margin-left:8px;" onclick="event.stopPropagation(); __msFilLinkAll(\'found\')" title="Links the records whose file carries their number; the others are linked one by one"><i class="fas fa-link"></i> Link all ' + sureN + (sureN < L.length ? ' by number' : '') + '</button>' : '')
-        + (S.ui.open.found ? (L.length ? __msFilTable(['Folder', 'Record', 'File in the folder', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return __msFilFileCell(r.file, r.how); }, function (r) { return '<span style="white-space:nowrap;"><button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')"><i class="fas fa-link"></i> Link</button> ' + __msFilOpenBtn(r) + '</span>'; }]))
+        + (S.ui.open.found ? (L.length ? __msFilTable(['Folder', 'Record', 'File in the folder', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell, function (r) { return __msFilFileCell(r.file, r.how); }, function (r) { return '<span style="white-space:nowrap;"><button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')"><i class="fas fa-link"></i> Link</button> ' + __msFilPickBtn(r) + __msFilOpenBtn(r) + '</span>'; }]))
             : '<div class="ms-imp-note" style="padding:8px 0;">Nothing waiting to be linked.</div>') : '') + '</div>';
     // 3. stale / outside
     L = vis('stale').concat(vis('outside'));
@@ -53393,20 +53269,21 @@ function renderFilesPage() {
         + (S.ui.open.stale ? (L.length ? __msFilTable(['Folder', 'Record', 'The record points at', 'In the folder', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
             function (r) { return '<a href="javascript:void(0)" class="ms-fil-path" data-path="' + __msFilEsc(r.path) + '" onclick="__msFilOpenPath(this.dataset.path); return false;">' + __msFilEsc(r.path) + '</a><div class="ms-imp-note">' + __msFilPathNote(r) + '</div>'; },
             function (r) { return r.m.length === 1 ? __msFilFileCell(r.m[0], r.how) : '<span class="ms-imp-note">' + (r.ref ? 'nothing matches the number' : 'no number to match on') + '</span>'; },
-            function (r) { return '<span style="white-space:nowrap;">' + (r.m.length === 1 ? '<button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')" title="Point the record at this file"><i class="fas fa-link"></i> Point here</button> ' : '') + __msFilOpenBtn(r) + '</span>'; }]))
+            function (r) { return '<span style="white-space:nowrap;">' + (r.m.length === 1 ? '<button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')" title="Point the record at this file"><i class="fas fa-link"></i> Point here</button> ' : '') + __msFilPickBtn(r) + __msFilOpenBtn(r) + '</span>'; }]))
             : '<div class="ms-imp-note" style="padding:8px 0;">Every linked record points at a file in Files.</div>') : '') + '</div>';
     // 4. choose
     L = vis('choose');
     html += '<div class="ms-imp-sec" id="msFilSecChoose">' + __msFilSecHead('choose', 'Choose between files', L.length)
         + (S.ui.open.choose ? (L.length ? __msFilTable(['Folder', 'Record', 'Files that match', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
             function (r) { return '<ul class="ms-fil-pick">' + r.m.map(function (f, j) { return '<li><button class="btn btn-ghost btn-sm" onclick="__msFilChoose(' + r.i + ', ' + j + ')" title="Link this file"><i class="fas fa-link"></i> This one</button><div style="flex:1; min-width:0;">' + __msFilFileCell(f, r.how) + '</div></li>'; }).join('') + '</ul>' + (r.path ? '<div class="ms-imp-note">the record points at ' + __msFilEsc(r.path) + ' — ' + __msFilPathNote(r) + '</div>' : ''); },
-            __msFilOpenBtn]))
+            function (r) { return '<span style="white-space:nowrap;">' + __msFilPickBtn(r) + __msFilOpenBtn(r) + '</span>'; }]))
             : '<div class="ms-imp-note" style="padding:8px 0;">Nothing to choose.</div>') : '') + '</div>';
     // 5. linked
     L = vis('linked').concat(vis('uploaded'));
     html += '<div class="ms-imp-sec" id="msFilSecLinked">' + __msFilSecHead('linked', 'Linked', L.length)
         + (S.ui.open.linked ? (L.length ? __msFilTable(['Folder', 'Record', 'File', ''], __msFilRows(L, [function (r) { return __msFilEsc(r.folder); }, __msFilRecCell,
-            function (r) { return r.state === 'uploaded' ? '<span class="ms-fil-st uploaded">uploaded in the app</span>' + (r.file ? '<div class="ms-imp-note">also in the folder: ' + __msFilEsc(r.file.name) + '</div>' : '') : __msFilFileCell(r.file); }, __msFilOpenBtn]))
+            function (r) { return r.state === 'uploaded' ? '<span class="ms-fil-st uploaded">uploaded in the app</span>' + (r.file ? '<div class="ms-imp-note">also in the folder: ' + __msFilFileCell(r.file, r.how) + '</div>' : '') : __msFilFileCell(r.file); },
+            function (r) { return '<span style="white-space:nowrap;">' + (r.state === 'uploaded' && r.file ? '<button class="btn ' + (r.sure ? 'btn-primary' : 'btn-ghost') + ' btn-sm" onclick="__msFilLink(' + r.i + ')" title="Write the folder copy\'s path on the record too"><i class="fas fa-link"></i> Link</button> ' + __msFilPickBtn(r) : '') + __msFilOpenBtn(r) + '</span>'; }]))
             : '<div class="ms-imp-note" style="padding:8px 0;">—</div>') : '') + '</div>';
     // 6. unclaimed files
     var unclVis = MS_FIL_FOLDERS.filter(function (fo) { return S.ui.folder === 'ALL' || S.ui.folder === fo; });
@@ -53430,7 +53307,386 @@ function renderFilesPage() {
         + '</div><div class="ms-imp-note" style="margin-top:6px;">Bills and tax challans are placed on their statement lines on the <a href="javascript:void(0)" onclick="showTab(\'expensesTab\'); return false;">Expenses</a> page (the Bills panel lists what is not placed); the remittances and FIRCs on the <a href="javascript:void(0)" onclick="showTab(\'purchaseInvoicesTab\'); return false;">Payables</a> page; the Masters\' rows and PDFs on <a href="javascript:void(0)" onclick="showTab(\'importTab\'); return false;">Import</a>.</div></div>';
     root.innerHTML = html;
 }
-// =================== /Phase 8FI — Files ===================
+
+// ---- automatic linking (8FJ) ----------------------------------------------------------------------
+// At launch and whenever the page opens, every case that is sure is written by itself: a record with no path whose
+// number finds exactly one file; a record whose path the Mac says is gone and whose number finds the moved file; an
+// upload whose folder copy is found by the number; an invoice whose number a contract's own ledger carries (the amount
+// and the date agreeing). Matches by a serial, a short number or a file name, two candidates, and paths that still
+// exist stay for his hand. One toast; every write in the diagnostic log; "Undo" puts the previous values back; the
+// switch on the page turns it off. Runs once per list (and per attachments' load state); a new list runs it again.
+function __msFilAutoOn() { try { return localStorage.getItem('ms_fil_auto_v1') !== 'off'; } catch (e) { return true; } }
+function __msFilAutoDecided() { try { var v = localStorage.getItem('ms_fil_auto_v1'); return v === 'on' || v === 'off'; } catch (e) { return false; } }   // review RISK-11: the first run is asked for on the page
+function __msFilAutoSet(on) {
+    try { localStorage.setItem('ms_fil_auto_v1', on ? 'on' : 'off'); } catch (e) {}
+    __msFilLog('INFO', 'automatic linking turned ' + (on ? 'on' : 'off'));
+    if (on) { __msFil.auto.doneSig = ''; __msFilSkipSave(''); __msFilAutoMaybe('switch'); } else renderFilesPage();
+}
+function __msFilExpReady() { var st = (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : 'unavailable'; return st === 'ready' || st === 'restored'; }
+// the engine runs in the device shell, where this Mac's Files is mounted under another path (/sessions/<id>/mnt/Masterstone/Files, a new
+// <id> every session) and records that as the list's root: the same folder when the last two segments agree (<folder>/Files); a list made
+// on a copy somewhere else (…/Desktop/Old copy/Files) is another folder (review RISK-4). The files about to be written are asked of the Mac anyway.
+function __msFilSameFolder(a, b) {
+    var ka = __msFilKey(a).replace(/[\\/]+$/, ''), kb = __msFilKey(b).replace(/[\\/]+$/, '');
+    if (ka === kb) return true;
+    var sa = ka.split(/[\\/]+/).slice(-2).join('/'), sb = kb.split(/[\\/]+/).slice(-2).join('/');
+    return sa.indexOf('/') > 0 && sa === sb;
+}
+function __msFilFormOpen() { return ['provisionTab', 'invoiceFormTab'].some(function (id) { var el = document.getElementById(id); return el && !el.classList.contains('hidden'); }) || !!window.__msInvDraftActive; }
+function __msFilAutoMaybe(trigger) {
+    if (!__msFilAutoOn() || !__msFilTauri() || !__msFil.idx || __msFil.reading || __msFil.auto.running || __msFil.busy) return;
+    // review RISK-4: the settings (the CA Pack folder) must be in, and the list must be this Mac's — else the paths would be built under the wrong root
+    if (!__msFilExpReady()) { if (!__msFil.auto.waitTimer) __msFil.auto.waitTimer = setTimeout(function () { __msFil.auto.waitTimer = null; __msFilAutoMaybe(trigger); }, 1500); return; }
+    if (__msFil.idx.root && __msFil.filesRoot && !__msFilSameFolder(__msFil.idx.root, __msFil.filesRoot)) { if (__msFil.auto.rootWarned !== __msFil.idx.sig) { __msFil.auto.rootWarned = __msFil.idx.sig; __msFilLog('WARN', 'automatic linking skipped: the list was made for another folder than this Mac\'s Files', { listRoot: __msFil.idx.root, filesRoot: __msFil.filesRoot }); } return; }
+    // review RISK-8: a contract or invoice form open now would write its own fields back over the run's — wait for it to close
+    if (__msFilFormOpen()) { if (!__msFil.auto.waitTimer) __msFil.auto.waitTimer = setTimeout(function () { __msFil.auto.waitTimer = null; __msFilAutoMaybe(trigger); }, 4000); return; }
+    __msFilAuto(trigger).catch(function (e) { __msFil.auto.running = false; __msFilLog('ERROR', 'automatic linking failed', { trigger: trigger, error: String((e && e.message) || e) }); });
+}
+function __msFilWaitChecks(ms) {
+    return new Promise(function (resolve) {
+        var t0 = Date.now();
+        (function tick() { if (!Object.keys(__msFil.checking).length || Date.now() - t0 > (ms || 6000)) return resolve(); setTimeout(tick, 150); })();
+    });
+}
+async function __msFilAuto(trigger) {
+    var S = __msFil;
+    var attState = (window.__msAttLoad && window.__msAttLoad.state) || 'none';
+    if (attState === 'loading') {      // the uploads are not known yet: run when they are (review R2's hook)
+        if (!S.auto.attHooked && typeof window.__msWhenAttachmentsLoaded === 'function') { S.auto.attHooked = true; window.__msWhenAttachmentsLoaded(function () { __msFilAutoMaybe('attachments'); }); }
+        return;
+    }
+    var sig = S.idx.sig + '|' + attState;
+    if (S.auto.doneSig === sig || __msFilSkipSig() === sig) return;      // done, or undone (review BUG-1): this list is left alone
+    S.auto.running = true;
+    try {
+        var P = __msFilPlan(); if (!P) return;
+        await __msFilWaitChecks();              // the Mac's answers about the stale paths
+        P = __msFilPlan();
+        var list = [], gone = [];
+        ['found', 'uploaded', 'stale', 'outside'].forEach(function (st) {
+            (P.byState[st] || []).forEach(function (r) {
+                if (!(r.m && r.m.length === 1 && r.sure)) return;
+                if ((st === 'stale' || st === 'outside') && S.exists[r.path] !== false) return;    // only when the Mac said the old file is gone
+                if (S.exists[__msFilAbs(r.m[0].path)] === false) { gone.push(r.docType + ' ' + (r.ref || '(no number)') + ' → ' + r.m[0].name); return; }   // review RISK-10: the list is older than the folder
+                list.push(r);
+            });
+        });
+        var ties = __msFilTieList().filter(function (t) { return t.state === 'sure'; });
+        if (gone.length) __msFilLog('WARN', 'automatic linking: files in the list are not on the Mac any more — run the CA pack or app_files.py', { files: gone.slice(0, 10) });
+        if (!__msFilAutoOn()) { __msFilLog('INFO', 'automatic linking: switched off while the Mac was asked', { trigger: trigger }); return; }   // review NIT
+        S.auto.doneSig = sig;
+        if (!list.length && !ties.length) { __msFilLog('INFO', 'automatic linking: nothing sure to do', { trigger: trigger, gone: gone.length }); return; }
+        if (!__msFilAutoDecided()) {           // review RISK-11: the first time, on the page, one question — then the launches run by themselves
+            if (!__msFilTabOpen()) { S.auto.doneSig = ''; return; }
+            var first = list.slice(0, 12).map(function (r) { return '• ' + r.docType + ' ' + (r.ref || '(no number)') + ' → ' + r.m[0].name; }).concat(ties.slice(0, 5).map(function (t) { return '• invoice ' + (t.inv.invoiceNumber || '') + ' → ' + (t.cands[0].product || t.cands[0].client) + ', cycle ' + t.cands[0].cycle; }));
+            if (list.length + ties.length > first.length) first.push('… and ' + (list.length + ties.length - first.length) + ' more');
+            var go = true;
+            if (typeof __msAsk === 'function') go = await __msAsk('Link what is sure by itself?\n\nFrom now on the app links, at launch and when this page opens, every record whose file carries its number, every moved file found by its number, every upload\'s folder copy, and ties an invoice whose number its contract\'s own ledger carries. Each run is one message, is written to the diagnostic log, and can be undone here; the tick box on this page turns it off.\n\nRight now that is ' + (list.length + ties.length) + ':\n\n' + first.join('\n') + '\n\nNothing is copied, moved or renamed.', { ok: 'Link, and keep doing it', cancel: 'Not now' });
+            if (!go) { S.auto.doneSig = ''; __msFilLog('INFO', 'automatic linking: not now', { trigger: trigger }); return; }
+            try { localStorage.setItem('ms_fil_auto_v1', 'on'); } catch (e) {}
+            renderFilesPage();
+        }
+        var items = [], errs = [], touched = false, n = { linked: 0, pointed: 0, uploads: 0, tied: 0 };
+        S.busy = true;
+        try {
+            list.forEach(function (r) {
+                try {
+                    var before = r.path || '', st = r.state;
+                    var abs = __msFilLinkOne(r, r.m[0]);
+                    items.push({ what: 'path', kind: r.kind, entityIdx: r.entityIdx, entityId: r.entityId, fieldDescriptor: r.fieldDescriptor, cycleIdx: r.cycleIdx, arrIdx: r.arrIdx, docType: r.docType, ref: r.ref || '', client: r.client || '', before: before, after: abs, twins: r.twins || [] });   // entityIdx / cycleIdx / arrIdx are positions: Undo checks the client and the number before writing
+                    if (r.kind === 'contract' || (r.twins && r.twins.length)) touched = true;
+                    n[st === 'uploaded' ? 'uploads' : (st === 'found' ? 'linked' : 'pointed')]++;
+                } catch (e) { errs.push(r.docType + ' ' + (r.ref || '(no number)') + ': ' + String((e && e.message) || e)); }
+            });
+            ties.forEach(function (t) {
+                try {
+                    var b = { ci: String(t.inv.linkedContractIdx == null ? '' : t.inv.linkedContractIdx), yi: String(t.inv.linkedCycleYearIdx == null ? '' : t.inv.linkedCycleYearIdx) };
+                    var cyc = __msFilCycleSnapshot(t.cands[0]);
+                    __msFilTieOne(t.inv, t.cands[0]);
+                    items.push({ what: 'tie', invId: t.inv.id, ref: t.inv.invoiceNumber || '', client: t.cands[0].client || '', before: b, after: { ci: String(t.cands[0].ci), yi: String(t.cands[0].yi) }, cycle: cyc });
+                    n.tied++; touched = true;
+                } catch (e) { errs.push('invoice ' + (t.inv.invoiceNumber || '(no number)') + ': ' + String((e && e.message) || e)); }
+            });
+        } finally { S.busy = false; }
+        if (items.length) { S.auto.last = { at: new Date().toISOString(), trigger: trigger, items: items }; __msFilUndoSave(); }
+        // (each write has its own line above; the diagnostic log caps an entry's data at 400 characters)
+        __msFilLog(errs.length ? 'WARN' : 'INFO', 'automatic linking: done', { trigger: trigger, linked: n.linked, pointed: n.pointed, uploads: n.uploads, tied: n.tied, failed: errs.length, first: errs.length ? errs[0].slice(0, 160) : '' });
+        S.rev++; S.plan = null;
+        if (__msFilTabOpen()) { renderFilesPage(); try { __msFilRenderTies(); } catch (e) {} }    // the OneDrive card keeps what was pasted (review NIT)
+        if (touched) { try { if (typeof renderContracts === 'function') renderContracts(); } catch (e) {} }
+        if (n.tied) { try { if (typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {} }
+        var bits = [];
+        if (n.linked) bits.push(n.linked + ' record' + (n.linked === 1 ? '' : 's') + ' linked to ' + (n.linked === 1 ? 'its file' : 'their files'));
+        if (n.uploads) bits.push(n.uploads + ' upload' + (n.uploads === 1 ? '' : 's') + ' linked to the folder copy');
+        if (n.pointed) bits.push(n.pointed + ' moved file' + (n.pointed === 1 ? '' : 's') + ' re-pointed');
+        if (n.tied) bits.push(n.tied + ' invoice' + (n.tied === 1 ? '' : 's') + ' tied to ' + (n.tied === 1 ? 'its' : 'their') + ' contract');
+        if (errs.length) bits.push(errs.length + ' could not be written (see the diagnostic log)');
+        var none = (P.byState.none || []).length, choose = (P.byState.choose || []).length;
+        if (attState !== 'ready') bits.push('the attached files were not loaded (' + attState + ')');      // review NIT
+        __msFilToast('<i class="fas fa-link" style="color:var(--accent-cyan);"></i> <strong>Files:</strong> ' + bits.join(' · ') + (none || choose ? ' — still ' + [none ? none + ' with no file' : '', choose ? choose + ' to choose' : ''].filter(Boolean).join(', ') : '') + '. <a href="javascript:void(0)" onclick="showTab(\'filesTab\'); return false;">Open Files</a> to see or undo.', 9000);
+    } finally { S.auto.running = false; }
+}
+// Undo: the previous values back (an empty path, the old path, the untied invoice) through the same writers. Kept
+// in localStorage until the next automatic run replaces it, so it survives a relaunch.
+function __msFilUndoSave() { try { if (__msFil.auto.last) localStorage.setItem('ms_fil_auto_undo_v1', JSON.stringify(__msFil.auto.last)); else localStorage.removeItem('ms_fil_auto_undo_v1'); } catch (e) { __msFilLog('WARN', 'the undo record could not be kept', { error: String((e && e.message) || e) }); } }
+function __msFilSkipSave(sig) { try { if (sig) localStorage.setItem('ms_fil_auto_skip_v1', sig); else localStorage.removeItem('ms_fil_auto_skip_v1'); } catch (e) {} }
+function __msFilSkipSig() { try { return localStorage.getItem('ms_fil_auto_skip_v1') || ''; } catch (e) { return ''; } }
+function __msFilAutoSig() { return (__msFil.idx ? __msFil.idx.sig : '') + '|' + ((window.__msAttLoad && window.__msAttLoad.state) || 'none'); }
+function __msFilUndoLoad() { try { var s = localStorage.getItem('ms_fil_auto_undo_v1'); var o = s ? JSON.parse(s) : null; if (o && Array.isArray(o.items) && o.items.length) __msFil.auto.last = o; } catch (e) {} }
+async function __msFilUndo() {
+    var last = __msFil.auto.last;
+    if (!last || !last.items.length) return;
+    if (__msFil.busy || __msFil.auto.running) { __msFilToast('<i class="fas fa-circle-info"></i> A run is in progress — try again in a moment.', 3500); return; }
+    var m = last.items.length;
+    var yes = true;
+    if (typeof __msAsk === 'function') yes = await __msAsk('Undo the automatic linking of ' + __msFilAgo(last.at) + '?\n\nThe ' + m + ' record' + (m === 1 ? '' : 's') + ' it wrote get' + (m === 1 ? 's' : '') + ' the previous value' + (m === 1 ? '' : 's') + ' back: an empty path, the old path, or no contract. A record you have changed since is left as it is. No file is touched.\n\nThe automatic linking then leaves this list alone; it runs again when the engine\'s list changes, or when you switch it off and on.', { ok: 'Undo', cancel: 'Keep' });
+    if (!yes) return;
+    __msFil.busy = true;
+    var n = 0, errs = [], touched = false, kept = [];
+    try {
+        last.items.slice().reverse().forEach(function (x) {
+            try {
+                if (x.what === 'tie') {
+                    var inv = (typeof invoices !== 'undefined' ? invoices : []).find(function (i) { return i && i.id === x.invId; });
+                    if (!inv) throw new Error('invoice not found');
+                    if (String(inv.linkedContractIdx == null ? '' : inv.linkedContractIdx) !== String(x.after.ci) || String(inv.linkedCycleYearIdx == null ? '' : inv.linkedCycleYearIdx) !== String(x.after.yi)) throw new Error('re-tied since — left as it is');   // review BUG-2
+                    __msFilWritable('invoice'); __msFilWritable('contract');
+                    inv.linkedContractIdx = x.before.ci || ''; inv.linkedCycleYearIdx = x.before.yi || '';
+                    var ok = (typeof saveInvoices === 'function') ? saveInvoices() : undefined;
+                    if (ok === false) throw new Error('the save was refused');
+                    // review PARTIAL-1: the cycle took the invoice's state when it was tied — it gets its own back
+                    if (x.cycle) { var cc0 = (typeof contracts !== 'undefined') ? contracts[+x.after.ci] : null, by0 = cc0 && cc0.billingYears && cc0.billingYears[+x.after.yi]; if (by0 && (!x.client || __msFilNameKey(cc0.client) === __msFilNameKey(x.client))) { ['invoiceRaised', 'actualInvoiceDate', 'clientInvoiceNo', 'paid', 'paymentDate', 'arInvoices'].forEach(function (k) { by0[k] = x.cycle[k]; }); } else errs.push('invoice ' + (x.ref || '') + ': the cycle is not where it was — its fields are left'); }
+                    touched = true;
+                } else {
+                    if (x.kind !== 'contract') {     // review BUG-2: a record found by its id — the path must still be the one the run wrote
+                        var curId = __msFilCurrentPath(x);
+                        if (curId === null) throw new Error('the record is gone — left as it is');
+                        if ((curId || '') !== (x.after || '')) throw new Error('the path was changed since (' + (curId || 'empty') + ') — left as it is');
+                    }
+                    if (x.kind === 'contract') {     // a position, not an id: the contract must still be the one (a delete or a reorder in between)
+                        var cc = (typeof contracts !== 'undefined') ? contracts[x.entityIdx] : null;
+                        if (!cc || (x.client && __msFilNameKey(cc.client) !== __msFilNameKey(x.client))) throw new Error('the contract is not where it was — left as it is');
+                        var cur = __msFilRecords().filter(function (q) { return q.kind === 'contract' && q.entityIdx === x.entityIdx && q.fieldDescriptor === x.fieldDescriptor && (q.cycleIdx === undefined ? x.cycleIdx === undefined : q.cycleIdx === x.cycleIdx) && (q.arrIdx === undefined ? x.arrIdx === undefined : q.arrIdx === x.arrIdx); })[0];
+                        if (!cur || (cur.path || '') !== (x.after || '')) throw new Error('the path was changed since (' + ((cur && cur.path) || 'empty') + ') — left as it is');
+                    }
+                    __msFilWrite({ kind: x.kind, entityIdx: x.entityIdx, entityId: x.entityId, fieldDescriptor: x.fieldDescriptor, cycleIdx: x.cycleIdx, arrIdx: x.arrIdx }, x.before || '', true);
+                    if (x.twins && x.twins.length) __msFilWritable('contract');       // review RISK-6: the rows go through the same gate
+                    (x.twins || []).forEach(function (tw) {
+                        var c = (typeof contracts !== 'undefined') ? contracts[tw.ci] : null, by = c && c.billingYears && c.billingYears[tw.yi];
+                        if (!by || (tw.client && __msFilNameKey(c.client) !== __msFilNameKey(tw.client))) { errs.push('ledger row of ' + x.ref + ': the contract is not where it was — left as it is'); return; }
+                        if (tw.ai >= 0) { var row = by.arInvoices && by.arInvoices[tw.ai]; if (!row || __msFilNorm(row.invNo) !== __msFilNorm(x.ref) || (row.localPath || '') !== (x.after || '')) { errs.push('ledger row of ' + x.ref + ': not where it was, or changed since — left as it is'); return; } row.localPath = tw.before || ''; }
+                        else { if (__msFilNorm(by.clientInvoiceNo) !== __msFilNorm(x.ref) || (by.clientInvoiceLocalPath || '') !== (x.after || '')) { errs.push('ledger row of ' + x.ref + ': not where it was, or changed since — left as it is'); return; } by.clientInvoiceLocalPath = tw.before || ''; }
+                        touched = true;
+                    });
+                    if (x.kind === 'contract') touched = true;
+                }
+                n++;
+            } catch (e) { errs.push((x.what === 'tie' ? 'invoice ' : (x.docType || '') + ' ') + (x.ref || '') + ': ' + String((e && e.message) || e)); if (!/not where it was|changed since|re-tied|retied/.test(String((e && e.message) || e))) kept.push(x); }
+        });
+        if (touched && typeof persistData === 'function') persistData();
+    } finally { __msFil.busy = false; }
+    __msFil.auto.last = (errs.length && kept.length) ? { at: last.at, trigger: last.trigger, items: kept, partial: true } : null; __msFilUndoSave();   // review RISK-5: a refused item stays undoable
+    __msFil.auto.doneSig = __msFilAutoSig();              // review BUG-1: this list is done with — not run again on it, this session or the next
+    __msFilSkipSave(__msFil.auto.doneSig);
+    __msFilLog(errs.length ? 'WARN' : 'INFO', 'automatic linking undone', { restored: n, failed: errs.length, first: errs.length ? errs[0].slice(0, 160) : '' });
+    __msFil.rev++; __msFil.plan = null;
+    renderFilesPage(); try { __msFilRenderTies(); } catch (e) {}
+    if (touched) { try { if (typeof renderContracts === 'function') renderContracts(); } catch (e) {} try { if (typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {} }
+    __msFilToast('<i class="fas fa-rotate-left"></i> ' + n + ' record' + (n === 1 ? '' : 's') + ' put back' + (errs.length ? ' · ' + errs.length + ' could not be (see the diagnostic log)' + (kept.length ? ' — Undo again later for the ' + kept.length + ' refused by a paused store' : '') : '') + '.', 6000);
+}
+function __msFilCurrentPath(x) {      // the path a record holds now (null when the record is gone)
+    var r;
+    if (x.kind === 'invoice') { r = (typeof invoices !== 'undefined' ? invoices : []).find(function (i) { return i && i.id === x.entityId; }); return r ? (r.localPdfPath || '') : null; }
+    if (x.kind === 'conpay') { r = (typeof consultantPayments !== 'undefined' ? consultantPayments : []).find(function (i) { return i && i.id === x.entityId; }); return r ? (r.localPath || '') : null; }
+    if (x.kind === 'proposal') { r = (typeof proposals !== 'undefined' ? proposals : []).find(function (i) { return i && i.id === x.entityId; }); return r ? (r.externalLinkLocalPath || '') : null; }
+    if (x.kind === 'po') { r = (typeof purchaseOrders !== 'undefined' ? purchaseOrders : []).find(function (i) { return i && i.id === x.entityId; }); return r ? (r.externalLinkLocalPath || '') : null; }
+    return null;
+}
+// at launch: once the app has initialised (and the bridge has reconciled the stores), read the list and link
+__msFilUndoLoad();
+async function __msFilAutoAtLaunch() {
+    if (!__msFilAutoOn() || !__msFilTauri()) return;
+    // the Expenses module loads the app's settings — among them the CA Pack folder — at launch: wait for it (up to a
+    // minute); a read before that would look in the default place and find nothing
+    for (var i = 0; i < 120; i++) {
+        var st = (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : 'unavailable';
+        if (st !== 'idle' && st !== 'loading' && st !== 'restoring') break;
+        await new Promise(function (res) { setTimeout(res, 500); });
+    }
+    var est = (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : 'unavailable';
+    if (est !== 'ready' && est !== 'restored') { __msFilLog('INFO', 'launch linking skipped: the Expenses module is ' + est); return; }
+    if (!__msFilAutoDecided()) return;      // the first run is asked for on the Files page (review RISK-11); after a Yes the launches run by themselves
+    __msFil.auto.launching = true;
+    try { if (!__msFil.idx && !__msFil.reading) await __msFilRead(false); } finally { __msFil.auto.launching = false; }
+    __msFilAutoMaybe('launch');
+}
+document.addEventListener('ms:init-complete', function () {
+    setTimeout(function () { __msFilAutoAtLaunch().catch(function (e) { __msFilLog('WARN', 'launch linking failed', { error: String((e && e.message) || e) }); }); }, window.__msFilAutoLaunchMs || 5000);
+});
+
+// ---- the two cards from Document Export (8FJ): OneDrive links to paste; invoices with no contract ---------------
+function __msFilRenderMore() {
+    try { if (typeof window.__msRenderMissingOneDriveLinks === 'function') window.__msRenderMissingOneDriveLinks(); } catch (e) { __msFilLog('WARN', 'OneDrive links card failed', { error: String((e && e.message) || e) }); }
+    try { __msFilRenderTies(); } catch (e) { __msFilLog('WARN', 'invoices card failed', { error: String((e && e.message) || e) }); }
+}
+// An issued invoice with no contract or cycle (8EI's list) and what the app can say about it: the contract whose own
+// ledger carries the number (sure when the client, the amount and the date agree); the client's contract whose cycle
+// covers the invoice date and carries no invoice yet (likely — one click); a cycle that already carries another
+// invoice, several cycles, or no cycle over the date (check — open the invoice); no contract in the app for the
+// client at all (a service invoice: the CA export heads it SERVICE, which is right for a service).
+var MS_FIL_TIE_STATUSES = ['Issued', 'Partially Paid', 'Paid', 'Credit Note Issued'];   // the statuses that reach the CA Sales sheet (8EI); the shim's own test is used when it is there
+function __msFilTieNeeds(status) { return (typeof window.__msInvoiceNeedsLinkage === 'function') ? !!window.__msInvoiceNeedsLinkage(status) : MS_FIL_TIE_STATUSES.indexOf(String(status || '')) !== -1; }
+function __msFilPaidDate(inv) { var ds = Array.isArray(inv.payments) ? inv.payments.map(function (p) { return p && p.date; }).filter(Boolean).sort() : []; return inv.status === 'Paid' ? (ds.length ? ds[ds.length - 1] : (inv.paidAt ? String(inv.paidAt).slice(0, 10) : '')) : ''; }
+function __msFilNameKey(s) { return __msFilNorm(s).replace(/(privatelimited|pvtltd|limited|ltd|llp|inc|private|pvt)$/, ''); }
+function __msFilClientHasContract(name) { var k = __msFilNameKey(name); return !!k && typeof contracts !== 'undefined' && Array.isArray(contracts) && contracts.some(function (c) { return c && __msFilNameKey(c.client) === k; }); }   // review RISK-7: the invoice form's warning asks only when a contract of the client exists
+function __msFilAddMonths(iso, m) { var d = new Date(String(iso).slice(0, 10) + 'T00:00:00Z'); if (isNaN(d.getTime())) return ''; d.setUTCMonth(d.getUTCMonth() + (m || 12)); return d.toISOString().slice(0, 10); }
+function __msFilTieList() {
+    var out = [];
+    if (typeof invoices === 'undefined' || !Array.isArray(invoices) || typeof contracts === 'undefined' || !Array.isArray(contracts)) return out;
+    var gapsOf = (typeof window.__msInvoiceLinkageGaps === 'function') ? window.__msInvoiceLinkageGaps : function (ci, yi) { var g = []; if (String(ci == null ? '' : ci).trim() === '') g.push('Linked Contract'); if (String(yi == null ? '' : yi).trim() === '') g.push('Billing Cycle'); return g; };
+    var linkedTo = {};   // 'ci/yi' → the numbers of the CRM invoices already tied to that cycle (not a cancelled or credit-noted one)
+    invoices.forEach(function (i) {
+        if (!i || i.status === 'Cancelled' || i.status === 'Credit Note Issued' || String(i.linkedContractIdx == null ? '' : i.linkedContractIdx).trim() === '' || String(i.linkedCycleYearIdx == null ? '' : i.linkedCycleYearIdx).trim() === '') return;
+        var k = i.linkedContractIdx + '/' + i.linkedCycleYearIdx; (linkedTo[k] = linkedTo[k] || []).push(i.invoiceNumber || '(no number)');
+    });
+    invoices.forEach(function (inv) {
+        if (!inv || !__msFilTieNeeds(inv.status)) return;
+        var gaps = gapsOf(inv.linkedContractIdx, inv.linkedCycleYearIdx);
+        if (!gaps.length) return;
+        var n = __msFilNorm(inv.invoiceNumber), ck = __msFilNameKey(inv.clientName), date = String(inv.invoiceDate || '').slice(0, 10);
+        var onlyCi = String(inv.linkedContractIdx == null ? '' : inv.linkedContractIdx).trim() !== '' ? +inv.linkedContractIdx : null;   // review NIT: a contract set but no cycle — only that contract's cycles
+        var ledger = [], dated = [], clientHas = false;
+        contracts.forEach(function (c, ci) {
+            if (!c || (onlyCi !== null && ci !== onlyCi)) return;
+            var same = !!ck && __msFilNameKey(c.client) === ck;
+            if (same) clientHas = true;
+            (Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (by, yi) {
+                if (!by) return;
+                var rows = (Array.isArray(by.arInvoices) && by.arInvoices.length) ? by.arInvoices.filter(Boolean) : (by.clientInvoiceNo ? [{ invNo: by.clientInvoiceNo, amount: null, date: by.actualInvoiceDate || '' }] : []);
+                var nos = rows.map(function (a) { return __msFilNorm(a.invNo); }).filter(Boolean);
+                var carries = rows.filter(function (a) { return a.invNo && __msFilNorm(a.invNo) !== n; }).map(function (a) { return a.invNo; }).concat((linkedTo[ci + '/' + yi] || []).filter(function (x) { return __msFilNorm(x) !== n; }));
+                carries = carries.filter(function (x, i2, arr) { return arr.indexOf(x) === i2; });     // review NIT: a number once
+                var cand = { ci: ci, yi: yi, client: c.client || '', product: c.product || '', cycle: yi + 1, start: String(by.billDate || by.actualInvoiceDate || c.start || '').slice(0, 10), sameClient: same,
+                             carries: carries, tied: (linkedTo[ci + '/' + yi] || []).filter(function (x) { return __msFilNorm(x) !== n; }) };
+                if (n && nos.indexOf(n) !== -1) {
+                    var row = rows.filter(function (a) { return __msFilNorm(a.invNo) === n; })[0];
+                    cand.row = row;
+                    cand.amountOk = (row && row.amount != null && row.amount !== '') ? Math.abs((+row.amount || 0) - (+inv.grandTotal || 0)) <= 1 : null;
+                    cand.baseOk = cand.amountOk === false && Math.abs((+row.amount || 0) - (+inv.subtotal || 0)) <= 1;   // review PARTIAL-2: the import's rows carry the base amount
+                    cand.dateOk = (row && row.date) ? String(row.date).slice(0, 10) === date : null;
+                    // the cycle follows the invoice on a tie (review RISK-2): the paid flag AND the paid dates must agree for nothing visible to change
+                    cand.cyclePaid = !!by.paid; cand.paidOk = cand.cyclePaid === (inv.status === 'Paid') && ((row && row.paidDate) || '') === __msFilPaidDate(inv) && (by.paymentDate || '') === __msFilPaidDate(inv);
+                    ledger.push(cand);
+                } else if (same && date && cand.start) {
+                    var end = __msFilAddMonths(cand.start, +by.duration || +c.term || 12);
+                    if (end && date >= cand.start && date < end) dated.push(cand);
+                }
+            });
+        });
+        var t = { inv: inv, gaps: gaps, cands: [], how: '', state: 'none', why: '' };
+        if (ledger.length) { t.how = 'ledger'; t.cands = ledger; } else if (dated.length) { t.how = 'dates'; t.cands = dated; }
+        if (t.cands.length === 1) {
+            var cd = t.cands[0], where = (cd.product || cd.client) + ', cycle ' + cd.cycle + (cd.start ? ' (from ' + __msFilDate(cd.start) + ')' : '');
+            if (t.how === 'ledger') {
+                var credit = inv.status === 'Credit Note Issued';     // review BUG-3: tying a credit-noted invoice marks the cycle as not invoiced
+                if (credit) { t.state = 'check'; t.why = 'the ledger of ' + where + ' carries this number, but the invoice is credit-noted: tying it marks the cycle as not invoiced unless the replacement invoice is tied'; }
+                else if (cd.tied.length) { t.state = 'check'; t.why = 'the ledger of ' + where + ' carries this number, but the cycle already carries the invoice ' + cd.tied.join(', ') + ' (a split billing is your call)'; }   // review RISK-1
+                else if (cd.sameClient && cd.amountOk === true && cd.dateOk === true && cd.paidOk) { t.state = 'sure'; t.why = 'the ledger of ' + where + ' carries this number; the amount, the date and the payment agree'; }
+                else if (cd.sameClient && cd.baseOk && cd.dateOk === true && cd.paidOk) { t.state = 'likely'; t.why = 'the ledger of ' + where + ' carries this number with the base amount (' + cd.row.amount + '; the invoice total includes GST) — Tie makes the row the total'; }   // review PARTIAL-2
+                else if (cd.sameClient && cd.amountOk === null && cd.dateOk === null && cd.paidOk) { t.state = 'likely'; t.why = 'the ledger of ' + where + ' carries this number (no amount or date there to compare)'; }   // review RISK-2: the number alone is a click, not sure
+                else { t.state = 'check'; t.why = 'the ledger of ' + where + ' carries this number, but ' + [!cd.sameClient ? 'the client differs (' + cd.client + ')' : '', cd.amountOk === false && !cd.baseOk ? 'the amount differs (ledger ' + cd.row.amount + ')' : '', cd.dateOk === false ? 'the date differs (ledger ' + cd.row.date + ')' : '', cd.dateOk === null && cd.amountOk !== null ? 'the ledger row has no date' : '', !cd.paidOk ? (cd.cyclePaid !== (inv.status === 'Paid') ? (cd.cyclePaid ? 'the cycle is marked paid and the invoice is not' : 'the invoice is paid and the cycle is not') : 'the paid dates differ') : ''].filter(Boolean).join(', '); }
+            } else if (!cd.carries.length) { t.state = 'likely'; t.why = where + ' covers the invoice date and carries no invoice yet'; }
+            else { t.state = 'check'; t.why = where + ' covers the date but already carries ' + cd.carries.join(', '); }
+        } else if (t.cands.length > 1) { t.state = 'check'; t.why = t.cands.length + ' cycles ' + (t.how === 'ledger' ? 'carry this number' : 'cover the date') + ': ' + t.cands.map(function (cd) { return (cd.product || cd.client) + ' cycle ' + cd.cycle; }).join('; '); }
+        else if (clientHas) { t.state = 'check'; t.why = 'the client has a contract in the app, but no cycle covers ' + (date ? __msFilDate(date) : 'the invoice date'); }
+        else { t.state = 'none'; t.why = 'no contract in the app for this client'; }
+        out.push(t);
+    });
+    return out;
+}
+// Ties the invoice to the cycle exactly as the invoice form does (the link, then the cycle takes the invoice's state),
+// saves, and reads the store back.
+function __msFilCycleSnapshot(cd) {   // the six fields a tie changes on the cycle (review PARTIAL-1), for Undo
+    var c = (typeof contracts !== 'undefined') ? contracts[cd.ci] : null, by = c && c.billingYears && c.billingYears[cd.yi];
+    if (!by) return null;
+    var o = {}; ['invoiceRaised', 'actualInvoiceDate', 'clientInvoiceNo', 'paid', 'paymentDate'].forEach(function (k) { o[k] = by[k] === undefined ? null : by[k]; });
+    try { o.arInvoices = JSON.parse(JSON.stringify(by.arInvoices || [])); } catch (e) { o.arInvoices = []; }
+    return o;
+}
+function __msFilTieOne(inv, cd) {
+    __msFilWritable('invoice'); __msFilWritable('contract');
+    inv.linkedContractIdx = String(cd.ci); inv.linkedCycleYearIdx = String(cd.yi);
+    try { if (typeof _propagateInvoiceToContractCycle === 'function') _propagateInvoiceToContractCycle(inv); } catch (e) { __msFilLog('WARN', 'cycle propagation after a tie', { error: String((e && e.message) || e) }); }
+    var saved = (typeof saveInvoices === 'function') ? saveInvoices() : undefined;
+    if (saved === false) throw new Error('the save was refused (storage full?) — the tie is not kept');
+    var stored = ''; try { stored = String(localStorage.getItem(MS_FIL_BUCKET.invoice) || ''); } catch (e) { stored = ''; }
+    if (stored) {
+        var ok = false;
+        try { ok = (JSON.parse(stored) || []).some(function (i) { return i && i.id === inv.id && String(i.linkedContractIdx) === String(cd.ci) && String(i.linkedCycleYearIdx) === String(cd.yi); }); } catch (e) { ok = true; }
+        if (!ok) throw new Error('the save did not take — the tie is not in the store');
+    }
+    __msFilLog('INFO', 'tied an invoice to its contract', { invoice: inv.invoiceNumber, client: inv.clientName, contract: cd.client + ' · ' + cd.product + ' · cycle ' + cd.cycle });
+}
+function __msFilTie(invId, ci, yi) {
+    var t = __msFilTieList().filter(function (x) { return x.inv.id === invId; })[0]; if (!t) return;
+    var cd = t.cands.filter(function (x) { return x.ci === ci && x.yi === yi; })[0]; if (!cd) return;
+    try {
+        __msFilTieOne(t.inv, cd);
+        __msFilToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> Invoice <strong>' + __msFilEsc(t.inv.invoiceNumber || '') + '</strong> tied to ' + __msFilEsc(cd.product || cd.client) + ', cycle ' + cd.cycle + '.', 4500);
+        __msFil.rev++; __msFil.plan = null;
+        __msFilRenderTies();
+        try { if (typeof renderContracts === 'function') renderContracts(); } catch (e) {}
+        try { if (typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {}
+    } catch (e) {
+        __msFilLog('ERROR', 'tie failed', { invoice: t.inv.invoiceNumber, error: String((e && e.message) || e) });
+        __msFilToast('<i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> Could not tie: ' + __msFilEsc(String((e && e.message) || e)), 6000);
+    }
+}
+async function __msFilTieAll() {
+    var sure = __msFilTieList().filter(function (t) { return t.state === 'sure'; });
+    if (!sure.length || __msFil.busy) return;
+    var lines = sure.slice(0, 40).map(function (t) { return '• ' + (t.inv.invoiceNumber || '(no number)') + ' · ' + (t.inv.clientName || '') + ' → ' + (t.cands[0].product || t.cands[0].client) + ', cycle ' + t.cands[0].cycle; });
+    if (sure.length > 40) lines.push('… and ' + (sure.length - 40) + ' more');
+    var yes = true;
+    if (typeof __msAsk === 'function') yes = await __msAsk('Tie ' + sure.length + ' invoice' + (sure.length === 1 ? '' : 's') + ' to ' + (sure.length === 1 ? 'its' : 'their') + ' contract' + (sure.length === 1 ? '' : 's') + '?\n\nEach one\'s number is on the contract\'s own ledger, with the same amount, date and payment:\n\n' + lines.join('\n') + '\n\nThe cycle then follows the invoice, as when the link is set on the invoice form.', { ok: 'Tie', cancel: 'Cancel' });
+    if (!yes) return;
+    __msFil.busy = true;
+    var n = 0, errs = [];
+    try { sure.forEach(function (t) { try { __msFilTieOne(t.inv, t.cands[0]); n++; } catch (e) { errs.push((t.inv.invoiceNumber || '(no number)') + ': ' + String((e && e.message) || e)); } }); }
+    finally { __msFil.busy = false; }
+    __msFilLog(errs.length ? 'WARN' : 'INFO', 'Tie all: done', { tied: n, failed: errs });
+    __msFil.rev++; __msFil.plan = null;
+    __msFilRenderTies();
+    try { if (typeof renderContracts === 'function') renderContracts(); } catch (e) {}
+    try { if (typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {}
+    __msFilToast('<i class="fas fa-check-circle" style="color:var(--success);"></i> ' + n + ' invoice' + (n === 1 ? '' : 's') + ' tied.' + (errs.length ? ' ' + errs.length + ' could not be — see the diagnostic log.' : ''), 5000);
+}
+function __msFilRenderTies() {
+    var host = document.getElementById('unlinkedInvoicesBody'); if (!host) return;
+    var list = __msFilTieList();
+    if (!list.length) {
+        host.innerHTML = '<div style="padding:18px; text-align:center; color:var(--text-dim); font-size:12.5px;"><i class="fas fa-check-circle" style="color:var(--success); font-size:20px; display:block; margin-bottom:6px;"></i>Every issued invoice is tied to a contract and a billing cycle.</div>';
+        return;
+    }
+    var withC = list.filter(function (t) { return t.state !== 'none'; }), noC = list.filter(function (t) { return t.state === 'none'; });
+    var sure = withC.filter(function (t) { return t.state === 'sure'; });
+    var st = { sure: ['found', 'sure — the ledger carries the number'], likely: ['found', 'likely — one click'], check: ['stale', 'look at it'] };
+    var row = function (t) {
+        var inv = t.inv, cd = t.cands.length === 1 ? t.cands[0] : null;
+        return '<tr><td class="wrap"><b>' + __msFilEsc(inv.invoiceNumber || '(no number)') + '</b><div class="ms-imp-note">' + __msFilEsc([inv.clientName, inv.invoiceDate ? __msFilDate(inv.invoiceDate) : '', inv.status].filter(Boolean).join(' · ')) + '</div></td>'
+            + '<td class="wrap">' + (t.state !== 'none' ? '<span class="ms-fil-st ' + st[t.state][0] + '">' + st[t.state][1] + '</span> ' : '') + '<span class="ms-imp-note">' + __msFilEsc(t.why) + (t.state !== 'none' ? ' — missing: ' + __msFilEsc(t.gaps.join(' + ')) : '') + '</span></td>'
+            + '<td style="white-space:nowrap; text-align:right;">' + (cd && (t.state === 'sure' || t.state === 'likely') ? '<button class="btn ' + (t.state === 'sure' ? 'btn-primary' : 'btn-ghost') + ' btn-sm" data-id="' + __msFilEsc(inv.id) + '" data-ci="' + cd.ci + '" data-yi="' + cd.yi + '" onclick="__msFilTie(this.dataset.id, +this.dataset.ci, +this.dataset.yi)" title="Tie the invoice to this contract and cycle"><i class="fas fa-link"></i> Tie</button> ' : '')
+            + '<button class="btn btn-ghost btn-sm" data-id="' + __msFilEsc(inv.id) + '" onclick="if (typeof openInvoiceForm === \'function\') openInvoiceForm(this.dataset.id)" title="Open the invoice and set its Linked Contract and Billing Cycle"><i class="fas fa-arrow-up-right-from-square"></i> Open invoice</button></td></tr>';
+    };
+    var html = '<div class="ms-imp-note" style="margin-bottom:8px;"><strong style="color:var(--warning);">' + withC.length + '</strong> invoice' + (withC.length === 1 ? '' : 's') + ' of clients with a contract in the app' + (withC.length ? ' — the app says which cycle each belongs to where it can' : '') + '; <strong>' + noC.length + '</strong> of clients with no contract in the app (service invoices — listed below).'
+        + (sure.length ? ' <button class="btn btn-primary btn-sm" style="margin-left:8px;" onclick="__msFilTieAll()" title="Ties the invoices whose number is on a contract\'s own ledger with the same amount and date"><i class="fas fa-link"></i> Tie all ' + sure.length + ' by number</button>' : '') + '</div>'
+        + (withC.length ? '<div style="overflow-x:auto;"><table class="ms-imp-table"><thead><tr><th>Invoice</th><th>What the app found</th><th></th></tr></thead><tbody>' + withC.map(row).join('') + '</tbody></table></div>' : '<div class="ms-imp-note" style="padding:6px 0;">No invoice of a client with a contract is untied.</div>')
+        + '<div class="ms-imp-sec" id="msFilSecNoContract" style="margin-top:10px;">' + __msFilSecHead('nocontract', 'No contract in the app for the client', noC.length)
+        + (__msFil.ui.open.nocontract ? (noC.length ? '<div class="ms-imp-note" style="margin:4px 0 8px;">These are the service and reimbursement invoices (consultancy, expenses re-billed, one-off work). The CA Export heads them SERVICE, which is right for a service; an invoice that belongs to a subscription needs its contract entered first — then it shows above.</div><div style="overflow-x:auto;"><table class="ms-imp-table"><thead><tr><th>Invoice</th><th></th><th></th></tr></thead><tbody>' + noC.map(row).join('') + '</tbody></table></div>' : '<div class="ms-imp-note" style="padding:6px 0;">—</div>') : '') + '</div>';
+    host.innerHTML = html;
+}
+window.__msFilRenderTies = __msFilRenderTies;   // the shim's __msRenderUnlinkedInvoices (the card's Refresh button) draws through this
+// =================== /Phase 8FI/8FJ — Files ===================
 
 // =================== Phase 8FD — Import from the Masters (Tools › Import) (10 Oct 2026) ===================
 // The engine (CA Pack/_engine/app_import.py, run by the CA pack) reads every Sales and Payments row of
