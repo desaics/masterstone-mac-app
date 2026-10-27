@@ -1769,6 +1769,30 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 }
 .table-scroll-wrap tbody td,
 .table-scroll-wrap-sm tbody td { white-space: nowrap; vertical-align: middle; }
+/* 8FK — Documents: the Template Library grouped by category; sortable column headers (any table.ms-sortable) */
+.ms-tpl-group { border: 1px solid var(--glass-border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.ms-tpl-group-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; background: var(--detail-bg); user-select: none; }
+.ms-tpl-group-head:hover .ms-tpl-group-name { color: var(--accent-cyan); }
+.ms-tpl-group-head:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: -2px; }
+.ms-tpl-group-head .ms-tpl-chev { font-size: 11px; color: var(--text-dim); transition: transform 0.15s ease; width: 12px; text-align: center; }
+.ms-tpl-group.closed .ms-tpl-chev { transform: rotate(-90deg); }
+.ms-tpl-group-name { font-weight: 700; font-size: 13.5px; color: var(--text-main); }
+.ms-tpl-group-count { font-size: 11px; font-weight: 600; color: var(--text-dim); background: var(--hover-bg); border: 1px solid var(--glass-border); border-radius: 10px; padding: 1px 8px; }
+.ms-tpl-group-meta { color: var(--text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.ms-tpl-group.closed .ms-tpl-group-body { display: none; }
+.ms-tpl-group-body .table-scroll-wrap { border: none; border-radius: 0; border-top: 1px solid var(--glass-border); }
+table.ms-sortable thead th[data-sort] { cursor: pointer; user-select: none; }
+table.ms-sortable thead th[data-sort]:hover { color: var(--text-main); }
+table.ms-sortable thead th[data-sort]::after { content: '\2195'; margin-left: 6px; opacity: 0.35; font-size: 10px; }
+table.ms-sortable thead th[data-sort].ms-sort-asc::after { content: '\2191'; opacity: 1; color: var(--accent-cyan); }
+table.ms-sortable thead th[data-sort].ms-sort-desc::after { content: '\2193'; opacity: 1; color: var(--accent-cyan); }
+table.ms-sortable thead th[data-sort]:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: -2px; }
+.ms-tpl-group-body table { table-layout: fixed; }
+.ms-tpl-group-body table th:nth-child(2), .ms-tpl-group-body table td:nth-child(2) { width: 110px; }
+.ms-tpl-group-body table th:nth-child(3), .ms-tpl-group-body table td:nth-child(3) { width: 150px; }
+.ms-tpl-group-body table th:nth-child(4), .ms-tpl-group-body table td:nth-child(4) { width: 250px; }
+.ms-tpl-group-body table td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.ms-tpl-group.searching .ms-tpl-group-head { cursor: default; }
 
 /* 8FH.3 — a register fitted to the window (the invoices list, the Payables register, the consultant register):
    fixed column widths from the <colgroup>, the text columns wrap, the date / amount / status columns do not, and the
@@ -10999,22 +11023,19 @@ window.__msRenderMissingOneDriveLinks = function () {
       <i class="fas fa-wand-magic-sparkles" style="color:var(--accent-cyan); margin-right:6px;"></i><strong style="color:var(--text-main);">Upload Word (.docx):</strong> fill spots are detected automatically — a run of 3+ underscores becomes <code>{{Blank N}}</code>, <code>[Field]</code> and <code>&lt;Field&gt;</code> become <code>{{Field}}</code>, and any existing <code>{{Field}}</code> markers are kept as-is. Word formatting (bold, lists, tables) is preserved. Old <code>.doc</code> files aren't supported — re-save as <code>.docx</code> first.
     </div>
     <div class="card" style="margin-bottom:24px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
-        <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open"></i> Template Library</h3>
-        <input id="tplSearch" type="text" placeholder="Search templates…" oninput="renderTemplateLibrary()" style="width:220px; padding:7px 0; font-size:13px;">
+      <!-- 8FK — one block per category (collapsible, remembered on this Mac), sortable columns, the search across every group -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:12px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+          <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-open"></i> Template Library</h3>
+          <span id="tplLibrarySummary" style="color:var(--text-dim); font-size:12px;"></span>
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+          <span style="font-size:12px; color:var(--text-dim); white-space:nowrap;"><a href="#" id="tplExpandAll" onclick="__msTplGroupsAll(true); return false;" style="color:var(--accent-cyan);">Expand all</a> · <a href="#" id="tplCollapseAll" onclick="__msTplGroupsAll(false); return false;" style="color:var(--accent-cyan);">Collapse all</a></span>
+          <input id="tplSearch" type="text" placeholder="Search templates…" oninput="renderTemplateLibrary()" style="width:220px; padding:7px 0; font-size:13px;">
+        </div>
       </div>
-      <div class="table-scroll-wrap">
-        <table id="tplLibraryTable">
-          <thead><tr>
-            <th>Template Name</th>
-            <th>Category</th>
-            <th>Fields</th>
-            <th>Last Edited</th>
-            <th style="text-align:right;">Actions</th>
-          </tr></thead>
-          <tbody id="tplLibraryBody"></tbody>
-        </table>
-      </div>
+      <p style="color:var(--text-dim); font-size:12px; margin:0 0 12px 0;">One block per category — click a heading to open or close it; click a column heading to sort (again to reverse, a third time for the usual order).</p>
+      <div id="tplLibraryGroups"></div>
     </div>
   </div>
 
@@ -11036,7 +11057,8 @@ window.__msRenderMissingOneDriveLinks = function () {
         </div>
         <div>
           <label style="display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;">Category <span style="opacity:0.6;">(optional)</span></label>
-          <input id="tplCategory" type="text" placeholder="e.g. Customs, Compliance, Certificates" style="width:100%; padding:8px 0; font-size:13px;">
+          <input id="tplCategory" type="text" list="tplCategoryList" placeholder="e.g. Customs, Compliance, Certificates" style="width:100%; padding:8px 0; font-size:13px;">
+          <datalist id="tplCategoryList"></datalist>
         </div>
       </div>
 
@@ -11193,12 +11215,12 @@ window.__msRenderMissingOneDriveLinks = function () {
     </div>
     <p style="color:var(--text-dim); font-size:12.5px; margin:0 0 14px 0;">Documents you generated from a template and chose to save. Assign each to a client (or mark as <strong>Other</strong>). Once printed, signed and scanned, use <strong>Mark Issued</strong> to attach the signed PDF — the issued copy then becomes the version stored and available for export bundles.</p>
     <div class="table-scroll-wrap">
-      <table id="genDocsTable">
+      <table id="genDocsTable" class="ms-sortable">
         <thead><tr>
-          <th>Document</th>
-          <th>Client / For</th>
-          <th>Created</th>
-          <th>Status</th>
+          <th data-sort="text">Document</th>
+          <th data-sort="text">Client / For</th>
+          <th data-sort="date">Created</th>
+          <th data-sort="text">Status</th>
           <th style="text-align:right;">Actions</th>
         </tr></thead>
         <tbody id="genDocsBody"></tbody>
@@ -13848,7 +13870,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FJ-2026-10-21";   // 8FJ — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FK-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -46963,11 +46985,12 @@ function renderGeneratedDocs() {
         return '<tr>' +
             '<td><strong>' + pEsc(d.templateName || 'Document') + '</strong></td>' +
             '<td>' + who + '</td>' +
-            '<td>' + __msFmtDateShort(d.createdAt) + (d.updatedAt ? ' <span style="color:var(--text-dim); font-size:11px;" title="Last edited ' + pEsc(__msFmtDateShort(d.updatedAt)) + '">· edited</span>' : '') + '</td>' +
+            '<td data-sort="' + (Date.parse(d.createdAt) || Number(d.createdAt) || '') + '">' + __msFmtDateShort(d.createdAt) + (d.updatedAt ? ' <span style="color:var(--text-dim); font-size:11px;" title="Last edited ' + pEsc(__msFmtDateShort(d.updatedAt)) + '">· edited</span>' : '') + '</td>' +
             '<td>' + statusBadge + '</td>' +
             '<td style="text-align:right; white-space:nowrap;">' + actions + '</td>' +
         '</tr>';
     }).join('');
+    __msSortRefresh('genDocsTable');   // 8FK — the chosen column order on the new rows
 }
 
 // ---- View / re-print --------------------------------------------------
@@ -55985,6 +56008,167 @@ async function __msExpCaChallansRows(start, end) {
 }
 // =================== /Phase 8FG — TDS, GST and professional-tax challans on the Expenses page ===================
 
+// =================== Phase 8FK — sortable tables ===================
+// Any <table class="ms-sortable"> whose header cells carry data-sort="text|num|date" sorts its rows when a header is
+// clicked: the first click sorts (text A→Z; numbers and dates largest or newest first), the second reverses, the third
+// puts the page's own order back. The choice is remembered per table (its data-sort-key, else its id) in localStorage
+// ms_sort_v1 — a per-Mac preference, never in the database. A cell may carry the value to sort by in data-sort (a
+// number, an ISO date or a timestamp); otherwise its text is read: ₹1,23,456 / 12.3 L / 1.2 Cr / 12% / (1,000) as
+// numbers, "07 Apr 2021" / 2021-04-07 / 07/04/2021 / "Apr 2021" as dates, anything else as text; an empty cell or a dash
+// sorts last either way. Rows that must not move keep their place: an empty-state or a totals row (any row with a
+// spanning cell, or data-sort-fixed); a row marked data-sort-follow moves with the row above it (a detail row under its
+// record). A page re-renders its table exactly as it did before and then calls __msSortRefresh(table) so the chosen
+// order is applied to the new rows; nothing here reads or writes a record. The contract, for the pages that adopt it
+// (8FL): one header row (a header cell may span columns — the mapping follows colSpan); every <tbody> is sorted on its
+// own; a data row that spans columns is taken for a fixed row (mark a spanning data row with data-sort-row to move
+// it); the "page's own order" is the order the rows had when first seen, so a page that inserts rows later should
+// re-render instead; a table with neither data-sort-key nor id sorts but is not remembered. An ISO date-time keeps its
+// time (two documents of the same day order by the hour).
+var MS_SORT_KEY = 'ms_sort_v1';
+var MS_SORT_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
+var __msSortState = null;
+function __msSortLoad() {
+    if (__msSortState) return __msSortState;
+    var o = {};
+    try { var raw = localStorage.getItem(MS_SORT_KEY); if (raw) { var p = JSON.parse(raw); if (p && typeof p === 'object' && !Array.isArray(p)) o = p; } } catch (e) { o = {}; }
+    __msSortState = o;
+    return o;
+}
+function __msSortSave() {
+    var all = __msSortLoad(), keep = {};
+    Object.keys(all).forEach(function (k) { if (k.indexOf('anon:') !== 0) keep[k] = all[k]; });
+    try { localStorage.setItem(MS_SORT_KEY, JSON.stringify(keep)); } catch (e) {}
+}
+var __msSortAnon = 0;
+function __msSortKeyOf(table) {
+    if (!table) return '';
+    var k = table.getAttribute('data-sort-key') || table.id;
+    if (k) return k;
+    if (!table.__msSortAnon) table.__msSortAnon = 'anon:' + (++__msSortAnon);     // no key of its own: sorted, not remembered
+    return table.__msSortAnon;
+}
+function __msSortColOf(th) {           // the body column a header cell starts at (a header may span columns)
+    var col = 0, cells = __msSortHeads(th.closest('table'));
+    for (var i = 0; i < cells.length; i++) { if (cells[i] === th) return col; col += cells[i].colSpan || 1; }
+    return -1;
+}
+function __msSortHeads(table) { return (table && table.tHead && table.tHead.rows[0]) ? Array.prototype.slice.call(table.tHead.rows[0].cells) : []; }
+function __msSortParseNum(text) {
+    var s = String(text || '').replace(/,/g, '').trim();
+    if (!s) return null;
+    var m = /-?\d+(?:\.\d+)?/.exec(s);
+    if (!m) return null;
+    var n = parseFloat(m[0]);
+    if (/^\(.*\)$/.test(s) || /^\s*[−–-]\s*[₹$€£]?\s*\d/.test(s)) n = -Math.abs(n);     // (1,000), or a minus / en dash in front of the figure (not "FY 2024–25")
+    var after = s.slice(m.index + m[0].length).trim();
+    if (/^Cr\b/i.test(after)) n *= 1e7; else if (/^L\b/.test(after)) n *= 1e5; else if (/^K\b/.test(after)) n *= 1e3;
+    return n;
+}
+function __msSortParseDate(text) {
+    var s = String(text || '').trim();
+    if (!s) return null;
+    var m;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) { var t = Date.parse(s); if (!isNaN(t)) return t; }          // an ISO date-time keeps its time
+    if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    if ((m = /(\d{1,2})[\s\-\/]+([A-Za-z]{3,4})\.?[\s\-\/,]+(\d{4})/.exec(s)) && MS_SORT_MONTHS[m[2].toLowerCase()] !== undefined) return Date.UTC(+m[3], MS_SORT_MONTHS[m[2].toLowerCase()], +m[1]);
+    if ((m = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s))) return Date.UTC(+m[3], +m[2] - 1, +m[1]);
+    if ((m = /\b([A-Za-z]{3,4})\.?\s+(\d{4})\b/.exec(s)) && MS_SORT_MONTHS[m[1].toLowerCase()] !== undefined) return Date.UTC(+m[2], MS_SORT_MONTHS[m[1].toLowerCase()], 1);
+    return null;
+}
+function __msSortCellValue(td, kind) {
+    if (!td) return null;
+    var raw = td.getAttribute('data-sort');
+    var text = raw !== null ? raw : td.textContent;
+    if (kind === 'num') return __msSortParseNum(text);
+    if (kind === 'date') { if (raw !== null && /^-?\d{6,}$/.test(raw.trim())) return +raw; return __msSortParseDate(text); }
+    return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function __msSortCompare(a, b, kind, dir) {
+    var ea = (a === null || a === undefined || a === '' || (typeof a === 'number' && isNaN(a)));
+    var eb = (b === null || b === undefined || b === '' || (typeof b === 'number' && isNaN(b)));
+    if (ea && eb) return 0;
+    if (ea) return 1;          // an empty cell sorts last either way
+    if (eb) return -1;
+    var c = (kind === 'text') ? String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }) : (a - b);
+    return dir === 'desc' ? -c : c;
+}
+function __msSortFixed(tr) {
+    if (tr.hasAttribute('data-sort-fixed')) return true;
+    if (tr.hasAttribute('data-sort-row')) return false;
+    for (var i = 0; i < tr.cells.length; i++) if (tr.cells[i].colSpan > 1) return true;
+    return false;
+}
+function __msSortApply(table) {
+    if (!table || !table.tBodies || !table.tBodies.length) return;
+    var key = __msSortKeyOf(table), st = __msSortLoad()[key] || null;
+    var ths = __msSortHeads(table), th = null;
+    ths.forEach(function (h) {
+        if (!h.hasAttribute('data-sort')) return;
+        if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '0');
+        if (!h.getAttribute('title')) h.setAttribute('title', 'Sort by ' + h.textContent.replace(/\s+/g, ' ').trim() + ' (click again to reverse, a third time for the usual order)');
+        h.classList.remove('ms-sort-asc', 'ms-sort-desc'); h.removeAttribute('aria-sort');
+        if (st && __msSortColOf(h) === st.col) { th = h; h.classList.add(st.dir === 'desc' ? 'ms-sort-desc' : 'ms-sort-asc'); h.setAttribute('aria-sort', st.dir === 'desc' ? 'descending' : 'ascending'); }
+    });
+    for (var b = 0; b < table.tBodies.length; b++) __msSortBody(table.tBodies[b], th, st);
+}
+function __msSortBody(tbody, th, st) {
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.forEach(function (r, i) { if (r.__msSortIdx === undefined) r.__msSortIdx = i; });   // the page's own order, remembered the first time the rows are seen
+    var units = [], cur = null;
+    rows.forEach(function (r) {
+        if (cur && r.hasAttribute('data-sort-follow')) { cur.rows.push(r); return; }
+        cur = { head: r, rows: [r], fixed: __msSortFixed(r) };
+        units.push(cur);
+    });
+    var movable = units.filter(function (u) { return !u.fixed; });
+    if (th && st) {
+        var kind = th.getAttribute('data-sort') || 'text', col = st.col;
+        movable.forEach(function (u) { u.v = __msSortCellValue(u.head.cells[col], kind); });
+        movable.sort(function (x, y) { return __msSortCompare(x.v, y.v, kind, st.dir) || (x.head.__msSortIdx - y.head.__msSortIdx); });
+    } else {
+        movable.sort(function (x, y) { return x.head.__msSortIdx - y.head.__msSortIdx; });
+    }
+    var mi = 0, frag = document.createDocumentFragment();
+    units.forEach(function (u) { (u.fixed ? u : movable[mi++]).rows.forEach(function (r) { frag.appendChild(r); }); });   // a fixed row keeps its slot
+    tbody.appendChild(frag);
+}
+function __msSortRefresh(t) {
+    if (typeof t === 'string') t = document.getElementById(t);
+    if (t && t.tagName === 'TABLE') __msSortApply(t);
+}
+function __msSortRefreshKey(key) {
+    var ts = document.querySelectorAll('table.ms-sortable');
+    for (var i = 0; i < ts.length; i++) if (__msSortKeyOf(ts[i]) === key) __msSortApply(ts[i]);
+}
+function __msSortClick(th) {
+    var table = th.closest('table');
+    if (!table || !table.classList.contains('ms-sortable')) return;
+    var col = __msSortColOf(th);
+    if (col < 0) return;
+    var kind = th.getAttribute('data-sort') || 'text';
+    var key = __msSortKeyOf(table), all = __msSortLoad(), st = all[key];
+    var first = (kind === 'text') ? 'asc' : 'desc';
+    var next;
+    if (!st || st.col !== col) next = { col: col, dir: first };
+    else if (st.dir === first) next = { col: col, dir: first === 'asc' ? 'desc' : 'asc' };
+    else next = null;                                   // the third click: the page's own order
+    if (next) all[key] = next; else delete all[key];
+    __msSortSave();
+    __msSortRefreshKey(key);
+}
+document.addEventListener('click', function (e) {
+    var th = (e.target && e.target.closest) ? e.target.closest('th[data-sort]') : null;
+    if (th) __msSortClick(th);
+});
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var th = e.target;
+    if (!th || th.tagName !== 'TH' || !th.hasAttribute('data-sort')) return;
+    e.preventDefault();
+    __msSortClick(th);
+});
+// =================== /Phase 8FK — sortable tables ===================
+
 var MS_TEMPLATES_KEY = 'ms_templates_v1';
 var __msTemplates = null;          // in-memory cache: array of template objects
 var __msEditingTemplateId = null;  // id being edited, or null for new
@@ -57121,6 +57305,7 @@ function openTemplateEditor(id) {
     var catEl = document.getElementById('tplCategory');
     var bodyEl = document.getElementById('tplBody');
     var htmlEl = document.getElementById('tplBodyHtml');
+    __msTplFillCategoryList();   // 8FK — the categories in use, as a pick-list on the Category field
     if (id) {
         var t = __msLoadTemplates().find(function (x) { return x.id === id; });
         if (!t) { __msToast('Template not found', 'error'); return; }
@@ -57204,6 +57389,7 @@ function saveTemplateFromEditor() {
         list.push(__rec);
     }
     __msPersistTemplates();
+    __msTplRevealGroup(category);   // 8FK — its group opens if it was closed
     __msToast('Template saved', 'success');
     showTemplateLibrary();
 }
@@ -57217,6 +57403,7 @@ function duplicateTemplate(id) {
     if (t.includeCompanyHeader) __rec.includeCompanyHeader = true; // 8EB
     list.push(__rec);
     __msPersistTemplates();
+    __msTplRevealGroup(__rec.category);   // 8FK — its group opens if it was closed
     __msToast('Template duplicated', 'success');
     renderTemplateLibrary();
 }
@@ -57233,41 +57420,154 @@ async function deleteTemplate(id) {
     renderTemplateLibrary();
 }
 
-// ---- Library render --------------------------------------------------
+// ---- Library render — 8FK: one block per category, each a collapsible section with sortable columns -----------------
+// Templates are grouped by category (the spelling compared without case, so "Tender" and "tender" are one group; the
+// group shows the spelling most of its templates use); "No category" sits last. A group's header carries the count and
+// the latest edit; clicking it closes or opens the group and the choice is remembered on this Mac (localStorage
+// ms_tpl_groups_v1 — closed groups only; everything else is open). The column headers sort (the 8FK sorter; one choice
+// for the whole library, ms_sort_v1 key "tplLibrary"). The search box filters across every group: groups with nothing
+// matching are not shown, groups with a match are shown open — and while a search is on, the headings and Expand /
+// Collapse all do nothing (review BUG-2: a click used to change what is remembered without changing the screen). A
+// template saved or duplicated into a closed group opens it (review NIT-13).
+var MS_TPL_GROUPS_KEY = 'ms_tpl_groups_v1';
+var __msTplGroups = null;
+function __msTplGroupsLoad() {
+    if (__msTplGroups) return __msTplGroups;
+    var g = { closed: {} };
+    try { var raw = localStorage.getItem(MS_TPL_GROUPS_KEY); if (raw) { var p = JSON.parse(raw); if (p && typeof p === 'object' && p.closed && typeof p.closed === 'object') g = { closed: p.closed }; } } catch (e) {}
+    __msTplGroups = g;
+    return g;
+}
+function __msTplGroupsSave() { try { localStorage.setItem(MS_TPL_GROUPS_KEY, JSON.stringify(__msTplGroupsLoad())); } catch (e) {} }
+function __msTplGroupsPrune(cats) {               // a category that is gone is forgotten (review NIT-14)
+    var g = __msTplGroupsLoad(), live = {}, changed = false;
+    (cats || __msTplCategories(__msLoadTemplates())).forEach(function (c) { live[c.key] = true; });
+    Object.keys(g.closed).forEach(function (k) { if (!live[k]) { delete g.closed[k]; changed = true; } });
+    if (changed) __msTplGroupsSave();
+}
+function __msTplCatKey(cat) { return String(cat || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+function __msTplWhen(t) { var v = t && (t.updatedAt || t.createdAt); if (!v) return 0; if (typeof v === 'number') return v; var n = Number(v); if (n) return n; var p = Date.parse(v); return isNaN(p) ? 0 : p; }   // a timestamp, or an ISO string from a hand-edited backup (review RISK-9)
+function __msTplSearchText() { return ((document.getElementById('tplSearch') || {}).value || '').trim(); }
+function __msTplCategories(list) {
+    var byKey = {}, out = [];
+    (list || []).forEach(function (t) {
+        var key = __msTplCatKey(t.category);
+        var g = byKey[key];
+        if (!g) { g = byKey[key] = { key: key, label: '', items: [], last: 0, spellings: {} }; out.push(g); }
+        g.items.push(t);
+        var when = __msTplWhen(t);
+        if (when > g.last) g.last = when;
+        if (key) { var sp = String(t.category).trim().replace(/\s+/g, ' '); g.spellings[sp] = (g.spellings[sp] || 0) + 1; }
+    });
+    out.forEach(function (g) {
+        if (!g.key) { g.label = 'No category'; return; }
+        var best = '', n = -1;
+        Object.keys(g.spellings).forEach(function (sp) { if (g.spellings[sp] > n || (g.spellings[sp] === n && sp < best)) { best = sp; n = g.spellings[sp]; } });
+        g.label = best;
+    });
+    out.sort(function (a, b) {
+        if (!a.key !== !b.key) return a.key ? -1 : 1;                           // "No category" last
+        return a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return out;
+}
+function __msTplCategoryNames() { return __msTplCategories(__msLoadTemplates()).filter(function (g) { return g.key; }).map(function (g) { return g.label; }); }
+function __msTplFillCategoryList() {
+    var dl = document.getElementById('tplCategoryList');
+    if (!dl) return;
+    dl.innerHTML = __msTplCategoryNames().map(function (n) { return '<option value="' + pEsc(n) + '"></option>'; }).join('');
+}
+function __msTplToggleGroup(el) {
+    var host = el && el.closest ? el.closest('.ms-tpl-group') : null;
+    if (!host) return;
+    if (__msTplSearchText()) return;                   // under a search every matching group is shown open; nothing to toggle (review BUG-2)
+    var key = host.getAttribute('data-cat') || '';
+    var g = __msTplGroupsLoad();
+    if (g.closed[key]) delete g.closed[key]; else g.closed[key] = true;
+    __msTplGroupsSave();
+    renderTemplateLibrary();
+    __msTplFocusGroup(key);                              // the heading was redrawn: keep the keyboard where it was (review PARTIAL-3)
+}
+function __msTplFocusGroup(key) {
+    var groups = document.querySelectorAll('#tplLibraryGroups .ms-tpl-group');
+    for (var i = 0; i < groups.length; i++) if ((groups[i].getAttribute('data-cat') || '') === key) { var h = groups[i].querySelector('.ms-tpl-group-head'); if (h) h.focus(); return; }
+}
+function __msTplGroupsAll(open) {
+    if (__msTplSearchText()) return;                   // review BUG-2
+    var g = __msTplGroupsLoad();
+    g.closed = {};
+    if (!open) __msTplCategories(__msLoadTemplates()).forEach(function (c) { g.closed[c.key] = true; });
+    __msTplGroupsSave();
+    renderTemplateLibrary();
+}
+function __msTplRevealGroup(category) {              // a template saved or duplicated into a closed group: the group opens (review NIT-13)
+    var g = __msTplGroupsLoad(), key = __msTplCatKey(category);
+    if (g.closed[key]) { delete g.closed[key]; __msTplGroupsSave(); }
+}
+function __msTplRowHtml(t) {
+    var fields = __msDetectFields(t.body);
+    var fieldsLabel = fields.length === 0 ? '<span style="color:var(--text-dim);">none</span>'
+        : '<span title="' + pEsc(fields.join(', ')) + '">' + fields.length + ' field' + (fields.length === 1 ? '' : 's') + '</span>';
+    var when = __msTplWhen(t);
+    return '<tr>' +
+        '<td><strong>' + pEsc(t.name || '') + '</strong></td>' +
+        '<td data-sort="' + fields.length + '">' + fieldsLabel + '</td>' +
+        '<td data-sort="' + when + '">' + __msFmtDateShort(t.updatedAt || t.createdAt) + '</td>' +
+        '<td style="text-align:right; white-space:nowrap;">' +
+            '<button class="btn btn-primary btn-sm" onclick="openTemplateFill(\'' + t.id + '\')" title="Fill & preview"><i class="fas fa-pen-to-square"></i> Use</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + t.id + '\')" title="Edit"><i class="fas fa-pen"></i></button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="duplicateTemplate(\'' + t.id + '\')" title="Duplicate"><i class="fas fa-copy"></i></button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="deleteTemplate(\'' + t.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>' +
+        '</td>' +
+    '</tr>';
+}
 function renderTemplateLibrary() {
-    var body = document.getElementById('tplLibraryBody');
-    if (!body) return;
-    var list = __msLoadTemplates().slice();
-    var q = (document.getElementById('tplSearch') || {}).value || '';
-    q = q.trim().toLowerCase();
-    if (q) {
-        list = list.filter(function (t) {
-            return (String(t.name || '').toLowerCase().indexOf(q) !== -1) ||
-                   (String(t.category || '').toLowerCase().indexOf(q) !== -1);
-        });
+    var host = document.getElementById('tplLibraryGroups');
+    if (!host) return;
+    var all = __msLoadTemplates().slice();
+    var qRaw = __msTplSearchText(), q = qRaw.toLowerCase();
+    var cats = __msTplCategories(all);
+    __msTplGroupsPrune(cats);
+    var summary = document.getElementById('tplLibrarySummary');
+    if (summary) {
+        var named = cats.filter(function (c) { return c.key; }).length, none = cats.length > named ? cats[cats.length - 1].items.length : 0;
+        summary.textContent = !all.length ? '' : (all.length + ' template' + (all.length === 1 ? '' : 's') + (named ? ' in ' + named + ' categor' + (named === 1 ? 'y' : 'ies') + (none ? ' + ' + none + ' with none' : '') : ', none in a category'));
     }
-    list.sort(function (a, b) { return String(a.name || '').toLowerCase() < String(b.name || '').toLowerCase() ? -1 : 1; });
-    if (list.length === 0) {
-        body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-dim);">No templates yet. Click <strong>New Template</strong> to create one.</td></tr>';
+    var links = document.getElementById('tplExpandAll') && document.getElementById('tplExpandAll').parentNode;
+    if (links) { links.style.opacity = q ? '0.45' : ''; links.title = q ? 'Clear the search to open or close categories' : ''; }
+    if (all.length === 0) {
+        host.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-dim);">No templates yet. Click <strong>New Template</strong> to create one.</div>';
         return;
     }
-    body.innerHTML = list.map(function (t) {
-        var fields = __msDetectFields(t.body);
-        var fieldsLabel = fields.length === 0 ? '<span style="color:var(--text-dim);">none</span>'
-            : '<span title="' + pEsc(fields.join(', ')) + '">' + fields.length + ' field' + (fields.length === 1 ? '' : 's') + '</span>';
-        return '<tr>' +
-            '<td><strong>' + pEsc(t.name || '') + '</strong></td>' +
-            '<td>' + (t.category ? pEsc(t.category) : '<span style="color:var(--text-dim);">—</span>') + '</td>' +
-            '<td>' + fieldsLabel + '</td>' +
-            '<td>' + __msFmtDateShort(t.updatedAt || t.createdAt) + '</td>' +
-            '<td style="text-align:right; white-space:nowrap;">' +
-                '<button class="btn btn-primary btn-sm" onclick="openTemplateFill(\'' + t.id + '\')" title="Fill & preview"><i class="fas fa-pen-to-square"></i> Use</button> ' +
-                '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + t.id + '\')" title="Edit"><i class="fas fa-pen"></i></button> ' +
-                '<button class="btn btn-ghost btn-sm" onclick="duplicateTemplate(\'' + t.id + '\')" title="Duplicate"><i class="fas fa-copy"></i></button> ' +
-                '<button class="btn btn-ghost btn-sm" onclick="deleteTemplate(\'' + t.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>' +
-            '</td>' +
-        '</tr>';
+    var shown = cats.map(function (c) {
+        var items = q ? c.items.filter(function (t) { return String(t.name || '').toLowerCase().indexOf(q) !== -1 || String(t.category || '').toLowerCase().indexOf(q) !== -1; }) : c.items;
+        return { key: c.key, label: c.label, items: items, last: c.last, total: c.items.length };
+    }).filter(function (c) { return c.items.length; });
+    if (shown.length === 0) {
+        host.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-dim);">No template matches "' + pEsc(qRaw) + '".</div>';
+        return;
+    }
+    var closed = __msTplGroupsLoad().closed;
+    host.innerHTML = shown.map(function (c, i) {
+        var open = q ? true : !closed[c.key];
+        var title = q ? 'Shown open for the search — clear the search to open or close categories' : ((open ? 'Collapse' : 'Expand') + ' this category');
+        return '<div class="ms-tpl-group' + (open ? '' : ' closed') + (q ? ' searching' : '') + '" data-cat="' + pEsc(c.key) + '">' +
+            '<div class="ms-tpl-group-head" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '" onclick="__msTplToggleGroup(this)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') { event.preventDefault(); __msTplToggleGroup(this); }" title="' + title + '">' +
+                '<i class="fas fa-chevron-down ms-tpl-chev"></i>' +
+                '<span class="ms-tpl-group-name">' + pEsc(c.label) + '</span>' +
+                '<span class="ms-tpl-group-count" title="' + (q ? c.items.length + ' of ' + c.total + ' match' : c.total + ' template' + (c.total === 1 ? '' : 's')) + '">' + (q && c.items.length !== c.total ? c.items.length + ' of ' + c.total : c.total) + '</span>' +
+                '<span class="ms-tpl-group-meta">last edited ' + __msFmtDateShort(c.last) + '</span>' +
+            '</div>' +
+            '<div class="ms-tpl-group-body"><div class="table-scroll-wrap" style="max-height:none;">' +
+                '<table class="ms-sortable" data-sort-key="tplLibrary" id="tplLib_' + i + '">' +
+                    '<thead><tr><th data-sort="text">Template Name</th><th data-sort="num">Fields</th><th data-sort="date">Last Edited</th><th style="text-align:right;">Actions</th></tr></thead>' +
+                    '<tbody>' + c.items.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }); }).map(__msTplRowHtml).join('') + '</tbody>' +
+                '</table>' +
+            '</div></div>' +
+        '</div>';
     }).join('');
+    var tables = host.querySelectorAll('table.ms-sortable');
+    for (var k = 0; k < tables.length; k++) __msSortRefresh(tables[k]);
 }
 
 // ---- First-run seeding -----------------------------------------------
