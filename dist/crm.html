@@ -1779,6 +1779,11 @@ input:checked + .toggle-switch::after { transform: translateX(16px); }
 .ms-tpl-group-name { font-weight: 700; font-size: 13.5px; color: var(--text-main); }
 .ms-tpl-group-count { font-size: 11px; font-weight: 600; color: var(--text-dim); background: var(--hover-bg); border: 1px solid var(--glass-border); border-radius: 10px; padding: 1px 8px; }
 .ms-tpl-group-meta { color: var(--text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.ms-tpl-group-tally { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.ms-gendoc-table th:nth-child(2), .ms-gendoc-table td:nth-child(2) { width: 170px; }
+.ms-gendoc-table th:nth-child(3), .ms-gendoc-table td:nth-child(3) { width: 90px; }
+.ms-gendoc-table th:nth-child(4), .ms-gendoc-table td:nth-child(4) { width: 250px; }
+.ms-list-count { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .ms-tpl-group.closed .ms-tpl-group-body { display: none; }
 .ms-tpl-group-body .table-scroll-wrap { border: none; border-radius: 0; border-top: 1px solid var(--glass-border); }
 table.ms-sortable thead th[data-sort] { cursor: pointer; user-select: none; }
@@ -1788,9 +1793,9 @@ table.ms-sortable thead th[data-sort].ms-sort-asc::after { content: '\2191'; opa
 table.ms-sortable thead th[data-sort].ms-sort-desc::after { content: '\2193'; opacity: 1; color: var(--accent-cyan); }
 table.ms-sortable thead th[data-sort]:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: -2px; }
 .ms-tpl-group-body table { table-layout: fixed; }
-.ms-tpl-group-body table th:nth-child(2), .ms-tpl-group-body table td:nth-child(2) { width: 110px; }
-.ms-tpl-group-body table th:nth-child(3), .ms-tpl-group-body table td:nth-child(3) { width: 150px; }
-.ms-tpl-group-body table th:nth-child(4), .ms-tpl-group-body table td:nth-child(4) { width: 250px; }
+.ms-tpl-group-body table[data-sort-key="tplLibrary"] th:nth-child(2), .ms-tpl-group-body table[data-sort-key="tplLibrary"] td:nth-child(2) { width: 110px; }
+.ms-tpl-group-body table[data-sort-key="tplLibrary"] th:nth-child(3), .ms-tpl-group-body table[data-sort-key="tplLibrary"] td:nth-child(3) { width: 150px; }
+.ms-tpl-group-body table[data-sort-key="tplLibrary"] th:nth-child(4), .ms-tpl-group-body table[data-sort-key="tplLibrary"] td:nth-child(4) { width: 250px; }
 .ms-tpl-group-body table td:first-child { white-space: normal; overflow-wrap: anywhere; }
 .ms-tpl-group.searching .ms-tpl-group-head { cursor: default; }
 
@@ -1806,6 +1811,7 @@ table.ms-reg-fit { table-layout: fixed; width: 100%; }
 .table-scroll-wrap table.ms-reg-fit tbody td.ms-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
 table.ms-reg-fit .btn-sm { padding: 4px 8px; }
 table.ms-reg-fit .con-tds-note { white-space: normal !important; }   /* the TDS line under a total wraps inside its column */
+table.ms-reg-fit .ms-rmt-mark { white-space: normal; }   /* 8FL — the "remitted … · Record" line under a payment date wraps inside its column */
 
 /* =================== CLIENT SUMMARY STYLES =================== */
 .client-header-card {
@@ -7406,13 +7412,13 @@ window.__msRenderMissingOneDriveLinks = function () {
   <!-- Phase 8BK — Tools section: utilities that aren't tied to CRM data flow.
        CA Export moved here from Finance; Documents is the new template module. -->
   <div class="nav-section-header">Tools</div>
-  <div class="nav-item" title="Documents" onclick="showTab('documentsTab')"><i class="fas fa-file-lines"></i> Documents</div>
+  <div class="nav-item" title="Templates — letters, declarations and certificates on your letterhead" onclick="showTab('documentsTab')"><i class="fas fa-file-lines"></i> Templates</div>
   <!-- 8BC — CA Export: monthly GST-filing-style Excel for the CA. Two sheets
        (Sales + Payments), exact column layout matching pre-CRM Master file. -->
   <div class="nav-item" title="CA Export" onclick="showTab('caExportTab')"><i class="fas fa-file-export"></i> CA Export</div>
   <!-- Phase 8BV — Document Export hub: per-deal Remittance Bundle + per-client
        Document Pack as .zip with an INDEX.txt checklist. -->
-  <div class="nav-item" title="Document Export" onclick="showTab('docExportTab')"><i class="fas fa-box-archive"></i> Document Export</div>
+  <div class="nav-item" title="Document Packs — the Remittance Bundle and the Client Document Pack, zipped with an index" onclick="showTab('docExportTab')"><i class="fas fa-box-archive"></i> Document Packs</div>
   <!-- 8FD — Import from the Masters: what the engine read from Files/Masters, the PDFs and the bank lines, proposed for the app. -->
   <!-- 8FI — Files: the app's records against the Files folders (the engine's list of every document file). -->
   <div class="nav-item" title="Files" onclick="showTab('filesTab')"><i class="fas fa-folder-tree"></i> Files</div>
@@ -7908,6 +7914,7 @@ window.__msRenderMissingOneDriveLinks = function () {
             <option value="ALL">All Years</option>
           </select>
           <div id="fyBasisTogglePortfolio"></div>
+          <span id="portfolioCount" class="ms-list-count"></span>
         </div>
         <select id="portfolioStatusFilter" onchange="renderContracts()" style="width:180px;">
           <option value="ACTIVE">Active Only</option>
@@ -7918,17 +7925,17 @@ window.__msRenderMissingOneDriveLinks = function () {
     </div>
 
     <div class="sp-table-wrap">
-      <table id="contractTable" class="sp-table">
+      <table id="contractTable" class="sp-table ms-sortable">
         <thead>
           <tr>
-            <th style="width:30%;">Client / Product</th>
+            <th style="width:30%;" data-sort="text">Client / Product</th>
             <th>PO No.</th>
-            <th style="text-align:right; width:78px;">Lic.</th>
-            <th style="width:80px;">Term</th>
-            <th style="width:104px;">Start</th>
-            <th style="width:104px;">Expiry</th>
-            <th style="text-align:right; width:124px;" title="Total contract cost, all cycles">Total Cost</th>
-            <th style="text-align:right; width:134px;" title="Total contract revenue, all cycles">Total Revenue</th>
+            <th style="text-align:right; width:78px;" data-sort="num">Lic.</th>
+            <th style="width:80px;" data-sort="num">Term</th>
+            <th style="width:104px;" data-sort="date">Start</th>
+            <th style="width:104px;" data-sort="date">Expiry</th>
+            <th style="text-align:right; width:124px;" title="Total contract cost, all cycles" data-sort="num">Total Cost</th>
+            <th style="text-align:right; width:134px;" title="Total contract revenue, all cycles" data-sort="num">Total Revenue</th>
           </tr>
         </thead>
         <tbody class="contractBody"></tbody>
@@ -8345,7 +8352,7 @@ window.__msRenderMissingOneDriveLinks = function () {
     <!-- 8FH.3 (61) — seven tabs on one line at a 14-inch window: tighter padding, shorter names -->
     <div id="sysCtrlTabBar" style="display:flex; gap:0; margin-bottom:20px; border-bottom:2px solid var(--glass-border); padding: 0 4px; flex-wrap:wrap;">
       <div id="sysCtrlTabBtn_company"     class="arap-subtab active" onclick="showSysCtrlSubTab('company')"><i class="fas fa-building" style="color:var(--purple);"></i> Company Profile</div>
-      <div id="sysCtrlTabBtn_templates"   class="arap-subtab"        onclick="showSysCtrlSubTab('templates')"><i class="fas fa-file-contract" style="color:var(--accent-cyan);"></i> Templates</div>
+      <div id="sysCtrlTabBtn_templates"   class="arap-subtab"        onclick="showSysCtrlSubTab('templates')"><i class="fas fa-file-contract" style="color:var(--accent-cyan);"></i> Terms Templates</div>
       <div id="sysCtrlTabBtn_oem"         class="arap-subtab"        onclick="showSysCtrlSubTab('oem')" title="OEM &amp; Product Master"><i class="fas fa-database" style="color:var(--success);"></i> OEMs &amp; Products</div>
       <div id="sysCtrlTabBtn_services"    class="arap-subtab"        onclick="showSysCtrlSubTab('services')" title="Services Catalog"><i class="fas fa-briefcase-medical" style="color:var(--accent-cyan);"></i> Services</div>
       <div id="sysCtrlTabBtn_storage"     class="arap-subtab"        onclick="showSysCtrlSubTab('storage')"><i class="fas fa-hdd" style="color:var(--warning);"></i> Storage &amp; Backup</div>
@@ -8482,7 +8489,7 @@ window.__msRenderMissingOneDriveLinks = function () {
                     <input type="file" id="cp_stampFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleStampUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearStamp()" id="cp_clearStampBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Documents (signature/stamp block).</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 200 KB. A round/transparent-background stamp works best. Used on Templates (signature/stamp block).</div>
             </div>
             <div>
                 <label>Banking Signature Image (optional)</label>
@@ -8493,7 +8500,7 @@ window.__msRenderMissingOneDriveLinks = function () {
                     <input type="file" id="cp_bankSignatureFile" accept="image/png,image/jpeg" style="font-size:11px;" onchange="cpHandleBankSignatureUpload(this)">
                     <button class="btn btn-ghost btn-sm" onclick="cpClearBankSignature()" id="cp_clearBankSignatureBtn" style="display:none;"><i class="fas fa-times"></i> Remove</button>
                 </div>
-                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Your specimen signature as registered with the bank. Choose it per document in proposals, POs, invoices and Documents.</div>
+                <div style="font-size:10.5px; color:var(--text-dim); margin-top:4px;">PNG / JPG — max 150 KB. Your specimen signature as registered with the bank. Choose it per document in proposals, POs, invoices and Templates.</div>
             </div>
         </div>
 
@@ -9412,19 +9419,19 @@ window.__msRenderMissingOneDriveLinks = function () {
         <span style="font-size:11px; font-weight:400; color:var(--text-dim); margin-left:8px;">All contracts for this client — click Action to view full detail</span>
       </h3>
       <div class="cs-table-wrap-lg" style="max-height:420px;">
-        <table id="csContractTable">
+        <table id="csContractTable" class="ms-sortable">
           <thead><tr>
-            <th>Product</th>
-            <th>Start Date</th>
-            <th>End Date</th>
-            <th style="text-align:right;">Term</th>
-            <th>Billing</th>
-            <th style="text-align:right;">Annual Cost</th>
-            <th style="text-align:right;">Annual Rev</th>
-            <th style="text-align:right;">Margin %</th>
-            <th style="text-align:right;" title="Sum of (booking-INR cost − actual-INR cost) across all billing cycles. Positive = INR strengthened (saved); negative = INR weakened (lost).">FX Impact</th>
-            <th style="text-align:right;" title="FX Impact as percentage of booking margin. Mirrors the Dashboard FX Impact % calculation.">FX Impact %</th>
-            <th>Status</th>
+            <th data-sort="text">Product</th>
+            <th data-sort="date">Start Date</th>
+            <th data-sort="date">End Date</th>
+            <th style="text-align:right;" data-sort="num">Term</th>
+            <th data-sort="text">Billing</th>
+            <th style="text-align:right;" data-sort="num">Annual Cost</th>
+            <th style="text-align:right;" data-sort="num">Annual Rev</th>
+            <th style="text-align:right;" data-sort="num">Margin %</th>
+            <th style="text-align:right;" data-sort="num" title="Sum of (booking-INR cost − actual-INR cost) across all billing cycles. Positive = INR strengthened (saved); negative = INR weakened (lost).">FX Impact</th>
+            <th style="text-align:right;" data-sort="num" title="FX Impact as percentage of booking margin. Mirrors the Dashboard FX Impact % calculation.">FX Impact %</th>
+            <th data-sort="text">Status</th>
             <th style="text-align:right;">Action</th>
           </tr></thead>
           <tbody id="csContractBody"></tbody>
@@ -9436,14 +9443,14 @@ window.__msRenderMissingOneDriveLinks = function () {
       <div class="card" style="border-top:3px solid var(--accent-cyan);">
         <h3><i class="fas fa-calendar-alt" style="color:var(--accent-cyan);"></i> Year-wise Performance</h3>
         <div class="cs-table-wrap">
-          <table id="csYearTable">
+          <table id="csYearTable" class="ms-sortable">
             <thead><tr>
-              <th>FY</th>
-              <th style="text-align:right;">Revenue</th>
-              <th style="text-align:right;">Cost</th>
-              <th style="text-align:right;">Margin</th>
-              <th style="text-align:right;">Margin %</th>
-              <th style="text-align:right;">YoY Growth</th>
+              <th data-sort="text">FY</th>
+              <th style="text-align:right;" data-sort="num">Revenue</th>
+              <th style="text-align:right;" data-sort="num">Cost</th>
+              <th style="text-align:right;" data-sort="num">Margin</th>
+              <th style="text-align:right;" data-sort="num">Margin %</th>
+              <th style="text-align:right;" data-sort="num">YoY Growth</th>
             </tr></thead>
             <tbody id="csYearBody"></tbody>
           </table>
@@ -9453,13 +9460,13 @@ window.__msRenderMissingOneDriveLinks = function () {
       <div class="card" style="border-top:3px solid var(--purple);">
         <h3><i class="fas fa-cubes" style="color:var(--purple);"></i> Product / OEM Mix</h3>
         <div class="cs-table-wrap">
-          <table id="csProductTable">
+          <table id="csProductTable" class="ms-sortable">
             <thead><tr>
-              <th>Product</th>
-              <th style="text-align:right;">Licenses</th>
-              <th style="text-align:right;">Total Rev</th>
-              <th style="text-align:right;">Margin %</th>
-              <th>Status</th>
+              <th data-sort="text">Product</th>
+              <th style="text-align:right;" data-sort="num">Licenses</th>
+              <th style="text-align:right;" data-sort="num">Total Rev</th>
+              <th style="text-align:right;" data-sort="num">Margin %</th>
+              <th data-sort="text">Status</th>
             </tr></thead>
             <tbody id="csProductBody"></tbody>
           </table>
@@ -9486,13 +9493,13 @@ window.__msRenderMissingOneDriveLinks = function () {
         <span style="font-size:11px; font-weight:400; color:var(--text-dim); margin-left:8px;">Accounts Receivable — Client Billing Cycles</span>
       </h3>
       <div class="cs-table-wrap-lg">
-        <table id="csArStatusTable">
+        <table id="csArStatusTable" class="ms-sortable">
           <thead><tr>
-            <th>Cycle</th>
-            <th style="text-align:right;">Amount (INR)</th>
-            <th>Invoice Date</th>
-            <th>Payment Date</th>
-            <th>Status</th>
+            <th data-sort="text">Cycle</th>
+            <th style="text-align:right;" data-sort="num">Amount (INR)</th>
+            <th data-sort="date">Invoice Date</th>
+            <th data-sort="date">Payment Date</th>
+            <th data-sort="text">Status</th>
             <th style="text-align:right;">Action</th>
           </tr></thead>
           <tbody id="csArStatusBody"></tbody>
@@ -9506,14 +9513,14 @@ window.__msRenderMissingOneDriveLinks = function () {
         <span style="font-size:11px; font-weight:400; color:var(--text-dim); margin-left:8px;">Accounts Payable — Vendor Settlement Cycles</span>
       </h3>
       <div class="cs-table-wrap-lg">
-        <table id="csApStatusTable">
+        <table id="csApStatusTable" class="ms-sortable">
           <thead><tr>
-            <th>Cycle</th>
-            <th>OEM Invoice #</th>
-            <th style="text-align:right;">Vendor Amount</th>
-            <th style="text-align:right;">FX Rate</th>
-            <th>Payment Date</th>
-            <th>Status</th>
+            <th data-sort="text">Cycle</th>
+            <th data-sort="text">OEM Invoice #</th>
+            <th style="text-align:right;" data-sort="num" title="Sorts by the rupee value (the amounts are in the OEM's currency)">Vendor Amount</th>
+            <th style="text-align:right;" data-sort="num">FX Rate</th>
+            <th data-sort="date">Payment Date</th>
+            <th data-sort="text">Status</th>
           </tr></thead>
           <tbody id="csApStatusBody"></tbody>
         </table>
@@ -9606,6 +9613,14 @@ window.__msRenderMissingOneDriveLinks = function () {
         <select id="proposalsClientFilter" onchange="renderProposalsPage()" style="width:200px;">
           <option value="ALL">All Clients</option>
         </select>
+        <select id="proposalsSortBy" onchange="__msSortBySet('proposals', this.value); renderProposalsPage()" style="width:190px;" title="The order of the cards on the board (the list view sorts by its column headings)">
+          <option value="updated">Sort: latest first</option>
+          <option value="issued">Sort: issue date</option>
+          <option value="client">Sort: client A→Z</option>
+          <option value="total">Sort: total, largest first</option>
+          <option value="number">Sort: proposal #</option>
+        </select>
+        <span id="proposalsCount" class="ms-list-count"></span>
       </div>
     </div>
 
@@ -9617,16 +9632,16 @@ window.__msRenderMissingOneDriveLinks = function () {
     <!-- List View -->
     <div id="proposalsListView" style="display:none;">
       <div class="card" style="padding:0; overflow-x:auto;">
-        <table class="pipeline-list-table">
+        <table class="pipeline-list-table ms-sortable" id="proposalsListTable">
           <thead>
             <tr>
-              <th>Proposal #</th>
-              <th>Client</th>
-              <th>Subject</th>
-              <th>Status</th>
-              <th style="text-align:right;">Total</th>
-              <th>Issued</th>
-              <th>Valid Until</th>
+              <th data-sort="text">Proposal #</th>
+              <th data-sort="text">Client</th>
+              <th data-sort="text">Subject</th>
+              <th data-sort="text">Status</th>
+              <th style="text-align:right;" data-sort="num" title="Sorts by the rupee value: a dollar proposal at the live rate (else the latest PO's rate)">Total</th>
+              <th data-sort="date">Issued</th>
+              <th data-sort="date">Valid Until</th>
               <th style="text-align:right;">Actions</th>
             </tr>
           </thead>
@@ -10115,6 +10130,14 @@ window.__msRenderMissingOneDriveLinks = function () {
         <select id="poOemFilter" onchange="renderPOsPage()" style="width:200px;">
           <option value="ALL">All OEMs</option>
         </select>
+        <select id="poSortBy" onchange="__msSortBySet('pos', this.value); renderPOsPage()" style="width:190px;" title="The order of the cards on the board (the list view sorts by its column headings)">
+          <option value="updated">Sort: latest first</option>
+          <option value="issued">Sort: issue date</option>
+          <option value="oem">Sort: OEM A→Z</option>
+          <option value="value">Sort: value, largest first</option>
+          <option value="number">Sort: PO #</option>
+        </select>
+        <span id="poCount" class="ms-list-count"></span>
       </div>
     </div>
 
@@ -10126,18 +10149,18 @@ window.__msRenderMissingOneDriveLinks = function () {
     <!-- List View -->
     <div id="poListView" style="display:none;">
       <div class="card" style="padding:0; overflow-x:auto;">
-        <table class="pipeline-list-table">
+        <table class="pipeline-list-table ms-sortable" id="poListTable">
           <thead>
             <tr>
-              <th>PO #</th>
-              <th>OEM</th>
-              <th>End Client</th>
-              <th>Subject</th>
-              <th>Status</th>
-              <th style="text-align:right;">Value</th>
-              <th>Currency</th>
-              <th>Issued</th>
-              <th>Expected Delivery</th>
+              <th data-sort="text">PO #</th>
+              <th data-sort="text">OEM</th>
+              <th data-sort="text">End Client</th>
+              <th data-sort="text">Subject</th>
+              <th data-sort="text">Status</th>
+              <th style="text-align:right;" data-sort="num" title="Sorts by the value in rupees (at the PO's own rate)">Value</th>
+              <th data-sort="text">Currency</th>
+              <th data-sort="date">Issued</th>
+              <th data-sort="date">Expected Delivery</th>
               <th style="text-align:right;">Actions</th>
             </tr>
           </thead>
@@ -10574,6 +10597,14 @@ window.__msRenderMissingOneDriveLinks = function () {
         <select id="invFyFilter" onchange="renderInvoicesPage()" style="width:170px;">
           <option value="ALL">All Fiscal Years</option>
         </select>
+        <select id="invSortBy" onchange="__msSortBySet('invoices', this.value); renderInvoicesFiltered()" style="width:190px;" title="The order of the cards on the board (the list view sorts by its column headings)">
+          <option value="due">Sort: due date, soonest</option>
+          <option value="date">Sort: invoice date, newest</option>
+          <option value="client">Sort: client A→Z</option>
+          <option value="amount">Sort: amount, largest first</option>
+          <option value="outstanding">Sort: outstanding, largest</option>
+        </select>
+        <span id="invCount" class="ms-list-count"></span>
       </div>
     </div>
 
@@ -10586,19 +10617,19 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div id="invListView" style="display:none;">
       <div class="card" style="padding:0;">
         <div class="table-scroll-wrap" style="max-height: calc(100vh - 340px); border:none;">
-          <table id="invListTable" class="ms-reg-fit">
-            <colgroup><col style="width:150px"><col style="width:176px"><col><col style="width:86px"><col style="width:112px"><col style="width:112px"><col style="width:76px"><col style="width:76px"><col style="width:82px"><col style="width:100px"></colgroup>
+          <table id="invListTable" class="ms-reg-fit ms-sortable">
+            <colgroup><col style="width:150px"><col style="width:164px"><col><col style="width:86px"><col style="width:112px"><col style="width:112px"><col style="width:98px"><col style="width:98px"><col style="width:82px"><col style="width:100px"></colgroup>
             <thead>
               <tr>
-                <th>Invoice #</th>
-                <th>Client</th>
-                <th>Subject</th>
-                <th>Status</th>
-                <th style="text-align:right;">Amount</th>
-                <th style="text-align:right;">Outstanding</th>
-                <th>Invoice Date</th>
-                <th>Due Date</th>
-                <th>Days O/S</th>
+                <th data-sort="text">Invoice #</th>
+                <th data-sort="text">Client</th>
+                <th data-sort="text">Subject</th>
+                <th data-sort="text">Status</th>
+                <th style="text-align:right;" data-sort="num">Amount</th>
+                <th style="text-align:right;" data-sort="num">Outstanding</th>
+                <th data-sort="date">Invoice Date</th>
+                <th data-sort="date">Due Date</th>
+                <th data-sort="num" title="Days since the invoice date; sorts the longest outstanding first">Days O/S</th>
                 <th style="text-align:right;">Actions</th>
               </tr>
             </thead>
@@ -10721,18 +10752,18 @@ window.__msRenderMissingOneDriveLinks = function () {
         </div>
       </div>
       <div class="table-scroll-wrap">
-        <table id="arRegisterTable">
+        <table id="arRegisterTable" class="ms-sortable">
           <thead><tr id="arRegisterHeadRow">
-            <th>Due Date</th>
-            <th>Client</th>
-            <th>Product / OEM</th>
-            <th>Cycle</th>
-            <th>Invoice</th>
-            <th>Invoice Date</th>
-            <th style="text-align:right;">Amount (INR)</th>
-            <th>Days O/S</th>
-            <th>Payment Date</th>
-            <th>Status</th>
+            <th data-sort="date">Due Date</th>
+            <th data-sort="text">Client</th>
+            <th data-sort="text">Product / OEM</th>
+            <th data-sort="text">Cycle</th>
+            <th data-sort="text">Invoice</th>
+            <th data-sort="date">Invoice Date</th>
+            <th style="text-align:right;" data-sort="num">Amount (INR)</th>
+            <th data-sort="num" title="Days past the due date (negative: still within terms); sorts the most overdue first">Days O/S</th>
+            <th data-sort="date">Payment Date</th>
+            <th data-sort="text">Status</th>
             <th style="text-align:right;">Action</th>
           </tr></thead>
           <tbody id="arRegisterBody"></tbody>
@@ -10743,15 +10774,15 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div id="arAgingClientCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--accent-cyan);">
       <h3 style="margin:0 0 16px 0; border:none; padding:0;"><i class="fas fa-table" style="color:var(--accent-cyan);"></i> Receivables Aging by Client</h3>
       <div class="table-scroll-wrap table-scroll-wrap-sm">
-        <table id="arAgingClientTable">
+        <table id="arAgingClientTable" class="ms-sortable">
           <thead><tr>
-            <th>Client</th>
-            <th style="text-align:right;">0–30 Days</th>
-            <th style="text-align:right;">31–60 Days</th>
-            <th style="text-align:right;">61–90 Days</th>
-            <th style="text-align:right;">90+ Days</th>
-            <th style="text-align:right;">Total Outstanding</th>
-            <th style="text-align:right;">Collected</th>
+            <th data-sort="text">Client</th>
+            <th style="text-align:right;" data-sort="num">0–30 Days</th>
+            <th style="text-align:right;" data-sort="num">31–60 Days</th>
+            <th style="text-align:right;" data-sort="num">61–90 Days</th>
+            <th style="text-align:right;" data-sort="num">90+ Days</th>
+            <th style="text-align:right;" data-sort="num">Total Outstanding</th>
+            <th style="text-align:right;" data-sort="num">Collected</th>
           </tr></thead>
           <tbody id="arAgingClientBody"></tbody>
         </table>
@@ -10840,19 +10871,19 @@ window.__msRenderMissingOneDriveLinks = function () {
         </div>
       </div>
       <div class="table-scroll-wrap">
-        <table id="apRegisterTable" class="ms-reg-fit">
-          <colgroup><col style="width:80px"><col><col style="width:136px"><col style="width:80px"><col style="width:100px"><col style="width:104px"><col style="width:78px"><col style="width:86px"><col style="width:88px"><col style="width:128px"><col style="width:46px"></colgroup>
+        <table id="apRegisterTable" class="ms-reg-fit ms-sortable">
+          <colgroup><col style="width:98px"><col><col style="width:136px"><col style="width:98px"><col style="width:100px"><col style="width:104px"><col style="width:78px"><col style="width:104px"><col style="width:88px"><col style="width:116px"><col style="width:46px"></colgroup>
           <thead><tr id="apRegisterHeadRow">
-            <th>Due Date</th>
-            <th>Client / Contract</th>
-            <th>OEM Invoice #</th>
-            <th>Invoice Date</th>
-            <th style="text-align:right;">Vendor Amt</th>
-            <th style="text-align:right;">Amount (INR)</th>
-            <th>Days O/S</th>
-            <th>Payment Date</th>
-            <th>Status</th>
-            <th>Linked PO</th>
+            <th data-sort="date">Due Date</th>
+            <th data-sort="text">Client / Contract</th>
+            <th data-sort="text">OEM Invoice #</th>
+            <th data-sort="date">Invoice Date</th>
+            <th style="text-align:right;" data-sort="num" title="Sorts by the rupee value (the amounts are in the OEM's currency)">Vendor Amt</th>
+            <th style="text-align:right;" data-sort="num">Amount (INR)</th>
+            <th data-sort="num" title="Days past the due date (negative: still within terms); sorts the most overdue first">Days O/S</th>
+            <th data-sort="date">Payment Date</th>
+            <th data-sort="text">Status</th>
+            <th data-sort="text">Linked PO</th>
             <th></th>
           </tr></thead>
           <tbody id="apRegisterBody"></tbody>
@@ -10867,15 +10898,15 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div id="apAgingClientCard" class="card" style="margin-bottom:24px; border-top:3px solid var(--warning);">
       <h3 style="margin:0 0 16px 0; border:none; padding:0;"><i class="fas fa-table" style="color:var(--warning);"></i> AP Aging by Client / Contract</h3>
       <div class="table-scroll-wrap table-scroll-wrap-sm">
-        <table id="apAgingClientTable">
+        <table id="apAgingClientTable" class="ms-sortable">
           <thead><tr>
-            <th>Client / Contract</th>
-            <th style="text-align:right;">0–30 Days</th>
-            <th style="text-align:right;">31–60 Days</th>
-            <th style="text-align:right;">61–90 Days</th>
-            <th style="text-align:right;">90+ Days</th>
-            <th style="text-align:right;">Total Outstanding</th>
-            <th style="text-align:right;">Settled</th>
+            <th data-sort="text">Client / Contract</th>
+            <th style="text-align:right;" data-sort="num">0–30 Days</th>
+            <th style="text-align:right;" data-sort="num">31–60 Days</th>
+            <th style="text-align:right;" data-sort="num">61–90 Days</th>
+            <th style="text-align:right;" data-sort="num">90+ Days</th>
+            <th style="text-align:right;" data-sort="num">Total Outstanding</th>
+            <th style="text-align:right;" data-sort="num">Settled</th>
           </tr></thead>
           <tbody id="apAgingClientBody"></tbody>
         </table>
@@ -11006,7 +11037,7 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div id="documentsTab" class="hidden">
   <div class="dashboard-sticky-top">
     <div class="page-header" style="margin-bottom:0;">
-      <h2><i class="fas fa-file-lines" style="color:var(--accent-cyan); margin-right:8px;"></i> Documents</h2>
+      <h2><i class="fas fa-file-lines" style="color:var(--accent-cyan); margin-right:8px;"></i> Templates</h2>
       <div style="display:flex; gap:10px; align-items:center;">
         <button class="btn btn-ghost" onclick="__msTriggerWordUpload()"><i class="fas fa-file-word"></i> Upload Word (.docx)</button>
         <button class="btn btn-primary" onclick="openTemplateEditor(null)"><i class="fas fa-plus"></i> New Template</button>
@@ -11140,7 +11171,7 @@ window.__msRenderMissingOneDriveLinks = function () {
         <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:12px;">Fill in the blanks</div>
         <div id="tplFillForm"></div>
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
-          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Save to Documents</div>
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-subtle); margin-bottom:8px;">Save to Generated Documents</div>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:8px; cursor:pointer;">
             <input type="checkbox" id="tplTrackDoc" checked onchange="__msTrackToggleChanged()"> Track this document
           </label>
@@ -11202,9 +11233,8 @@ window.__msRenderMissingOneDriveLinks = function () {
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
       <h3 style="margin:0; border:none; padding:0;"><i class="fas fa-folder-tree" style="color:var(--purple);"></i> Generated Documents</h3>
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <select id="genDocFilterClient" onchange="renderGeneratedDocs()" style="padding:7px 22px 7px 0; font-size:13px;">
-          <option value="">All clients</option>
-        </select>
+        <span id="genDocsSummary" style="color:var(--text-dim); font-size:12px;"></span>
+        <span style="font-size:12px; color:var(--text-dim); white-space:nowrap;"><a href="#" id="genDocExpandAll" onclick="__msGenDocGroupsAll(true); return false;" style="color:var(--accent-cyan);">Expand all</a> · <a href="#" id="genDocCollapseAll" onclick="__msGenDocGroupsAll(false); return false;" style="color:var(--accent-cyan);">Collapse all</a></span>
         <select id="genDocFilterStatus" onchange="renderGeneratedDocs()" style="padding:7px 22px 7px 0; font-size:13px;">
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
@@ -11214,18 +11244,8 @@ window.__msRenderMissingOneDriveLinks = function () {
       </div>
     </div>
     <p style="color:var(--text-dim); font-size:12.5px; margin:0 0 14px 0;">Documents you generated from a template and chose to save. Assign each to a client (or mark as <strong>Other</strong>). Once printed, signed and scanned, use <strong>Mark Issued</strong> to attach the signed PDF — the issued copy then becomes the version stored and available for export bundles.</p>
-    <div class="table-scroll-wrap">
-      <table id="genDocsTable" class="ms-sortable">
-        <thead><tr>
-          <th data-sort="text">Document</th>
-          <th data-sort="text">Client / For</th>
-          <th data-sort="date">Created</th>
-          <th data-sort="text">Status</th>
-          <th style="text-align:right;">Actions</th>
-        </tr></thead>
-        <tbody id="genDocsBody"></tbody>
-      </table>
-    </div>
+    <!-- 8FL — one block per client (collapsible, remembered on this Mac), sortable columns, the search and the Status filter across every block -->
+    <div id="genDocsGroups"></div>
   </div>
   <!-- Hidden file input reused for issued-PDF upload (browser file input path) -->
   <input type="file" id="genDocIssuedInput" accept="application/pdf" style="display:none;" onchange="onGenDocIssuedFilePicked(this)">
@@ -11237,7 +11257,7 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div id="docExportTab" class="hidden">
   <div class="dashboard-sticky-top">
     <div class="page-header" style="margin-bottom:0;">
-      <h2><i class="fas fa-box-archive" style="color:var(--accent-cyan); margin-right:8px;"></i> Document Export</h2>
+      <h2><i class="fas fa-box-archive" style="color:var(--accent-cyan); margin-right:8px;"></i> Document Packs</h2>
     </div>
   </div>
   <p style="color:var(--text-dim); font-size:13px; margin:0 0 18px 0;">Bundle a deal's or a client's documents into a single <strong>.zip</strong> with an <strong>INDEX.txt</strong> checklist. Files stored inside the CRM (signed invoices, contract/PO attachments, issued documents) are packed into the zip; documents that live only as OneDrive links or local files are listed in the index with their location so nothing is missed.</p>
@@ -11308,7 +11328,7 @@ window.__msRenderMissingOneDriveLinks = function () {
             <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="purchase" checked onchange="renderDocExportClientPreview()"> Purchase Inv</label>
             <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="internalpo" checked onchange="renderDocExportClientPreview()"> Internal PO</label>
             <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="clientpo" checked onchange="renderDocExportClientPreview()"> Client PO</label>
-            <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="gendoc" checked onchange="renderDocExportClientPreview()"> Documents</label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="gendoc" checked onchange="renderDocExportClientPreview()"> Generated documents</label>
             <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="docExpType" value="other" checked onchange="renderDocExportClientPreview()"> Other</label>
           </div>
         </div>
@@ -11402,18 +11422,18 @@ window.__msRenderMissingOneDriveLinks = function () {
         </div>
       </div>
       <div class="table-scroll-wrap">
-        <table id="conPaymentsTable" class="ms-reg-fit">
-          <colgroup><col style="width:142px"><col><col><col style="width:80px"><col style="width:104px"><col style="width:92px"><col style="width:116px"><col style="width:78px"><col style="width:80px"><col style="width:100px"></colgroup>
+        <table id="conPaymentsTable" class="ms-reg-fit ms-sortable">
+          <colgroup><col style="width:142px"><col><col><col style="width:98px"><col style="width:104px"><col style="width:92px"><col style="width:116px"><col style="width:78px"><col style="width:98px"><col style="width:100px"></colgroup>
           <thead><tr>
-            <th>Payment #</th>
-            <th>Consultant</th>
-            <th>Period</th>
-            <th>Invoice Date</th>
-            <th style="text-align:right;">Subtotal</th>
-            <th style="text-align:right;">GST</th>
-            <th style="text-align:right;">Total</th>
-            <th>Status</th>
-            <th>Paid Date</th>
+            <th data-sort="text">Payment #</th>
+            <th data-sort="text">Consultant</th>
+            <th data-sort="text">Period</th>
+            <th data-sort="date">Invoice Date</th>
+            <th style="text-align:right;" data-sort="num">Subtotal</th>
+            <th style="text-align:right;" data-sort="num">GST</th>
+            <th style="text-align:right;" data-sort="num">Total</th>
+            <th data-sort="text">Status</th>
+            <th data-sort="date">Paid Date</th>
             <th>Files</th>
           </tr></thead>
           <tbody id="conPaymentsBody"><tr><td colspan="10" style="text-align:center; padding:30px; color:var(--text-dim); font-style:italic;">No consultant payments yet. Click <strong>+ New Payment</strong> above to begin.</td></tr></tbody>
@@ -12483,6 +12503,12 @@ window.__msRenderMissingOneDriveLinks = function () {
       <select id="renClientFilter" onchange="renderRenewalsPage()" style="width:200px;">
         <option value="ALL">All Clients</option>
       </select>
+      <select id="renSortBy" onchange="__msSortBySet('renewals', this.value); renderRenewalsPage()" style="width:190px;" title="The order of the renewals in the list">
+        <option value="expiry">Sort: soonest expiry</option>
+        <option value="value">Sort: value, largest first</option>
+        <option value="client">Sort: client A→Z</option>
+        <option value="status">Sort: status</option>
+      </select>
     </div>
   </div>
 
@@ -12495,7 +12521,7 @@ window.__msRenderMissingOneDriveLinks = function () {
 
   <!-- All upcoming renewals list -->
   <div class="card" style="padding: 18px;">
-    <h3 style="margin-bottom: 18px;"><i class="fas fa-list-ul" style="color:var(--accent-cyan);"></i> Upcoming Renewals</h3>
+    <h3 style="margin-bottom: 18px;"><i class="fas fa-list-ul" style="color:var(--accent-cyan);"></i> Upcoming Renewals <span id="renCount" class="ms-list-count"></span></h3>
     <div id="renListBody"></div>
   </div>
 </div><!-- end #renewalsTab -->
@@ -13739,7 +13765,7 @@ function formatDateReadable(val) {
     return d.toLocaleDateString('en-GB', {
         day: '2-digit',
         month: 'short',
-        year: '2-digit'
+        year: 'numeric'          // 8FL — the same date everywhere: 07 Apr 2021 (was a 2-digit year)
     }).replace(/ /g, ' '); 
 }
 
@@ -13870,7 +13896,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FK-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FL-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -16619,13 +16645,13 @@ function __msMasterCardHtml(o) {
 // One table row (List view). cells: array of html strings.
 function __msMasterRowHtml(o) {
     return '<tr class="clickable-row cm-master-row' + (o.active ? ' active' : '') + '" tabindex="0" onclick="' + pEsc(o.onclick) + '" onkeydown="__msMasterKey(event, this)">'
-        + o.cells.map(function (c) { return '<td' + (c.style ? ' style="' + c.style + '"' : '') + '>' + c.html + '</td>'; }).join('')
+        + o.cells.map(function (c) { return '<td' + (c.style ? ' style="' + c.style + '"' : '') + (c.sort !== undefined ? ' data-sort="' + pEsc(String(c.sort)) + '"' : '') + '>' + c.html + '</td>'; }).join('')
         + '</tr>';
 }
 
-function __msMasterTableHtml(headers, rows) {
-    return '<table class="pipeline-list-table cm-master-table"><thead><tr>'
-        + headers.map(function (h) { return '<th' + (h.style ? ' style="' + h.style + '"' : '') + '>' + h.label + '</th>'; }).join('')
+function __msMasterTableHtml(headers, rows, key) {    // 8FL — sortable: a header's `sort` is its kind, a cell's `sort` the value to sort by
+    return '<table class="pipeline-list-table cm-master-table ms-sortable"' + (key ? ' data-sort-key="' + pEsc(key) + '"' : '') + '><thead><tr>'
+        + headers.map(function (h) { return '<th' + (h.style ? ' style="' + h.style + '"' : '') + (h.sort ? ' data-sort="' + h.sort + '"' : '') + '>' + h.label + '</th>'; }).join('')
         + '</tr></thead><tbody>' + rows.join('') + '</tbody></table>';
 }
 
@@ -16655,7 +16681,7 @@ function renderClientMasterList() {
                (r.contactName && r.contactName.toLowerCase().includes(searchVal));
     }) : keys;
 
-    if (countEl) countEl.innerText = keys.length;
+    if (countEl) countEl.innerText = filtered.length === keys.length ? keys.length : (filtered.length + ' of ' + keys.length);   // 8FL
 
     if (filtered.length === 0) {
         container.innerHTML = `<div class="cm-list-grid-empty">
@@ -16682,7 +16708,7 @@ function renderClientMasterList() {
         const dotHtml = '<span class="cm-client-status-dot" style="background:' + statusDot + ';" title="' + statusTitle + '"></span>';
         if (view === 'list') {
             return __msMasterRowHtml({ active: active, onclick: onclick, cells: [
-                { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div><span class="cm-row-title" title="' + pEsc(k) + '">' + pEsc(k) + '</span></div>' },
+                { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div><span class="cm-row-title" title="' + pEsc(k) + '">' + pEsc(k) + '</span></div>', sort: k },
                 { html: '<span class="cm-client-sub-dot" style="background:' + tierDotColor + '; margin-right:6px;"></span>' + pEsc(subLine) },
                 { html: contact.name ? pEsc(contact.name) : '<span class="cm-row-muted">—</span>' },
                 { html: (contact.phone ? pEsc(contact.phone) : '') + (contact.phone && contact.email ? '<br>' : '') + (contact.email ? '<span class="cm-row-muted">' + pEsc(contact.email) + '</span>' : '') || '<span class="cm-row-muted">—</span>' },
@@ -16704,9 +16730,10 @@ function renderClientMasterList() {
 
     if (view === 'list') {
         container.innerHTML = __msMasterTableHtml([
-            { label: 'Client' }, { label: 'Industry / Tier' }, { label: 'Primary Contact' }, { label: 'Phone / Email' },
-            { label: 'GSTIN' }, { label: 'Contracts', style: 'text-align:center;' }, { label: 'Status' }
-        ], items);
+            { label: 'Client', sort: 'text' }, { label: 'Industry / Tier', sort: 'text' }, { label: 'Primary Contact', sort: 'text' }, { label: 'Phone / Email', sort: 'text' },
+            { label: 'GSTIN', sort: 'text' }, { label: 'Contracts', style: 'text-align:center;', sort: 'num' }, { label: 'Status', sort: 'text' }
+        ], items, 'clientMaster');
+        __msSortRefreshKey('clientMaster');   // 8FL
     } else {
         container.innerHTML = items.join('');
     }
@@ -16740,7 +16767,7 @@ function renderResellerMasterList() {
         return true;
     });
 
-    if (countEl) countEl.innerText = keys.length;
+    if (countEl) countEl.innerText = filtered.length === keys.length ? keys.length : (filtered.length + ' of ' + keys.length);   // 8FL
 
     if (filtered.length === 0) {
         container.innerHTML = `<div class="cm-list-grid-empty">
@@ -16765,7 +16792,7 @@ function renderResellerMasterList() {
         const dotHtml = '<span class="cm-client-status-dot" style="background:' + statusDot + ';" title="' + pEsc(statusText) + '"></span>';
         if (view === 'list') {
             return __msMasterRowHtml({ active: active, onclick: onclick, cells: [
-                { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div><span class="cm-row-title" title="' + pEsc(k) + '">' + pEsc(k) + '</span></div>' },
+                { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div><span class="cm-row-title" title="' + pEsc(k) + '">' + pEsc(k) + '</span></div>', sort: k },
                 { html: dotHtml + ' ' + pEsc(statusText) + (r.needsCompletion ? ' <span class="cm-row-flag">Needs completion</span>' : ''), style: 'white-space:nowrap;' },
                 { html: contact.name ? pEsc(contact.name) : '<span class="cm-row-muted">—</span>' },
                 { html: (contact.phone ? pEsc(contact.phone) : '') + (contact.phone && contact.email ? '<br>' : '') + (contact.email ? '<span class="cm-row-muted">' + pEsc(contact.email) + '</span>' : '') || '<span class="cm-row-muted">—</span>' },
@@ -16788,8 +16815,9 @@ function renderResellerMasterList() {
 
     if (view === 'list') {
         container.innerHTML = __msMasterTableHtml([
-            { label: 'Reseller' }, { label: 'Status' }, { label: 'Primary Contact' }, { label: 'Phone / Email' }, { label: 'GSTIN' }, { label: 'PAN' }
-        ], items);
+            { label: 'Reseller', sort: 'text' }, { label: 'Status', sort: 'text' }, { label: 'Primary Contact', sort: 'text' }, { label: 'Phone / Email', sort: 'text' }, { label: 'GSTIN', sort: 'text' }, { label: 'PAN', sort: 'text' }
+        ], items, 'resellerMaster');
+        __msSortRefreshKey('resellerMaster');   // 8FL
     } else {
         container.innerHTML = items.join('');
     }
@@ -21057,6 +21085,12 @@ function toggleClientGroup(safeClientId) {
 
 // 8FH.3 (59) — a client's group row shows the span its contracts cover, from the earliest start to the latest expiry,
 // in the same badge as a contract's own term (it showed "—")
+function __msSpanMonths(start, end) {      // 8FL — the months between two dates as a number ('' when they do not make a span), for the sort
+    const a = (start instanceof Date) ? start : (typeof __msLocalDate === 'function' ? __msLocalDate(start) : new Date(start));
+    const b = (end instanceof Date) ? end : (typeof __msLocalDate === 'function' ? __msLocalDate(end) : new Date(end));
+    if (!a || !b || isNaN(a.getTime()) || isNaN(b.getTime()) || b < a) return '';
+    return (b.getTime() - a.getTime() + 86400000) / (86400000 * 30.4375);
+}
 function __msSpanMonthsBadge(start, end) {
     const a = (start instanceof Date) ? start : (typeof __msLocalDate === 'function' ? __msLocalDate(start) : new Date(start));
     const b = (end instanceof Date) ? end : (typeof __msLocalDate === 'function' ? __msLocalDate(end) : new Date(end));
@@ -21405,7 +21439,7 @@ function renderContracts() {
             const expOemQuote = _expOemQuoteAnchor || (c.oemQuote ? pEsc(c.oemQuote) : '-');
 
             clientRowsHtml += `
-            <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" onclick="toggleDetail(this)" style="display:none;">
+            <tr id="row-${i}" class="child-of-${safeClientId} sp-contract-row" data-client-id="${safeClientId}" data-sort-follow onclick="toggleDetail(this)" style="display:none;">
                 <td class="sp-stacked-cell">
                     <i class="fas fa-chevron-right expand-icon"></i><span class="stacked-main" title="${pEsc(c.product || '')}">${pEsc(formatProductForDisplay(c.product || '-'))}</span>
                     ${(c.type === 'service') ? `<div class="stacked-sub" style="padding-left:18px;"><span style="background:rgba(167,139,250,0.12); color:var(--purple); border:1px solid rgba(167,139,250,0.35); font-size:9.5px; padding:1px 6px; font-weight:700; border-radius:4px; letter-spacing:0.4px;">SERVICE</span></div>` : (c.oem ? `<div class="stacked-sub" title="${pEsc(c.oem)}" style="padding-left:18px;">${pEsc(getOemDisplayName(c.oem))}</div>` : '')}
@@ -21418,7 +21452,7 @@ function renderContracts() {
                 <td class="num">${fmt(tCost)}<span style="font-size:10.5px; color:var(--text-dim); display:block;">${costSym}${Math.round(tCostUSD).toLocaleString()}</span></td>
                 <td class="num" style="font-weight:500;">${fmt(tRev)}</td>
             </tr>
-            <tr id="detail-row-${i}" class="detail-row sp-detail-row">
+            <tr id="detail-row-${i}" class="detail-row sp-detail-row" data-sort-follow>
                 <td colspan="8" style="padding:0; border:none;">
                     <div class="detail-content">
                         <div class="expanded-container" style="gap:14px;">
@@ -21590,7 +21624,7 @@ function renderContracts() {
         // Add Client Header Row
         rows.push(`
             <tr id="group-row-${safeClientId}" class="client-group-row sp-client-row" onclick="toggleClientGroup('${safeClientId}')">
-                <td>
+                <td data-sort="${pEsc(clientName)}">
                     <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
                         <i id="icon-group-${safeClientId}" class="fas fa-chevron-right expand-icon"></i>
                         <span title="${pEsc(clientName)}">${pEsc(displayName)}</span>
@@ -21600,7 +21634,7 @@ function renderContracts() {
                 </td>
                 <td><span style="color:var(--text-dim); font-size:11.5px; font-style:italic;">— Multiple —</span></td>
                 <td class="num">${totalLicenses > 0 ? totalLicenses : '-'}</td>
-                <td>${__msSpanMonthsBadge(earliestStart, latestEnd)}</td>
+                <td data-sort="${__msSpanMonths(earliestStart, latestEnd)}">${__msSpanMonthsBadge(earliestStart, latestEnd)}</td>
                 <td>${formatDateReadable(earliestStart)}</td>
                 <td>${formatDateReadable(latestEnd)}</td>
                 <td class="num">${fmt(totalAvgCost)}</td>
@@ -21617,6 +21651,10 @@ function renderContracts() {
     } else {
         cont.innerHTML = rows.join('');
     }
+    // 8FL — the chosen column order on the client groups (their contract and detail rows travel with them); the count
+    __msSortRefresh('contractTable');
+    var __nShown = 0; sortedClients.forEach(function (k) { __nShown += groupedContracts[k].length; });
+    __msListCount('portfolioCount', __nShown, contracts.filter(function (c) { return c && c.billingYears && !c.__damaged; }).length, 'contract', 'contracts');
 }
 
 function updateLiveFX(val) {
@@ -25388,6 +25426,15 @@ function fmtProposalDualTotals(acc) {
 }
 
 // Sum proposal grand totals per currency. Used by Proposals KPIs + kanban.
+// 8FL — a proposal's total in rupees for sorting only (the proposals carry no rate): a dollar proposal at the live rate,
+// else at the latest dollar PO's rate, else 85 — any plausible rate puts a $200k proposal above a ₹67 L one
+function __msProposalInr(p, total) {
+    var v = isFinite(total) ? Number(total) : 0;
+    if (getProposalCurrency(p) === 'INR') return v;
+    var rate = (typeof getLiveFxRate === 'function' && getLiveFxRate()) || 0;
+    if (!rate && typeof purchaseOrders !== 'undefined') (purchaseOrders || []).slice().sort(function (a, b) { return String(b.issueDate || '').localeCompare(String(a.issueDate || '')); }).some(function (po) { if (po && po.currency === 'USD' && parseFloat(po.fxRate) > 0) { rate = parseFloat(po.fxRate); return true; } return false; });
+    return v * (rate || 85);
+}
 function sumProposalTotalsByCurrency(arr) {
     var acc = { INR: 0, USD: 0 };
     (arr || []).forEach(function (p) {
@@ -25456,11 +25503,13 @@ function renderProposalsPage() {
     if (!document.getElementById('proposalsTab')) return;
     document.getElementById('proposalsKanbanView').style.display = proposalsView === 'kanban' ? 'block' : 'none';
     document.getElementById('proposalsListView').style.display = proposalsView === 'list' ? 'block' : 'none';
+    document.getElementById('proposalsSortBy').style.display = proposalsView === 'kanban' ? '' : 'none';   // 8FL — the cards' order; the list sorts by its headings
     document.getElementById('proposalsViewKanbanBtn').classList.toggle('active', proposalsView === 'kanban');
     document.getElementById('proposalsViewListBtn').classList.toggle('active', proposalsView === 'list');
     populateProposalsFilters();
     const filtered = getFilteredProposals();
     renderProposalsKPIs(filtered);
+    __msListCount('proposalsCount', filtered.length, proposals.length, 'proposal', 'proposals');   // 8FL
     if (proposalsView === 'kanban') renderProposalsKanban(filtered);
     else renderProposalsListView(filtered);
 }
@@ -25562,6 +25611,10 @@ function renderProposalsKanban(filtered) {
         </div>`;
     }
 
+    // 8FL — the order of the cards in every column: the "Sort by" choice, remembered
+    const __by = __msSortBySync('proposalsSortBy', 'proposals', 'updated');
+    const __key = p => __by === 'issued' ? -(Date.parse(p.issueDate) || 0) : __by === 'client' ? String(p.clientName || '').toLowerCase() : __by === 'total' ? -__msProposalInr(p, computeProposalTotals(p.lineItems, proposalGSTMode(p).mode).grandTotal) : __by === 'number' ? String(p.proposalNumber || '') : -(Date.parse(p.updatedAt || p.createdAt) || 0);
+    Object.keys(byStatus).forEach(st => { byStatus[st] = byStatus[st].map((p, i) => ({ p, i, k: __key(p) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0) || (a.i - b.i)).map(x => x.p); });
     board.innerHTML = banner + PROPOSAL_STATUSES.map(status => {
         const list = byStatus[status] || [];
         const totalAcc = sumProposalTotalsByCurrency(list); // 8ED — per-currency column totals
@@ -25619,7 +25672,7 @@ function renderProposalsListView(filtered) {
             <td style="font-weight:600;">${pEsc(p.clientName || '—')}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(p.subject || '')}">${pEsc(p.subject || '')}</td>
             <td><span class="stage-badge prop-status-${pEsc(p.status)}">${pEsc(p.status)}</span>${(p.revision || 1) > 1 ? ` <span class="stage-badge" style="background:var(--accent-tint-low); color:var(--accent-cyan); font-size:10px;" title="Latest revision">Rev ${p.revision}</span>` : ''}</td>
-            <td style="text-align:right; font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums;">${fmtProposalMoneyShort(totals.grandTotal, getProposalCurrency(p))}</td>
+            <td style="text-align:right; font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums;" data-sort="${Math.round(__msProposalInr(p, totals.grandTotal))}">${fmtProposalMoneyShort(totals.grandTotal, getProposalCurrency(p))}</td>
             <td style="white-space:nowrap;">${p.issueDate ? formatDateReadable(p.issueDate) : '—'}</td>
             <td style="white-space:nowrap;">${p.validUntil ? formatDateReadable(p.validUntil) : '—'}</td>
             <td style="text-align:right; white-space:nowrap;">
@@ -25629,6 +25682,7 @@ function renderProposalsListView(filtered) {
         </tr>`;
     });
     tbody.innerHTML = rows.join('');
+    __msSortRefresh('proposalsListTable');   // 8FL
 }
 
 function setProposalsView(v) {
@@ -29291,11 +29345,13 @@ function renderPOsPage() {
     if (!document.getElementById('purchaseOrdersTab')) return;
     document.getElementById('poKanbanView').style.display = poView === 'kanban' ? 'block' : 'none';
     document.getElementById('poListView').style.display = poView === 'list' ? 'block' : 'none';
+    document.getElementById('poSortBy').style.display = poView === 'kanban' ? '' : 'none';   // 8FL
     document.getElementById('poViewKanbanBtn').classList.toggle('active', poView === 'kanban');
     document.getElementById('poViewListBtn').classList.toggle('active', poView === 'list');
     populatePOsFilters();
     const filtered = getFilteredPOs();
     renderPOsKPIs(filtered);
+    __msListCount('poCount', filtered.length, purchaseOrders.length, 'purchase order', 'purchase orders');   // 8FL
     if (poView === 'kanban') renderPOsKanban(filtered);
     else renderPOsListView(filtered);
 }
@@ -29403,6 +29459,10 @@ function renderPOsKanban(filtered) {
         </div>`;
     }
 
+    // 8FL — the order of the cards in every column: the "Sort by" choice, remembered
+    const __by = __msSortBySync('poSortBy', 'pos', 'updated');
+    const __key = po => __by === 'issued' ? -(Date.parse(po.issueDate) || 0) : __by === 'oem' ? String(po.oem || '').toLowerCase() : __by === 'value' ? -poToInr(computePOTotals(po.lineItems, determinePOGSTMode(po.oem).mode).grandTotal, po.currency, po.fxRate) : __by === 'number' ? String(po.poNumber || '') : -(Date.parse(po.updatedAt || po.createdAt) || 0);
+    Object.keys(byStatus).forEach(st => { byStatus[st] = byStatus[st].map((po, i) => ({ po, i, k: __key(po) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0) || (a.i - b.i)).map(x => x.po); });
     board.innerHTML = banner + PO_STATUSES.map(status => {
         const list = byStatus[status] || [];
         const totalInr = list.reduce((s, po) => {
@@ -29469,7 +29529,7 @@ function renderPOsListView(filtered) {
             <td title="${pEsc(po.endClient || '')}" style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${po.endClient ? pEsc(getClientDisplayName(po.endClient)) : '<span style="color:var(--text-dim);">—</span>'}</td>
             <td style="color:var(--text-dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${pEsc(po.subject || '')}">${pEsc(formatProductForDisplay(po.subject || ''))}</td>
             <td><span class="stage-badge po-status-${pEsc(po.status)}">${pEsc(po.status)}</span></td>
-            <td style="text-align:right; font-weight:700;">${fmtPoCcy(totals.grandTotal, po.currency)}</td>
+            <td style="text-align:right; font-weight:700;" data-sort="${Math.round(poToInr(totals.grandTotal, po.currency, po.fxRate))}">${fmtPoCcy(totals.grandTotal, po.currency)}</td>
             <td style="color:var(--text-dim);">${pEsc(po.currency)}</td>
             <td>${po.issueDate ? formatDateReadable(po.issueDate) : '—'}</td>
             <td>${po.expectedDelivery ? formatDateReadable(po.expectedDelivery) : '—'}</td>
@@ -29480,6 +29540,7 @@ function renderPOsListView(filtered) {
         </tr>`;
     });
     tbody.innerHTML = rows.join('');
+    __msSortRefresh('poListTable');   // 8FL
 }
 
 function setPOsView(v) {
@@ -31968,6 +32029,7 @@ function renderInvoicesPage() {
     if (!document.getElementById('invoicesTab')) return;
     document.getElementById('invKanbanView').style.display = invoicesView === 'kanban' ? 'block' : 'none';
     document.getElementById('invListView').style.display = invoicesView === 'list' ? 'block' : 'none';
+    document.getElementById('invSortBy').style.display = invoicesView === 'kanban' ? '' : 'none';   // 8FL
     document.getElementById('invViewKanbanBtn').classList.toggle('active', invoicesView === 'kanban');
     document.getElementById('invViewListBtn').classList.toggle('active', invoicesView === 'list');
 
@@ -31989,6 +32051,7 @@ function renderInvoicesFiltered() {
     populateInvoicesFilters();
     const filtered = getFilteredInvoices();
     renderInvoicesKPIs();
+    __msListCount('invCount', filtered.length, invoices.length, 'invoice', 'invoices');   // 8FL
     if (invoicesView === 'kanban') renderInvoicesKanban(filtered);
     else renderInvoicesListView(filtered);
 }
@@ -32203,6 +32266,10 @@ function renderInvoicesKanban(filtered) {
         </div>`;
     }
 
+    // 8FL — the order of the cards in every column: the "Sort by" choice, remembered
+    const __by = __msSortBySync('invSortBy', 'invoices', 'due');
+    const __key = inv => __by === 'due' ? (Date.parse(inv.dueDate) || Infinity) : __by === 'client' ? String(inv.clientName || '').toLowerCase() : __by === 'amount' ? -(inv.grandTotal || 0) : __by === 'outstanding' ? -(inv.amountOutstanding || 0) : -(Date.parse(inv.invoiceDate) || 0);
+    Object.keys(byStatus).forEach(st => { byStatus[st] = byStatus[st].map((inv, i) => ({ inv, i, k: __key(inv) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0) || (a.i - b.i)).map(x => x.inv); });
     board.innerHTML = banner + columns.map(status => {
         const list = byStatus[status] || [];
         const total = list.reduce((s, i) => s + (status === 'Paid' ? (i.grandTotal || 0) : (i.amountOutstanding || 0)), 0);
@@ -32288,7 +32355,7 @@ function renderInvoicesListView(filtered) {
             <td class="ms-num" style="color:${Math.round(inv.amountOutstanding) > 0 ? 'var(--warning)' : 'var(--text-dim)'};" title="${fmtInr(inv.amountOutstanding)}">${fmtInrWhole(inv.amountOutstanding)}</td>
             <td class="ms-nw">${inv.invoiceDate ? formatDateReadable(inv.invoiceDate) : '—'}</td>
             <td class="ms-nw">${inv.dueDate ? formatDateReadable(inv.dueDate) : '—'}</td>
-            <td style="font-size:12px;">${daysCell}</td>
+            <td style="font-size:12px;" data-sort="${daysOS === null ? '' : daysOS}">${daysCell}</td>
             <td class="ms-nw" style="text-align:right;">
                 ${isInvoiceOutstanding(inv) ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); composeInvoiceReminder('${inv.id}')" title="Send payment reminder" style="color:var(--accent-cyan);"><i class="fas fa-bell"></i></button>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); downloadInvoicePDF('${inv.id}')" title="${inv.signedPdfAttachmentId ? 'Download signed PDF' : (inv.localPdfPath ? 'Open the invoice PDF (Files)' : 'Download PDF')}"><i class="fas fa-file-pdf" style="color:var(--danger);"></i></button>
@@ -32296,6 +32363,7 @@ function renderInvoicesListView(filtered) {
             </td>
         </tr>`;
     }).join('');
+    __msSortRefresh('invListTable');   // 8FL
 }
 
 function setInvoicesView(v) {
@@ -35687,6 +35755,8 @@ function renderRenewalsPage() {
     renderRenewalKPIs();
     renderRenewalUrgencyStrip(allCandidates);
     renderRenewalGapFilterPill();
+    const __nWindow = (contracts || []).filter(c => c && c.endDate && isContractRenewable(c, windowNum)).length;   // 8FL — every renewal in the window, before the status / client / search / gap filters
+    __msListCount('renCount', filteredCandidates.length, __nWindow, 'renewal', 'renewals');
     renderRenewalList(filteredCandidates);
 }
 
@@ -35849,6 +35919,7 @@ function clearRenewalGapFilter() {
 function renderRenewalList(candidates) {
     const host = document.getElementById('renListBody');
     if (!host) return;
+    __msSortBySync('renSortBy', 'renewals', 'expiry');   // 8FL — the select shows the remembered choice (even over the empty state)
     if (candidates.length === 0) {
         host.innerHTML = `<div style="padding:30px 20px; text-align:center; color:var(--text-dim);">
             <i class="fas fa-check-circle" style="font-size:24px; color:var(--success); display:block; margin-bottom:8px;"></i>
@@ -35856,12 +35927,12 @@ function renderRenewalList(candidates) {
         </div>`;
         return;
     }
-    // Sort by days ascending (most urgent first)
-    candidates.sort((a, b) => {
-        const da = getContractDaysToExpiry(a.c);
-        const db = getContractDaysToExpiry(b.c);
-        return (da === null ? 9999 : da) - (db === null ? 9999 : db);
-    });
+    // Sort by days ascending (most urgent first) — 8FL: or by the "Sort by" choice, remembered (synced above, so the select shows it even when the list is empty); ties keep the expiry order
+    const __by = __msSortByGet('renewals', 'expiry');
+    const __days = x => { const d = getContractDaysToExpiry(x.c); return d === null ? 9999 : d; };
+    const __REN_ORDER = { 'At Risk': 0, 'Not Started': 1, 'Contacted': 2, 'Negotiating': 3, 'Confirmed': 4, 'Lost': 5 };
+    const __key = x => __by === 'value' ? -(getContractRenewalValue(x.c) || 0) : __by === 'client' ? String(x.c.client || '').toLowerCase() : __by === 'status' ? (__REN_ORDER[x.c.renewalStatus || 'Not Started'] !== undefined ? __REN_ORDER[x.c.renewalStatus || 'Not Started'] : 9) : __days(x);
+    candidates.sort((a, b) => { const ka = __key(a), kb = __key(b); return (ka < kb ? -1 : ka > kb ? 1 : 0) || (__days(a) - __days(b)); });
     host.innerHTML = candidates.map(({ c, i }) => {
         const days = getContractDaysToExpiry(c);
         const urgency = days <= 30 ? 'critical' : (days <= 60 ? 'soon' : 'upcoming');
@@ -42633,7 +42704,7 @@ function __msConMasterListHtml(list) {
         return __msMasterRowHtml({ active: false, onclick: __msMasterOnclick('openConsultantForm', c.id), cells: [
             { html: '<div class="cm-row-name"><div class="cm-client-avatar cm-row-avatar" style="background:' + av.bg + ';">' + pEsc(av.initials) + '</div>'
                   + '<div style="min-width:0;"><div class="cm-row-title" title="' + pEsc(c.name || '') + '">' + pEsc(c.name || '(unnamed)') + '</div>'
-                  + (c.role ? '<div class="cm-row-muted">' + pEsc(c.role) + '</div>' : '') + '</div></div>', style: dim },
+                  + (c.role ? '<div class="cm-row-muted">' + pEsc(c.role) + '</div>' : '') + '</div></div>', style: dim, sort: c.name || '' },
             { html: pEsc(c.category || 'Consultant'), style: dim },
             { html: c.panNumber ? '<span class="cm-row-mono">' + pEsc(c.panNumber) + '</span>' : '<span class="cm-row-muted">—</span>', style: dim },
             { html: gst, style: dim },
@@ -42645,9 +42716,9 @@ function __msConMasterListHtml(list) {
         ]});
     });
     return '<div class="cm-list-page-wrap"><div class="cm-list-table-wrap">' + __msMasterTableHtml([
-        { label: 'Consultant' }, { label: 'Category' }, { label: 'PAN' }, { label: 'GST' }, { label: 'City' },
-        { label: 'Payments', style: 'text-align:center;' }, { label: 'Docs', style: 'text-align:center;' }, { label: 'Status' }, { label: '' }
-    ], rows) + '</div></div>';
+        { label: 'Consultant', sort: 'text' }, { label: 'Category', sort: 'text' }, { label: 'PAN', sort: 'text' }, { label: 'GST', sort: 'text' }, { label: 'City', sort: 'text' },
+        { label: 'Payments', style: 'text-align:center;', sort: 'num' }, { label: 'Docs', style: 'text-align:center;', sort: 'num' }, { label: 'Status', sort: 'text' }, { label: '' }
+    ], rows, 'consultantMaster') + '</div></div>';
 }
 // ===== /Phase 8FE =====
 
@@ -42898,12 +42969,13 @@ function renderConsultantPayments() {
             <td class="ms-nw">${invDate}</td>
             <td class="ms-num">${fmtINR(r.subtotal)}</td>
             <td class="ms-num" style="color:var(--text-dim);">${(r.gstApplicable && r.gstAmount) ? fmtINR(r.gstAmount) : '—'}</td>
-            <td class="ms-num" style="font-weight:600;">${fmtINR(r.totalAmount)}${__msConPayTdsNote(r, fmtINR)}</td>
+            <td class="ms-num" style="font-weight:600;" data-sort="${Number(r.totalAmount) || 0}">${fmtINR(r.totalAmount)}${__msConPayTdsNote(r, fmtINR)}</td>
             <td class="ms-nw">${statusBadge}</td>
             <td class="ms-nw">${paidDate}</td>
             <td class="ms-nw">${filesCellHtml}</td>
         </tr>`;
     }).join('');
+    __msSortRefresh('conPaymentsTable');   // 8FL
 }
 
 // ----- Consultant Master grid render -----
@@ -42924,7 +42996,7 @@ function renderConsultantMaster() {
         if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
         return (a.name || '').localeCompare(b.name || '');
     });
-    if (view === 'list') { grid.innerHTML = __msConMasterListHtml(sorted); return; }   // 8FE
+    if (view === 'list') { grid.innerHTML = __msConMasterListHtml(sorted); __msSortRefreshKey('consultantMaster'); return; }   // 8FE; 8FL the chosen order
     grid.innerHTML = sorted.map(c => {
         const paymentCount = consultantPayments.filter(p => p.consultantId === c.id).length;
         const attCount = (typeof getAttachmentCount === 'function')
@@ -45663,55 +45735,6 @@ function toggleArAnalytics() {
     applyArAnalyticsCollapsed();
 }
 
-// Phase 8BI — Receivables register sort (mirror of the AP 8BH version).
-var __MS_AR_SORT_KEY = 'ms_ar_sort_v1';
-function getArSort() {
-    try { var s = JSON.parse(localStorage.getItem(__MS_AR_SORT_KEY) || 'null'); if (s && s.key) return s; } catch (e) {}
-    return { key: null, dir: 'asc' };
-}
-function setArSort(key) {
-    var cur = getArSort();
-    var dir = (cur.key === key && cur.dir === 'asc') ? 'desc' : 'asc';
-    if (cur.key === key && cur.dir === 'desc') { key = null; dir = 'asc'; } // third click clears
-    try { localStorage.setItem(__MS_AR_SORT_KEY, JSON.stringify({ key: key, dir: dir })); } catch (e) {}
-    renderARApPage();
-}
-// AR amount sorts on the same taxed value shown in the column, when _arTax exists.
-function __arSortVal(r, key) {
-    var inv = (r.invoices && r.invoices[0]) ? r.invoices[0] : {};
-    var amt = (typeof _arTax === 'function') ? _arTax(r.cycleRev || 0) : (Number(r.cycleRev) || 0);
-    switch (key) {
-        case 'due':      { var d = r.hasInvoice ? r.invoiceDueDate : r.dueDate; return (d && d.getTime && !isNaN(d.getTime())) ? d.getTime() : 0; }
-        case 'client':   return String(r.client || '').toLowerCase();
-        case 'product':  return String(r.product || '').toLowerCase();
-        case 'cycle':    return Number(r.cycle || 0);
-        case 'invNo':    return String(inv.invNo || '').toLowerCase();
-        case 'invDate':  return inv.date ? (new Date(inv.date).getTime() || 0) : -Infinity;
-        case 'inr':      return Number(amt || 0);
-        case 'days':     return Number(r.hasInvoice ? (r.invoiceDaysOverdue || 0) : -Infinity);
-        case 'payDate':  return inv.paidDate ? (new Date(inv.paidDate).getTime() || 0) : -Infinity;
-        case 'status':   return String(r.status || '').toLowerCase();
-        default:         return 0;
-    }
-}
-function __arApplySort(rows) {
-    var s = getArSort();
-    if (!s.key) return rows;
-    var mult = s.dir === 'desc' ? -1 : 1;
-    return rows.slice().sort(function (a, b) {
-        var va = __arSortVal(a, s.key), vb = __arSortVal(b, s.key);
-        if (va < vb) return -1 * mult;
-        if (va > vb) return 1 * mult;
-        return 0;
-    });
-}
-function __arTh(key, label, alignRight) {
-    var s = getArSort();
-    var arrow = s.key === key ? (s.dir === 'asc' ? ' <i class="fas fa-caret-up"></i>' : ' <i class="fas fa-caret-down"></i>') : '';
-    var style = 'cursor:pointer; user-select:none;' + (alignRight ? ' text-align:right;' : '');
-    return '<th style="' + style + '" onclick="setArSort(\'' + key + '\')" title="Sort by ' + label + '">' + label + arrow + '</th>';
-}
-
 // Phase 8BH — Payables analytics collapse. Single toggle hides the Payables
 // Overview + AP Aging Analysis block (#apAnalyticsTop) and the AP Aging by
 // Client/Contract card (#apAgingClientCard) to give the AP register more room.
@@ -45735,57 +45758,6 @@ function toggleApAnalytics() {
     try { collapsed = localStorage.getItem(__MS_AP_ANALYTICS_KEY) === '1'; } catch (e) {}
     try { localStorage.setItem(__MS_AP_ANALYTICS_KEY, collapsed ? '0' : '1'); } catch (e) {}
     applyApAnalyticsCollapsed();
-}
-
-// Phase 8BH — AP register sort. Click a header to sort; click again to flip
-// direction. State persists in localStorage. Sort is applied to the already
-// filtered rows just before render, so it respects the active status/aging filters.
-var __MS_AP_SORT_KEY = 'ms_ap_sort_v1';
-function getApSort() {
-    try { var s = JSON.parse(localStorage.getItem(__MS_AP_SORT_KEY) || 'null'); if (s && s.key) return s; } catch (e) {}
-    return { key: null, dir: 'asc' };
-}
-function setApSort(key) {
-    var cur = getApSort();
-    var dir = (cur.key === key && cur.dir === 'asc') ? 'desc' : 'asc';
-    if (cur.key === key && cur.dir === 'desc') { key = null; dir = 'asc'; } // third click clears
-    try { localStorage.setItem(__MS_AP_SORT_KEY, JSON.stringify({ key: key, dir: dir })); } catch (e) {}
-    renderARApPage();
-}
-// Comparator value extractor for a given sort key on an AP record (r) + its invoice (inv).
-function __apSortVal(r, key) {
-    var inv = (r.invoices && r.invoices[0]) ? r.invoices[0] : {};
-    switch (key) {
-        case 'due':      { var d = r.hasInvoice ? r.invoiceDueDate : r.dueDate; return (d && d.getTime && !isNaN(d.getTime())) ? d.getTime() : 0; }
-        case 'client':   return (String(r.client || '') + ' ' + String(r.product || '')).toLowerCase();
-        case 'oemInv':   return String(inv.invNo || '').toLowerCase();
-        case 'invDate':  return inv.date ? (new Date(inv.date).getTime() || 0) : -Infinity;
-        case 'vendor':   return Number(r.cycleCostUSD || 0);
-        case 'inr':      return Number(r.cycleCostINR || 0);
-        case 'days':     return Number(r.hasInvoice ? (r.invoiceDaysOverdue || 0) : -Infinity);
-        case 'payDate':  return inv.payDate ? (new Date(inv.payDate).getTime() || 0) : -Infinity;
-        case 'status':   return String(r.status || '').toLowerCase();
-        case 'cycle':    return Number(r.cycle || 0);
-        default:         return 0;
-    }
-}
-function __apApplySort(rows) {
-    var s = getApSort();
-    if (!s.key) return rows;
-    var mult = s.dir === 'desc' ? -1 : 1;
-    return rows.slice().sort(function (a, b) {
-        var va = __apSortVal(a, s.key), vb = __apSortVal(b, s.key);
-        if (va < vb) return -1 * mult;
-        if (va > vb) return 1 * mult;
-        return 0;
-    });
-}
-// Build a sortable <th> with arrow indicator.
-function __apTh(key, label, alignRight) {
-    var s = getApSort();
-    var arrow = s.key === key ? (s.dir === 'asc' ? ' <i class="fas fa-caret-up"></i>' : ' <i class="fas fa-caret-down"></i>') : '';
-    var style = 'cursor:pointer; user-select:none;' + (alignRight ? ' text-align:right;' : '');
-    return '<th style="' + style + '" onclick="setApSort(\'' + key + '\')" title="Sort by ' + label + '">' + label + arrow + '</th>';
 }
 
 // 8CU — free-text matcher for the AR/AP register search boxes. Matches the
@@ -46111,29 +46083,11 @@ function renderARApPage() {
             return `<tr><td><strong>${getClientDisplayHtml(data.client || name)}</strong></td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.collected > 0 ? fmt(data.collected) : '-'}</td></tr>`;
         });
         arAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-dim);">No AR data for this period.</td></tr>';
+        __msSortRefresh('arAgingClientTable');   // 8FL
     }
 
     const arRegisterBody = document.getElementById('arRegisterBody');
     if (arRegisterBody) {
-        // Phase 8BI — build the sortable AR header (arrows reflect current sort).
-        // Linked Invoice and Action are not sortable.
-        try {
-            const arHead = document.getElementById('arRegisterHeadRow');
-            if (arHead && typeof __arTh === 'function') {
-                arHead.innerHTML =
-                    __arTh('due', 'Due Date') +
-                    __arTh('client', 'Client') +
-                    __arTh('product', 'Product / OEM') +
-                    __arTh('cycle', 'Cycle') +
-                    __arTh('invNo', 'Invoice') +
-                    __arTh('invDate', 'Invoice Date') +
-                    __arTh('inr', 'Amount (INR)', true) +
-                    __arTh('days', 'Days O/S') +
-                    __arTh('payDate', 'Payment Date') +
-                    __arTh('status', 'Status') +
-                    '<th style="text-align:right;">Action</th>';
-            }
-        } catch (e) { console.warn('AR sortable header:', e); }
         const filteredAR_byStatus = arStatusVal === 'ALL' ? arRecords.slice() : arRecords.filter(r => { if (arStatusVal === 'PENDING') return r.status === 'PENDING'; if (arStatusVal === 'ISSUED') return r.status === 'INVOICED' || r.status === 'OVERDUE' || r.status === 'PAID'; if (arStatusVal === 'INVOICED') return r.status === 'INVOICED' || r.status === 'OVERDUE'; if (arStatusVal === 'OVERDUE') return r.status === 'OVERDUE'; if (arStatusVal === 'PAID') return r.status === 'PAID'; return true; });
         // 8U item #9: aging filter — only meaningful for invoiced/overdue records
         // (PAID and PENDING aren't in any aging bucket per renderARApPage's own
@@ -46156,10 +46110,8 @@ function renderARApPage() {
             const tb = (db && !isNaN(db.getTime())) ? db.getTime() : Infinity;
             return ta - tb; // ascending — oldest/most-overdue at the top
         });
-        // Phase 8BI — apply the user's chosen column sort (if any) on top of the
-        // default due-date order. Operates on filteredAR so it respects the active
-        // status/aging filters. Persisted in ms_ar_sort_v1.
-        const filteredARsorted = (typeof __arApplySort === 'function') ? __arApplySort(filteredAR) : filteredAR;
+        // 8FL — the column headings sort on screen (the 8FK sorter, ms_sort_v1); the 8BI sorter and ms_ar_sort_v1 are gone
+        const filteredARsorted = filteredAR;
 
         // Phase 8F item #1: Compute Selected Total card. Hidden when filter=ALL or no rows.
         // AR is INR-only (no foreign-currency split). Unit label adapts to filter:
@@ -46231,9 +46183,10 @@ function renderARApPage() {
             const clientCellHtml = (r.commercialModel === 'Resale' && r.sourcedViaResellerKey)
                 ? `${getClientDisplayHtml(r.client)}<div style="font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; font-style:italic;">via ${pEsc(r.sourcedViaResellerKey)}</div>`
                 : getClientDisplayHtml(r.client);
-            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${getProductDisplayHtml(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td>${invoiceCell}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${fmt(_arTax(r.cycleRev))}</td><td style="text-align:right;">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
+            return `<tr><td><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td>${clientCellHtml}</td><td style="color:var(--text-dim); font-size:12px;">${getProductDisplayHtml(r.product)}</td><td>Cycle ${r.cycle}${r.crossoverBadge || ''}</td><td data-sort="${pEsc(inv.invNo || (linkedInv && linkedInv.invoiceNumber) || '')}">${invoiceCell}</td><td>${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td style="text-align:right; font-weight:600;">${fmt(_arTax(r.cycleRev))}</td><td style="text-align:right;" data-sort="${(r.status !== 'PAID' && r.hasInvoice) ? (r.invoiceDaysOverdue || 0) : ''}">${daysDisplay}</td><td>${inv.paidDate ? `<span style="color:var(--success);">${formatDateReadable(inv.paidDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td><td style="text-align:right;"><button class="btn btn-ghost btn-sm" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i> Manage</button></td></tr>`;
         });
         arRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
+        __msSortRefresh('arRegisterTable');   // 8FL
     }
 
     // Render AP
@@ -46326,31 +46279,11 @@ function renderARApPage() {
             return `<tr><td><strong>${labelHtml}</strong></td><td style="text-align:right; color:var(--success);">${data['0_30'] > 0 ? fmt(data['0_30']) : '-'}</td><td style="text-align:right; color:var(--accent-cyan);">${data['31_60'] > 0 ? fmt(data['31_60']) : '-'}</td><td style="text-align:right; color:var(--warning);">${data['61_90'] > 0 ? fmt(data['61_90']) : '-'}</td><td style="text-align:right; color:var(--danger); font-weight:${data['90plus'] > 0 ? '700' : '400'};">${data['90plus'] > 0 ? fmt(data['90plus']) : '-'}</td><td style="text-align:right; font-weight:600;">${fmt(outstanding)}</td><td style="text-align:right; color:var(--success);">${data.settled > 0 ? fmt(data.settled) : '-'}</td></tr>`;
         });
         apAgingClientBody.innerHTML = rows.join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-dim);">No AP data for this period.</td></tr>';
+        __msSortRefresh('apAgingClientTable');   // 8FL
     }
 
     const apRegisterBody = document.getElementById('apRegisterBody');
     if (apRegisterBody) {
-        // Phase 8BH — build the sortable header (arrows reflect current sort).
-        // FX Rate, Linked PO, and Action are not sortable.
-        try {
-            const apHead = document.getElementById('apRegisterHeadRow');
-            if (apHead && typeof __apTh === 'function') {
-                // 8FH.3 — eleven columns that fit the window: the FX rate sits under the vendor amount, the cycle
-                // under the contract (a saved sort by cycle still applies), Manage is the arrow alone
-                apHead.innerHTML =
-                    __apTh('due', 'Due Date') +
-                    __apTh('client', 'Client / Contract') +
-                    __apTh('oemInv', 'OEM Invoice #') +
-                    __apTh('invDate', 'Invoice Date') +
-                    __apTh('vendor', 'Vendor Amt', true) +
-                    __apTh('inr', 'Amount (INR)', true) +
-                    __apTh('days', 'Days O/S') +
-                    __apTh('payDate', 'Payment Date') +
-                    __apTh('status', 'Status') +
-                    '<th>Linked PO</th>' +
-                    '<th></th>';
-            }
-        } catch (e) { console.warn('AP sortable header:', e); }
         // Bug fix #20b — "Received & Unpaid" filter now also surfaces OVERDUE
         // rows. An overdue invoice is by definition received and unpaid (just
         // past its due date), so it should appear under this filter too.
@@ -46373,10 +46306,8 @@ function renderARApPage() {
             const tb = (db && !isNaN(db.getTime())) ? db.getTime() : Infinity;
             return ta - tb; // ascending — oldest/most-overdue at the top
         });
-        // Phase 8BH — apply the user's chosen column sort (if any) on top of the
-        // default due-date order. Operates on filteredAP so it respects the active
-        // status/aging filters. Persisted in ms_ap_sort_v1.
-        const filteredAPsorted = (typeof __apApplySort === 'function') ? __apApplySort(filteredAP) : filteredAP;
+        // 8FL — the column headings sort on screen (the 8FK sorter, ms_sort_v1); the 8BH sorter and ms_ap_sort_v1 are gone
+        const filteredAPsorted = filteredAP;
 
         // 8AA item #3: Compute Selected Total card. Hidden when filter=ALL or no rows.
         // Shows INR total + USD total for any foreign-currency invoices + invoice count.
@@ -46430,9 +46361,10 @@ function renderARApPage() {
                 ? `<a href="#" onclick="openPODetail('${linkedPo.id}'); return false;" style="color:var(--purple); font-family:monospace; font-size:11px; text-decoration:none; font-weight:500;" title="${pEsc(linkedPo.subject || '')}">${pEsc(linkedPo.poNumber)}</a>`
                 : '<span style="color:var(--text-dim); font-size:11px;">—</span>';
             
-            return `<tr><td class="ms-nw"><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)} · <span style="white-space:nowrap;">Cycle ${r.cycle}</span>${r.crossoverBadge || ''}</div></td><td>${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}${__msRemitBtnHtml(r)}</td><td class="ms-nw">${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td class="ms-num" style="font-weight:600;">${apDispAmt}${(!isINR && r.effFX) ? `<div style="font-size:10.5px; font-weight:400; color:var(--text-dim);" title="FX rate">@ ${r.effFX.toFixed(2)}</div>` : ''}</td><td class="ms-num" style="font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(_apTax(r.cycleCostINR))}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="font-size:12px;">${daysDisplay}</td><td class="ms-nw">${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}${__msRmtApMark(inv)}</td><td class="ms-nw">${statusBadge}</td><td class="ms-nw">${poCellHtml}</td><td class="ms-nw" style="text-align:right;"><button class="btn btn-ghost btn-sm" title="Manage this cycle" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i></button></td></tr>`;
+            return `<tr><td class="ms-nw"><strong>${r.hasInvoice ? formatDateReadable(r.invoiceDueDate) : formatDateReadable(r.dueDate)}</strong>${r.hasInvoice ? '' : '<div style="font-size:10px; color:var(--text-dim);">(expected)</div>'}</td><td><strong>${getClientDisplayHtml(r.client)}</strong><div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${getProductDisplayHtml(r.product)} · <span style="white-space:nowrap;">Cycle ${r.cycle}</span>${r.crossoverBadge || ''}</div></td><td data-sort="${pEsc(inv.invNo || '')}">${inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:500; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:500;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'}${window.__msRegisterLocalFileIcon(inv.localPath, false)}${__msRemitBtnHtml(r)}</td><td class="ms-nw">${inv.date ? formatDateReadable(inv.date) : '<span style="color:var(--text-dim);">—</span>'}</td><td class="ms-num" style="font-weight:600;" data-sort="${Math.round(Number(r.cycleCostINR) || 0)}">${apDispAmt}${(!isINR && r.effFX) ? `<div style="font-size:10.5px; font-weight:400; color:var(--text-dim);" title="FX rate">@ ${r.effFX.toFixed(2)}</div>` : ''}</td><td class="ms-num" style="font-weight:600;${r._inrIsLiveFx ? ' color:var(--accent-cyan);' : ''}" ${r._inrIsLiveFx ? `title="Computed at today's rate ₹${r._liveFxRate.toFixed(3)}. At invoice-date rate ₹${(r._fxAtInvoiceRate || 0).toFixed(3)} this would be ${fmt(r._inrAtInvoiceRate)}."` : ''}>${fmt(_apTax(r.cycleCostINR))}${r._inrIsLiveFx ? ' <span style="font-size:9px; opacity:0.7;">●</span>' : ''}</td><td style="font-size:12px;" data-sort="${(r.status !== 'SETTLED' && r.hasInvoice) ? (r.invoiceDaysOverdue || 0) : ''}">${daysDisplay}</td><td class="ms-nw">${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}${__msRmtApMark(inv)}</td><td class="ms-nw">${statusBadge}</td><td class="ms-nw">${poCellHtml}</td><td class="ms-nw" style="text-align:right;"><button class="btn btn-ghost btn-sm" title="Manage this cycle" onclick="jumpToContract(${r.cIdx}); setTimeout(()=>openUnifiedModal(${r.cIdx},${r.yIdx}),600);"><i class="fas fa-arrow-right"></i></button></td></tr>`;
         });
         apRegisterBody.innerHTML = rows.join('') || '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text-dim);">No records found for selected filter.</td></tr>';
+        __msSortRefresh('apRegisterTable');   // 8FL
     }
     // 8FC — the Remittances section under the register (read from the engine's list when first looked at, or stale).
     try { __msRmtOnPayables(); } catch (e) { console.warn('8FC remittances:', e); }
@@ -46603,7 +46535,7 @@ function renderClientSummary() {
         csYearBody.innerHTML = sortedYears.map((fy, i) => {
             const d = yearlyData[fy]; const mPct = d.rev > 0 ? (d.margin / d.rev) * 100 : 0; let prevRev = i > 0 ? yearlyData[sortedYears[i - 1]].rev : 0; let yoy = prevRev > 0 ? ((d.rev - prevRev) / prevRev) * 100 : null;
             const isHighlighted = (selectedFY !== 'ALL' && fy === parseInt(selectedFY.split('-')[0]).toString()) || (selectedFY2 && fy === parseInt(selectedFY2.split('-')[0]).toString());
-            return `<tr style="${isHighlighted ? 'background: var(--accent-tint-low);' : ''}"><td><strong>FY ${fy}-${(parseInt(fy)+1).toString().slice(-2)}</strong></td><td style="text-align:right;">${fmt(d.rev)}</td><td style="text-align:right; color:var(--text-dim);">${fmt(d.cost)}</td><td style="text-align:right; color:var(--success);">${fmt(d.margin)}</td><td style="text-align:right;"><span class="badge ${mPct >= 15 ? 'ok' : (mPct < 10 ? 'warn' : 'pending')}">${mPct.toFixed(1)}%</span></td><td style="text-align:right;">${yoy === null ? '—' : `<span style="color:${yoy >= 0 ? 'var(--success)' : 'var(--danger)'}">${yoy >= 0 ? '▲' : '▼'} ${Math.abs(yoy).toFixed(1)}%</span>`}</td></tr>`;
+            return `<tr style="${isHighlighted ? 'background: var(--accent-tint-low);' : ''}"><td><strong>FY ${fy}-${(parseInt(fy)+1).toString().slice(-2)}</strong></td><td style="text-align:right;">${fmt(d.rev)}</td><td style="text-align:right; color:var(--text-dim);">${fmt(d.cost)}</td><td style="text-align:right; color:var(--success);">${fmt(d.margin)}</td><td style="text-align:right;"><span class="badge ${mPct >= 15 ? 'ok' : (mPct < 10 ? 'warn' : 'pending')}">${mPct.toFixed(1)}%</span></td><td style="text-align:right;" data-sort="${yoy === null ? '' : yoy.toFixed(2)}">${yoy === null ? '—' : `<span style="color:${yoy >= 0 ? 'var(--success)' : 'var(--danger)'}">${yoy >= 0 ? '▲' : '▼'} ${Math.abs(yoy).toFixed(1)}%</span>`}</td></tr>`;
         }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);">No data available.</td></tr>';
     }
 
@@ -46680,7 +46612,7 @@ function renderClientSummary() {
     const csApStatusBody = document.getElementById('csApStatusBody');
     if (csApStatusBody) {
         const filteredAP = activeRange ? apRecords.filter(r => isInRange(r.bd, activeRange)) : apRecords;
-        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;">${(r.costCurrency || 'USD') === 'INR' ? '₹' : '$'}${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${(r.costCurrency || 'USD') === 'INR' ? '—' : (r.effFX ? r.effFX.toFixed(2) : '—')}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
+        csApStatusBody.innerHTML = filteredAP.map(r => { const inv = r.invoices[0] || {}; const statusBadge = r.status === 'SETTLED' ? '<span class="badge ok">SETTLED</span>' : r.status === 'INVOICED' ? '<span class="badge invoiced">RECEIVED</span>' : '<span class="badge pending">PENDING</span>'; const rowClass = r.status === 'SETTLED' ? 'tr-paid' : r.status === 'INVOICED' ? 'tr-invoiced' : ''; const invCell = inv.invNo ? ((window.__msDocAnchor(inv.localPath, inv.link, 'style="color:var(--warning); font-weight:600; text-decoration:none;" title="Open OEM invoice"', `<i class="fas fa-external-link-alt" style="font-size:10px; margin-right:3px; opacity:0.7;"></i>${pEsc(inv.invNo)}`)) || `<span style="color:var(--warning); font-weight:600;">${pEsc(inv.invNo)}</span>`) : '<span style="color:var(--text-dim);">—</span>'; return `<tr class="${rowClass}"><td><strong>Cycle ${r.cycle}</strong></td><td>${invCell}</td><td style="font-weight:600; text-align:right;" data-sort="${Math.round(Number(r.cycleCostINR) || 0)}">${(r.costCurrency || 'USD') === 'INR' ? '₹' : '$'}${Number(r.cycleCostUSD).toLocaleString('en-IN', {maximumFractionDigits:0})}</td><td style="text-align:right;">${(r.costCurrency || 'USD') === 'INR' ? '—' : (r.effFX ? r.effFX.toFixed(2) : '—')}</td><td>${inv.payDate ? `<span style="color:var(--success);">${formatDateReadable(inv.payDate)}</span>` : '<span style="color:var(--text-dim);">—</span>'}</td><td>${statusBadge}</td></tr>`; }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-dim);"><i class="fas fa-inbox" style="display:block;font-size:20px;margin-bottom:8px;"></i>No AP records for this period.</td></tr>';
     }
 
     const csRenewalTimeline = document.getElementById('csRenewalTimeline');
@@ -46749,7 +46681,7 @@ function renderClientSummary() {
         else if (healthScore >= 40) { healthRing.classList.add('health-fair'); healthLabel.innerText = 'Fair'; }
         else { healthRing.classList.add('health-poor'); healthLabel.innerText = 'Poor'; }
     }
-
+    ['csContractTable', 'csYearTable', 'csProductTable', 'csArStatusTable', 'csApStatusTable'].forEach(function (id) { __msSortRefresh(id); });   // 8FL
 }
 
 // =====================================================================
@@ -46924,6 +46856,7 @@ function __msSaveGeneratedDocInline(t, docName) {
     };
     var list = __msLoadGenDocs();
     list.push(rec);
+    __msGenDocRevealGroup(rec);   // 8FL — its client's block opens if it was closed
     __msPersistGenDocs();
     if (typeof showProspectToast === 'function') {
         showProspectToast('<i class="fas fa-folder-plus" style="color:var(--success);"></i> Saved <strong>' + pEsc(rec.templateName) + '</strong> to Generated Documents' + (isOther ? '' : ' for <strong>' + pEsc(rec.clientName) + '</strong>') + '.', 4500);
@@ -46931,66 +46864,162 @@ function __msSaveGeneratedDocInline(t, docName) {
 }
 
 // ---- Render the lower-half table --------------------------------------
-function __msGenDocPopulateClientFilter() {
-    var sel = document.getElementById('genDocFilterClient');
-    if (!sel) return;
-    var cur = sel.value;
-    var list = __msLoadGenDocs();
-    var names = {};
-    list.forEach(function (d) { if (d.clientName) names[d.clientName] = 1; });
-    var html = '<option value="">All clients</option>';
-    Object.keys(names).sort().forEach(function (n) { html += '<option value="' + pEsc(n) + '">' + pEsc(n) + '</option>'; });
-    html += '<option value="__OTHER__">Other / non-client</option>';
-    sel.innerHTML = html;
-    if (cur) sel.value = cur;
+// ---- Generated Documents — 8FL: one block per client (the papers issued for HDFC, for the Airtel tender …) --------
+// The same block as the Template Library: A→Z, "Other" (a document marked Other / no client) last; the heading carries
+// the client (the Client Master's spelling when it has the client, else the latest document's), the count, how many are
+// issued and drafts, and the latest date (created or edited); a closed block is remembered on this Mac
+// (localStorage ms_gendoc_groups_v1, closed blocks only); the column headings sort (one choice for all the blocks,
+// ms_sort_v1 key "genDocs"); the search box and the Status filter work across every block, and while a search is on the
+// headings and Expand / Collapse all are inert. Rows are newest first unless a heading was clicked.
+var MS_GENDOC_GROUPS_KEY = 'ms_gendoc_groups_v1';
+var __msGenDocGroups = null;
+function __msGenDocGroupsLoad() {
+    if (__msGenDocGroups) return __msGenDocGroups;
+    var g = { closed: {} };
+    try { var raw = localStorage.getItem(MS_GENDOC_GROUPS_KEY); if (raw) { var p = JSON.parse(raw); if (p && typeof p === 'object' && p.closed && typeof p.closed === 'object') g = { closed: p.closed }; } } catch (e) {}
+    __msGenDocGroups = g;
+    return g;
+}
+function __msGenDocGroupsSave() { try { localStorage.setItem(MS_GENDOC_GROUPS_KEY, JSON.stringify(__msGenDocGroupsLoad())); } catch (e) {} }
+function __msGenDocKey(d) { return (d && !d.isOther && d.clientName) ? String(d.clientName).trim().replace(/\s+/g, ' ').toLowerCase() : ''; }
+function __msGenDocWhen(d) { var v = d && d.createdAt; if (!v) return 0; if (typeof v === 'number') return v; var n = Number(v); if (n) return n; var p = Date.parse(v); return isNaN(p) ? 0 : p; }
+function __msGenDocTouched(d) {                     // the latest of created / edited, for the block's "latest" (review NIT-10)
+    var c = __msGenDocWhen(d), u = d && d.updatedAt ? (typeof d.updatedAt === 'number' ? d.updatedAt : (Number(d.updatedAt) || Date.parse(d.updatedAt) || 0)) : 0;
+    return Math.max(c, isNaN(u) ? 0 : u);
+}
+function __msGenDocLabel(key, d) {                  // the block's name: the Client Master's spelling when the client is there, else the document's (review NIT-10)
+    try { if (typeof clientMaster !== 'undefined') { var names = Object.keys(clientMaster); for (var i = 0; i < names.length; i++) if (String(names[i]).trim().replace(/\s+/g, ' ').toLowerCase() === key) return names[i]; } } catch (e) {}
+    return String(d.clientName).trim().replace(/\s+/g, ' ');
+}
+function __msGenDocSearchText() { return ((document.getElementById('genDocSearch') || {}).value || '').trim(); }
+function __msGenDocBlocks(list) {
+    var byKey = {}, out = [];
+    (list || []).forEach(function (d) {
+        var key = __msGenDocKey(d), g = byKey[key];
+        if (!g) { g = byKey[key] = { key: key, label: key ? __msGenDocLabel(key, d) : 'Other', items: [], last: 0, lastLabelAt: -1, issued: 0, drafts: 0 }; out.push(g); }
+        g.items.push(d);
+        var when = __msGenDocWhen(d); if (when > g.lastLabelAt && key) { g.lastLabelAt = when; g.label = __msGenDocLabel(key, d); }   // the most recent document's spelling (unless the Client Master has the name)
+        var touched = __msGenDocTouched(d); if (touched > g.last) g.last = touched;
+        if (d.status === 'issued') g.issued++; else g.drafts++;
+    });
+    out.sort(function (a, b) {
+        if (!a.key !== !b.key) return a.key ? -1 : 1;                            // "Other" last
+        return a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return out;
+}
+function __msGenDocGroupsPrune(groups) {
+    var g = __msGenDocGroupsLoad(), live = {}, changed = false;
+    (groups || __msGenDocBlocks(__msLoadGenDocs())).forEach(function (c) { live[c.key] = true; });
+    Object.keys(g.closed).forEach(function (k) { if (!live[k]) { delete g.closed[k]; changed = true; } });
+    if (changed) __msGenDocGroupsSave();
+}
+function __msGenDocToggleGroup(el) {
+    var host = el && el.closest ? el.closest('.ms-tpl-group') : null;
+    if (!host) return;
+    if (__msGenDocSearchText()) return;                // shown open for the search: nothing to toggle
+    var key = host.getAttribute('data-cat') || '';
+    var g = __msGenDocGroupsLoad();
+    if (g.closed[key]) delete g.closed[key]; else g.closed[key] = true;
+    __msGenDocGroupsSave();
+    renderGeneratedDocs();
+    __msGenDocFocusGroup(key);
+}
+function __msGenDocFocusGroup(key) {
+    var groups = document.querySelectorAll('#genDocsGroups .ms-tpl-group');
+    for (var i = 0; i < groups.length; i++) if ((groups[i].getAttribute('data-cat') || '') === key) { var h = groups[i].querySelector('.ms-tpl-group-head'); if (h) h.focus(); return; }
+}
+function __msGenDocGroupsAll(open) {
+    if (__msGenDocSearchText()) return;
+    var g = __msGenDocGroupsLoad();
+    g.closed = {};
+    if (!open) __msGenDocBlocks(__msLoadGenDocs()).forEach(function (c) { g.closed[c.key] = true; });
+    __msGenDocGroupsSave();
+    renderGeneratedDocs();
+}
+function __msGenDocRevealGroup(d) {                  // a document saved into a closed block: the block opens
+    var g = __msGenDocGroupsLoad(), key = __msGenDocKey(d);
+    if (g.closed[key]) { delete g.closed[key]; __msGenDocGroupsSave(); }
+}
+function __msGenDocRowHtml(d) {
+    var issued = (d.status === 'issued');
+    var statusBadge = issued
+        ? '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(46,160,67,0.18); color:var(--success,#3fb950); font-size:11.5px; font-weight:600;">Issued</span>'
+        : '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(150,150,150,0.18); color:var(--text-dim); font-size:11.5px; font-weight:600;">Draft</span>';
+    // the actions as the Template Library's: one labelled button (View / Mark Issued) and icon buttons with their titles,
+    // so the row fits the block without scrolling sideways (the flat table's labelled Edit / Re-print ran off the card)
+    var actions = '';
+    if (issued) {
+        actions += '<button class="btn btn-primary btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="View issued PDF"><i class="fas fa-file-pdf"></i> View</button> ';
+    } else {
+        actions += '<button class="btn btn-ghost btn-sm" onclick="editGeneratedDoc(\'' + d.id + '\')" title="Edit this draft — reopens the fill screen; printing updates this document, not a new one" aria-label="Edit"><i class="fas fa-pen"></i></button> ';
+        actions += '<button class="btn btn-ghost btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="Re-print draft" aria-label="Re-print"><i class="fas fa-print"></i></button> ';
+        actions += '<button class="btn btn-primary btn-sm" onclick="markGeneratedDocIssued(\'' + d.id + '\')" title="Upload the signed / issued PDF"><i class="fas fa-file-upload"></i> Mark Issued</button> ';
+    }
+    actions += '<button class="btn btn-ghost btn-sm" onclick="deleteGeneratedDoc(\'' + d.id + '\')" title="Delete" aria-label="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>';
+    var forWhom = d.isOther ? '<div class="ms-imp-note" style="font-weight:400;"><i class="fas fa-tag"></i> ' + pEsc(d.otherNote || 'Other') + '</div>' : (!d.clientName ? '<div class="ms-imp-note" style="font-weight:400;"><i class="fas fa-tag"></i> no client</div>' : '');
+    return '<tr>' +
+        '<td><strong>' + pEsc(d.templateName || 'Document') + '</strong>' + forWhom + '</td>' +
+        '<td data-sort="' + (__msGenDocWhen(d) || '') + '">' + __msFmtDateShort(d.createdAt) + (d.updatedAt ? ' <span style="color:var(--text-dim); font-size:11px;" title="Last edited ' + pEsc(__msFmtDateShort(d.updatedAt)) + '">· edited</span>' : '') + '</td>' +
+        '<td>' + statusBadge + '</td>' +
+        '<td style="text-align:right; white-space:nowrap;">' + actions + '</td>' +
+    '</tr>';
 }
 function renderGeneratedDocs() {
-    var body = document.getElementById('genDocsBody');
-    if (!body) return;
-    __msGenDocPopulateClientFilter();
-    var list = __msLoadGenDocs().slice();
-    var fc = (document.getElementById('genDocFilterClient') || {}).value || '';
+    var host = document.getElementById('genDocsGroups');
+    if (!host) return;
+    var all = __msLoadGenDocs().slice();
     var fs = (document.getElementById('genDocFilterStatus') || {}).value || '';
-    var q = ((document.getElementById('genDocSearch') || {}).value || '').trim().toLowerCase();
-    if (fc === '__OTHER__') list = list.filter(function (d) { return d.isOther; });
-    else if (fc) list = list.filter(function (d) { return d.clientName === fc; });
-    if (fs) list = list.filter(function (d) { return (d.status || 'draft') === fs; });
-    if (q) list = list.filter(function (d) {
-        return (String(d.templateName || '').toLowerCase().indexOf(q) !== -1) ||
-               (String(d.clientName || '').toLowerCase().indexOf(q) !== -1) ||
-               (String(d.otherNote || '').toLowerCase().indexOf(q) !== -1);
-    });
-    list.sort(function (a, b) { return String(b.createdAt || '') < String(a.createdAt || '') ? -1 : 1; });
-    if (list.length === 0) {
-        body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-dim);">No generated documents yet. Fill a template with <strong>Track this document</strong> ticked and print it.</td></tr>';
+    var qRaw = __msGenDocSearchText(), q = qRaw.toLowerCase();
+    var groups = __msGenDocBlocks(all);
+    __msGenDocGroupsPrune(groups);
+    var summary = document.getElementById('genDocsSummary');
+    if (summary) {
+        var named = groups.filter(function (c) { return c.key; }).length, other = groups.length > named ? groups[groups.length - 1].items.length : 0;
+        summary.textContent = !all.length ? '' : (all.length + ' document' + (all.length === 1 ? '' : 's') + (named ? ' for ' + named + ' client' + (named === 1 ? '' : 's') + (other ? ' + ' + other + ' other' : '') : ', none for a client'));
+    }
+    var links = document.getElementById('genDocExpandAll') && document.getElementById('genDocExpandAll').parentNode;
+    if (links) { links.style.opacity = q ? '0.45' : ''; links.title = q ? 'Clear the search to open or close clients' : ''; }
+    if (all.length === 0) {
+        host.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-dim);">No generated documents yet. Fill a template with <strong>Track this document</strong> ticked and print it.</div>';
         return;
     }
-    body.innerHTML = list.map(function (d) {
-        var who = d.isOther
-            ? '<span style="color:var(--text-dim);"><i class="fas fa-tag"></i> Other: </span>' + pEsc(d.otherNote || '—')
-            : pEsc(d.clientName || '—');
-        var issued = (d.status === 'issued');
-        var statusBadge = issued
-            ? '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(46,160,67,0.18); color:var(--success,#3fb950); font-size:11.5px; font-weight:600;">Issued</span>'
-            : '<span style="display:inline-block; padding:2px 9px; border-radius:10px; background:rgba(150,150,150,0.18); color:var(--text-dim); font-size:11.5px; font-weight:600;">Draft</span>';
-        var actions = '';
-        if (issued) {
-            actions += '<button class="btn btn-primary btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="View issued PDF"><i class="fas fa-file-pdf"></i> View</button> ';
-        } else {
-            actions += '<button class="btn btn-ghost btn-sm" onclick="editGeneratedDoc(\'' + d.id + '\')" title="Edit this draft — reopens the fill screen; printing updates this document, not a new one"><i class="fas fa-pen"></i> Edit</button> ';
-            actions += '<button class="btn btn-ghost btn-sm" onclick="viewGeneratedDoc(\'' + d.id + '\')" title="Re-print draft"><i class="fas fa-print"></i> Re-print</button> ';
-            actions += '<button class="btn btn-primary btn-sm" onclick="markGeneratedDocIssued(\'' + d.id + '\')" title="Upload signed/issued PDF"><i class="fas fa-file-upload"></i> Mark Issued</button> ';
-        }
-        actions += '<button class="btn btn-ghost btn-sm" onclick="deleteGeneratedDoc(\'' + d.id + '\')" title="Delete" style="color:var(--danger);"><i class="fas fa-trash"></i></button>';
-        return '<tr>' +
-            '<td><strong>' + pEsc(d.templateName || 'Document') + '</strong></td>' +
-            '<td>' + who + '</td>' +
-            '<td data-sort="' + (Date.parse(d.createdAt) || Number(d.createdAt) || '') + '">' + __msFmtDateShort(d.createdAt) + (d.updatedAt ? ' <span style="color:var(--text-dim); font-size:11px;" title="Last edited ' + pEsc(__msFmtDateShort(d.updatedAt)) + '">· edited</span>' : '') + '</td>' +
-            '<td>' + statusBadge + '</td>' +
-            '<td style="text-align:right; white-space:nowrap;">' + actions + '</td>' +
-        '</tr>';
+    var shown = groups.map(function (c) {
+        var items = c.items.filter(function (d) {
+            if (fs && (d.status || 'draft') !== fs) return false;
+            if (!q) return true;
+            return String(d.templateName || '').toLowerCase().indexOf(q) !== -1 || String(d.clientName || '').toLowerCase().indexOf(q) !== -1 || String(d.otherNote || '').toLowerCase().indexOf(q) !== -1;
+        });
+        return { key: c.key, label: c.label, items: items, last: c.last, issued: c.issued, drafts: c.drafts, total: c.items.length };
+    }).filter(function (c) { return c.items.length; });
+    if (shown.length === 0) {
+        host.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-dim);">' + (q ? 'No document matches "' + pEsc(qRaw) + '"' + (fs ? ' among the ' + pEsc(fs) + ' ones' : '') : 'No ' + pEsc(fs) + ' documents') + '.</div>';
+        return;
+    }
+    var closed = __msGenDocGroupsLoad().closed;
+    host.innerHTML = shown.map(function (c, i) {
+        var open = q ? true : !closed[c.key];
+        var title = q ? 'Shown open for the search — clear the search to open or close clients' : ((open ? 'Collapse' : 'Expand') + ' this client');
+        var tally = (c.issued ? c.issued + ' issued' : '') + (c.issued && c.drafts ? ' · ' : '') + (c.drafts ? c.drafts + ' draft' + (c.drafts === 1 ? '' : 's') : '');
+        var partial = (q || fs) && c.items.length !== c.total;
+        return '<div class="ms-tpl-group' + (open ? '' : ' closed') + (q ? ' searching' : '') + '" data-cat="' + pEsc(c.key) + '">' +
+            '<div class="ms-tpl-group-head" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '" onclick="__msGenDocToggleGroup(this)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') { event.preventDefault(); __msGenDocToggleGroup(this); }" title="' + title + '">' +
+                '<i class="fas fa-chevron-down ms-tpl-chev"></i>' +
+                '<span class="ms-tpl-group-name">' + pEsc(c.label) + '</span>' +
+                '<span class="ms-tpl-group-count" title="' + (partial ? c.items.length + ' of ' + c.total + ' shown' : c.total + ' document' + (c.total === 1 ? '' : 's')) + '">' + (partial ? c.items.length + ' of ' + c.total : c.total) + '</span>' +
+                '<span class="ms-tpl-group-tally">' + tally + '</span>' +
+                '<span class="ms-tpl-group-meta">latest ' + __msFmtDateShort(c.last) + '</span>' +
+            '</div>' +
+            '<div class="ms-tpl-group-body"><div class="table-scroll-wrap" style="max-height:none;">' +
+                '<table class="ms-sortable ms-gendoc-table" data-sort-key="genDocs" id="genDocs_' + i + '">' +
+                    '<thead><tr><th data-sort="text">Document</th><th data-sort="date">Created</th><th data-sort="text">Status</th><th style="text-align:right;">Actions</th></tr></thead>' +
+                    '<tbody>' + c.items.slice().sort(function (a, b) { return __msGenDocWhen(b) - __msGenDocWhen(a); }).map(__msGenDocRowHtml).join('') + '</tbody>' +
+                '</table>' +
+            '</div></div>' +
+        '</div>';
     }).join('');
-    __msSortRefresh('genDocsTable');   // 8FK — the chosen column order on the new rows
+    var tables = host.querySelectorAll('table.ms-sortable');
+    for (var k = 0; k < tables.length; k++) __msSortRefresh(tables[k]);
 }
 
 // ---- View / re-print --------------------------------------------------
@@ -49068,8 +49097,8 @@ function __msRemitDeclHtml(st, t) {
             '<label for="msRemitTpl" style="font-size:12px; color:var(--text-dim); padding-top:7px;">Template</label>' +
             '<div><select id="msRemitTpl" onchange="__msRemitOnTemplate(this.value)" style="' + MS_REMIT_INPUT + ' padding-right:22px;">' + opts + '</select>' +
                 '<div style="font-size:11.5px; color:var(--text-dim); margin-top:4px;">' + (t
-                    ? 'Your template from Documents &rarr; Template Library, used as it is now: edit it there and the next bundle follows.'
-                    : (list.length ? 'No template chosen: the zip will be made without a declaration.' : 'There are no templates in Documents &rarr; Template Library yet.')) + '</div></div>';
+                    ? 'Your template from the Templates page, used as it is now: edit it there and the next bundle follows.'
+                    : (list.length ? 'No template chosen: the zip will be made without a declaration.' : 'There are no templates on the Templates page yet.')) + '</div></div>';
     if (t) {
         var fields = __msRemitFields(t);
         if (!fields.length) {
@@ -49212,7 +49241,7 @@ function __msRemitListHtml(st, t) {
             (t ? 'the declaration made now' : (g.keptOwn ? 'this bill\'s own declaration' : 'this bill\'s documents')) + '.</div>';
     }
     if (n.missing) {
-        html += '<div style="font-size:11.5px; color:var(--text-dim); margin-top:6px;"><i class="fas fa-circle-info"></i> Missing documents are named in INDEX.txt. To add one, upload its PDF from Document Export &rarr; Remittance Bundle (or the bill\'s Manage screen), then make the bundle again.</div>';
+        html += '<div style="font-size:11.5px; color:var(--text-dim); margin-top:6px;"><i class="fas fa-circle-info"></i> Missing documents are named in INDEX.txt. To add one, upload its PDF from Document Packs &rarr; Remittance Bundle (or the bill\'s Manage screen), then make the bundle again.</div>';
     }
     if (state === 'failed') {
         html += '<div style="font-size:12px; color:var(--danger,#f85149); margin-top:8px;"><i class="fas fa-exclamation-triangle"></i> Your attached files could not be loaded this session, so uploaded documents would be missing from the zip. Download is off: quit and reopen the app, then make the bundle.</div>';
@@ -49386,6 +49415,7 @@ function __msRemitSaveCopy(t, st, decl) {
                 target.source = 'remittance';
                 target.remit = { key: st.keys.key, alt: st.keys.alt, invNo: st.invNo, oem: st.oemLabel, client: st.c.client || '', cIdx: st.ref.cIdx, yi: st.ref.yi, apIdx: st.ref.apIdx, apId: (st.ap && st.ap.apId) || '' };
                 if (isNew) __msLoadGenDocs().push(target);
+                __msGenDocRevealGroup(target);   // 8FL — its client's block opens if it was closed (a replaced record may have moved client)
                 // Save the record first; the earlier file goes only once the
                 // record pointing at the new one is safely stored.
                 __msPersistGenDocs();
@@ -49512,7 +49542,7 @@ async function __msRemitDownload() {
         if (decl) msg += ', including the declaration';
         msg += '.';
         if (z.notPacked) msg += ' ' + z.notPacked + ' item' + (z.notPacked === 1 ? ' is' : 's are') + ' only listed in INDEX.txt.';
-        if (decl && copy && copy.ok) msg += ' A copy of the declaration is in Documents &rarr; Generated Documents' + (copy.replaced ? ' (it replaces the earlier one for this bill).' : '.');
+        if (decl && copy && copy.ok) msg += ' A copy of the declaration is in Templates &rarr; Generated Documents' + (copy.replaced ? ' (it replaces the earlier one for this bill).' : '.');
         else if (decl && copy && !copy.ok) msg += ' <span style="color:var(--warning);">The declaration is in the zip, but its copy could not be saved in Generated Documents (' + pEsc(copy.error || '') + ').</span>';
         try { diag('INFO', 'Remittance bundle: zip made', { zip: z.zipName, files: z.zipped, notPacked: z.notPacked, declaration: decl ? decl.filename : '(none)', copy: copy ? (copy.ok ? (copy.replaced ? 'replaced' : 'saved') : ('failed: ' + copy.error)) : 'n/a' }); } catch (e) {}
         st.busy = false;
@@ -50581,8 +50611,10 @@ function renderExpensesPage() {
     html += __msExpListHtml(fy, lines);
     html += __msExpRulesHtml();
     root.innerHTML = html;
+    __msSortRefresh('msExpList');   // 8FL — the arrow on the sorted column (the rows are already in order)
     __msExpDrawChart(fy, T);
 }
+__msSortOnChange('msExpList', function () { if (typeof renderExpensesPage === 'function') renderExpensesPage(); });   // 8FL — a header click redraws the page
 function __msExpStatusHtml() {
     var S = __msExp, C = S.check;
     var months = Object.keys(S.meta.months).sort();
@@ -50758,14 +50790,18 @@ function __msExpListHtml(fy, lines) {
         return true;
     });
     rows.sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : (b.m - a.m); });
+    // 8FL — the chosen column order applied to the whole list before the first 250 are drawn (a header click redraws)
+    var __acc = [function (ln) { return ln.d || ''; }, function (ln) { return __msExpAcctLabel(ln.a); }, function (ln) { return ln.t || ''; }, function (ln) { return ln.r || ''; }, function (ln) { return __msExpHeadLabel(__msExpEffHead(ln)); }, function (ln) { return __msExpSigned(ln); }, function (ln) { return __msExpGst(ln) || null; }, null, function (ln) { return ln.n || ''; }];
+    __acc.kinds = ['text', 'text', 'text', 'text', 'text', 'num', 'num', null, 'text'];
+    rows = __msSortData('msExpList', rows, __acc);
     var total = 0;
     rows.forEach(function (ln) { total += __msExpSigned(ln); });
     var what = (ui.head ? __msExpHeadLabel(ui.head) : MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label) + (ui.month ? ', ' + __msExpMonthLabel(ui.month) : ', ' + __msExpFyLabel(fy));
     var html = '<div class="card" style="margin-bottom:14px;"><div style="display:flex; justify-content:space-between; align-items:baseline; padding:14px 18px 8px; flex-wrap:wrap; gap:8px;">'
         + '<div><span style="font-size:13px; font-weight:600;">Entries: ' + __msExpEsc(what) + '</span> <span style="font-size:12px; color:var(--text-dim);">' + rows.length + ' · ' + __msExpRupees(total) + '</span></div>'
         + ((ui.head || ui.month) ? '<a href="#" onclick="__msExpSelect(\'\', \'\'); return false;" style="font-size:12px; color:var(--accent-cyan);">Show all ' + __msExpEsc(MS_EXP_GROUPS.filter(function (g) { return g.id === ui.group; })[0].label.toLowerCase()) + '</a>' : '')
-        + '</div><div class="table-scroll-wrap"><table id="msExpList" style="font-size:12.5px;"><thead><tr>'
-        + '<th>Date</th><th>Paid from</th><th>Bank description</th><th>Your remark</th><th>Head</th><th style="text-align:right;">Amount</th><th style="text-align:right;">GST</th><th>Bill · Statement</th><th>Note</th></tr></thead><tbody>';
+        + '</div><div class="table-scroll-wrap"><table id="msExpList" class="ms-sortable" style="font-size:12.5px;"><thead><tr>'
+        + '<th data-sort="date">Date</th><th data-sort="text">Paid from</th><th data-sort="text">Bank description</th><th data-sort="text">Your remark</th><th data-sort="text">Head</th><th style="text-align:right;" data-sort="num">Amount</th><th style="text-align:right;" data-sort="num">GST</th><th>Bill · Statement</th><th data-sort="text">Note</th></tr></thead><tbody>';
     if (!rows.length) html += '<tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-dim); font-style:italic;">No entries here.</td></tr>';
     rows.slice(0, ui.limit).forEach(function (ln) {
         var eh = __msExpEffHead(ln);
@@ -50787,15 +50823,15 @@ function __msExpListHtml(fy, lines) {
             + '<td style="white-space:nowrap;">' + __msExpEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
             + '<td style="white-space:nowrap;">' + __msExpEsc(__msExpAcctLabel(ln.a)) + '</td>'
             + '<td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msExpEsc(ln.t) + '">' + __msExpEsc(ln.t) + '</td>'
-            + '<td style="max-width:240px;">' + remark + '</td>'
+            + '<td style="max-width:240px;" data-sort="' + __msExpEsc(ln.r || '') + '">' + remark + '</td>'
             + '<td class="ms-exp-head" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpPickHead(this)" style="white-space:nowrap; cursor:pointer;" title="Click to change the head">'
             + __msExpEsc(__msExpHeadLabel(eh)) + (moved ? ' <i class="fas fa-pen" style="font-size:9px; color:var(--text-dim);" title="Moved by you (the CA pack said ' + __msExpEsc(__msExpHeadLabel(ln.h)) + ')"></i>' : '')
             + ' <i class="fas fa-caret-down" style="font-size:10px; color:var(--text-dim);"></i></td>'
-            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;' + (ln.dc === 'C' ? ' color:var(--success);' : '') + '">'
+            + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;' + (ln.dc === 'C' ? ' color:var(--success);' : '') + '" data-sort="' + __msExpSigned(ln) + '">'
             + (ln.dc === 'C' ? '<span style="font-size:10.5px;">refund </span>' : '') + __msExpEsc(typeof __msInr === 'function' ? __msInr(__msExpSigned(ln)) : String(__msExpSigned(ln))) + '</td>'
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;" title="' + __msExpEsc(gstTitle) + '">' + (gst ? __msExpEsc(__msInr(gst)) : '') + '</td>'
             + '<td style="white-space:nowrap;">' + bills + (typeof __msBsPinForExpense === 'function' ? __msBsPinForExpense(ln) : '') + '</td>'   // 8FA: and the statement it came from
-            + '<td class="ms-exp-note" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpEditNote(this)" style="cursor:text; min-width:90px;" title="Click to add or change a note">'
+            + '<td class="ms-exp-note" data-id="' + __msExpEsc(ln.i) + '" onclick="__msExpEditNote(this)" style="cursor:text; min-width:90px;" title="Click to add or change a note" data-sort="' + __msExpEsc(ln.n || '') + '">'
             + (ln.n ? __msExpEsc(ln.n) : '<span style="color:var(--text-dim); font-size:11px;">+ note</span>')
             + (ln.s === 'manual' ? ' <a href="#" onclick="event.stopPropagation(); openExpenseForm(\'' + __msExpEsc(ln.i) + '\'); return false;" title="Edit this expense" style="color:var(--accent-cyan); margin-left:4px;"><i class="fas fa-pen"></i></a>' : '')
             + '</td></tr>';
@@ -51357,8 +51393,10 @@ function renderBankStatementsPage() {
     html += __msBsBalancesHtml(ui.fy);
     html += __msBsListHtml();
     root.innerHTML = html;
+    __msSortRefresh('msBsList');   // 8FL — the arrow on the sorted column (the rows are already in order)
     __msBsDrawChart(ui.fy);
 }
+__msSortOnChange('msBsList', function () { if (typeof renderBankStatementsPage === 'function') renderBankStatementsPage(); });   // 8FL
 function __msBsStatusHtml() {
     var S = __msBs, idx = S.index, keys = __msBsMonthKeys();
     var parts = [];
@@ -51463,14 +51501,19 @@ function __msBsDrawChart(fy) {
 // The entries: the search result (or the year's lines), newest first.
 function __msBsListHtml() {
     var ui = __msBs.ui, rows = __msBsFiltered();
+    // 8FL — the chosen column order on the whole list before the first 250 are drawn (a header click redraws)
+    var __acc = [function (ln) { return ln.d || ''; }, function (ln) { return __msBsAcctLabel(ln.acct); }, function (ln) { return ln.t || ''; }, function (ln) { return ln.r || ''; },
+        function (ln) { return ln.dc === 'D' ? (Number(ln.m) || 0) : null; }, function (ln) { return ln.dc === 'C' ? (Number(ln.m) || 0) : null; }, function (ln) { return (ln.b === null || ln.b === undefined) ? null : Number(ln.b); }, null];
+    __acc.kinds = ['text', 'text', 'text', 'text', 'num', 'num', 'num', null];
+    rows = __msSortData('msBsList', rows, __acc);
     var deb = 0, cre = 0;
     rows.forEach(function (ln) { if (ln.dc === 'D') deb += Number(ln.m) || 0; else cre += Number(ln.m) || 0; });
     var what = (ui.q ? '“' + __msBsEsc(ui.q.trim()) + '”' : 'All entries') + (ui.acct !== 'ALL' ? ', ' + __msBsEsc(__msBsAcctLabel(ui.acct)) : '') + (ui.dc === 'D' ? ', debits' : (ui.dc === 'C' ? ', credits' : '')) + (ui.all ? ', all years' : ', ' + __msBsFyLabel(ui.fy));
     var html = '<div class="card" style="margin-bottom:14px;"><div style="display:flex; justify-content:space-between; align-items:baseline; padding:14px 18px 8px; flex-wrap:wrap; gap:8px;">'
         + '<div><span style="font-size:13px; font-weight:600;">Entries: ' + what + '</span> <span id="msBsListSum" style="font-size:12px; color:var(--text-dim);">' + rows.length.toLocaleString('en-IN') + ' · out ' + __msBsEsc(__msBsMoney(deb)) + ' · in ' + __msBsEsc(__msBsMoney(cre)) + '</span></div>'
         + (__msBs.monthsLoading ? '<span style="font-size:12px; color:var(--text-dim);"><i class="fas fa-spinner fa-spin"></i> still reading the months</span>' : '')
-        + '</div><div class="table-scroll-wrap"><table id="msBsList" style="font-size:12.5px;"><thead><tr>'
-        + '<th>Date</th><th>Account</th><th>Description</th><th>Remark</th><th style="text-align:right;">Debit</th><th style="text-align:right;">Credit</th><th style="text-align:right;">Balance</th><th title="The statement the entry is from">File</th></tr></thead><tbody>';
+        + '</div><div class="table-scroll-wrap"><table id="msBsList" class="ms-sortable" style="font-size:12.5px;"><thead><tr>'
+        + '<th data-sort="date">Date</th><th data-sort="text">Account</th><th data-sort="text">Description</th><th data-sort="text">Remark</th><th style="text-align:right;" data-sort="num">Debit</th><th style="text-align:right;" data-sort="num">Credit</th><th style="text-align:right;" data-sort="num">Balance</th><th title="The statement the entry is from">File</th></tr></thead><tbody>';
     if (!rows.length) html += '<tr><td colspan="8" style="text-align:center; padding:24px; color:var(--text-dim); font-style:italic;">' + (__msBs.monthsLoading ? 'Reading the months…' : 'No entries here.') + '</td></tr>';
     rows.slice(0, ui.limit).forEach(function (ln) {
         var pins = (ln.f ? __msBsPinHtml(ln.f, 'The ' + __msBsAcctLabel(ln.acct) + ' statement for ' + __msBsMonthLabel(ln.sm || ln.d.slice(0, 7))) : '');
@@ -51478,7 +51521,7 @@ function __msBsListHtml() {
             + '<td style="white-space:nowrap;">' + __msBsEsc(typeof formatDateReadable === 'function' ? formatDateReadable(ln.d) : ln.d) + '</td>'
             + '<td style="white-space:nowrap;">' + __msBsEsc(__msBsAcctLabel(ln.acct)) + '</td>'
             + '<td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + __msBsEsc(ln.t + (ln.ref ? '\nRef ' + ln.ref : '')) + '">' + __msBsEsc(ln.t) + '</td>'
-            + '<td style="max-width:220px;">' + (ln.r ? __msBsEsc(ln.r) : '<span style="color:var(--text-dim); font-style:italic;">no remark</span>') + '</td>'
+            + '<td style="max-width:220px;" data-sort="' + __msBsEsc(ln.r || '') + '">' + (ln.r ? __msBsEsc(ln.r) : '<span style="color:var(--text-dim); font-style:italic;">no remark</span>') + '</td>'
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">' + (ln.dc === 'D' ? __msBsEsc(__msBsMoney(ln.m)) : '') + '</td>'
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--success);">' + (ln.dc === 'C' ? __msBsEsc(__msBsMoney(ln.m)) : '') + '</td>'
             + '<td style="text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--text-dim);">' + (ln.b !== null && ln.b !== undefined ? __msBsEsc(__msBsMoney(ln.b)) : '') + '</td>'
@@ -52323,8 +52366,15 @@ function __msRmtShown() {
     if (!idx) return { out: out, inn: inn, f: f, bills: bills };
     idx.outward.forEach(function (o) { var links = __msRmtLinks(o, bills); if (__msRmtOutMatches(o, f, links)) out.push({ o: o, links: links }); });
     idx.inward.forEach(function (o) { if (__msRmtInMatches(o, f)) inn.push(o); });
-    return { out: out, inn: inn, f: f, bills: bills };
+    // 8FL — the chosen column order on the whole list before the first 150 are drawn (a header click redraws)
+    var __accOut = [function (x) { return x.o.date || ''; }, function (x) { return x.o.bank || (x.o.acct ? __msRmtAcctLabel(x.o.acct) : ''); }, function (x) { return x.o.usd === null || x.o.usd === undefined ? null : Number(x.o.usd); }, function (x) { return x.o.rate === null || x.o.rate === undefined ? null : Number(x.o.rate); }, function (x) { return x.o.net === null || x.o.net === undefined ? null : Number(x.o.net); }, null, null, null, null];
+    __accOut.kinds = ['text', 'text', 'num', 'num', 'num', null, null, null, null];
+    var __accIn = [function (o) { return o.date || ''; }, function (o) { return o.bank || (o.acct ? __msRmtAcctLabel(o.acct) : ''); }, function (o) { return o.usd === null || o.usd === undefined ? null : Number(o.usd); }, function (o) { return o.rate === null || o.rate === undefined ? null : Number(o.rate); }, function (o) { return o.inr === null || o.inr === undefined ? null : Number(o.inr); }, function (o) { return o.remitter || ''; }, null, null, null, null];
+    __accIn.kinds = ['text', 'text', 'num', 'num', 'num', 'text', null, null, null, null];
+    return { out: __msSortData('msRmtTable', out, __accOut), inn: __msSortData('msRmtInTable', inn, __accIn), f: f, bills: bills };
 }
+__msSortOnChange('msRmtTable', function () { if (typeof __msRmtRender === 'function') __msRmtRender(); });
+__msSortOnChange('msRmtInTable', function () { if (typeof __msRmtRender === 'function') __msRmtRender(); });
 
 // ---- opening a paper -----------------------------------------------------------------------------
 async function __msRmtOpen(path) {
@@ -52419,7 +52469,7 @@ function __msRmtRowHtml(x) {
     var inrCell = '<strong style="white-space:nowrap;">' + __msRmtEsc(net) + '</strong>' + (o.inr !== null && o.net !== null && Math.abs(o.inr - o.net) > 0.5 ? '<div class="ms-rmt-dim" style="white-space:nowrap;" title="The rupees sent, before the bank\'s charges">sent ' + __msRmtEsc(__msRmtInr(o.inr)) + '</div>' : '') + (o.charges.length ? '<div class="ms-rmt-dim" style="white-space:nowrap;" title="' + __msRmtEsc(ch.detail) + '">' + __msRmtEsc(ch.sum) + '</div>' : '');
     var notes = o.warnings.map(function (w) { return '<div class="ms-rmt-warn"><i class="fas fa-exclamation-triangle" style="font-size:9px;"></i> ' + __msRmtEsc(w) + '</div>'; }).join('');
     if (o.line && o.line.t) notes += '<div class="ms-rmt-dim" title="' + __msRmtEsc((o.line.t || '') + (o.line.r ? ' — ' + o.line.r : '')) + '">' + __msRmtEsc((o.line.r || o.line.t).slice(0, 48)) + '</div>';
-    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap; min-width:96px;">' + dateCell + '</td><td style="white-space:nowrap;">' + bankCell + '</td><td style="text-align:right; font-weight:600; white-space:nowrap;">' + __msRmtEsc(__msRmtUsd(o.usd, o.cur)) + '</td><td style="text-align:right; white-space:nowrap;">' + rateCell + '</td><td style="text-align:right;">' + inrCell + '</td><td style="white-space:nowrap;">' + __msRmtBillsCellHtml(o, links) + '</td><td style="max-width:280px; min-width:200px;">' + __msRmtPapersHtml(o) + '</td><td style="text-align:center;">' + (__msRmtStatementPin(o) || '<span class="ms-rmt-dim">—</span>') + '</td><td style="max-width:260px;">' + (notes || '') + '</td></tr>';
+    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap; min-width:96px;" data-sort="' + __msRmtEsc(o.date || '') + '">' + dateCell + '</td><td style="white-space:nowrap;" data-sort="' + __msRmtEsc(o.bank || (o.acct ? __msRmtAcctLabel(o.acct) : '')) + '">' + bankCell + '</td><td style="text-align:right; font-weight:600; white-space:nowrap;" data-sort="' + (o.usd === null || o.usd === undefined ? '' : o.usd) + '">' + __msRmtEsc(__msRmtUsd(o.usd, o.cur)) + '</td><td style="text-align:right; white-space:nowrap;" data-sort="' + (o.rate === null || o.rate === undefined ? '' : o.rate) + '">' + rateCell + '</td><td style="text-align:right;" data-sort="' + (o.net === null || o.net === undefined ? '' : o.net) + '">' + inrCell + '</td><td style="white-space:nowrap;">' + __msRmtBillsCellHtml(o, links) + '</td><td style="max-width:280px; min-width:200px;">' + __msRmtPapersHtml(o) + '</td><td style="text-align:center;">' + (__msRmtStatementPin(o) || '<span class="ms-rmt-dim">—</span>') + '</td><td style="max-width:260px;">' + (notes || '') + '</td></tr>';
 }
 function __msRmtInRowHtml(o) {
     var refs = o.refs.length ? o.refs.map(function (r) {
@@ -52428,10 +52478,10 @@ function __msRmtInRowHtml(o) {
         return inv ? '<a href="#" onclick="openInvoiceDetail(\'' + __msRmtJsArg(inv.id) + '\'); return false;" style="color:var(--accent-cyan); font-family:monospace; font-size:11.5px; text-decoration:none;" title="' + __msRmtEsc(inv.invoiceNumber + (inv.clientName ? ' · ' + inv.clientName : '')) + '">' + label + '</a>' : '<span style="font-family:monospace; font-size:11.5px;">' + label + '</span>';
     }).join(', ') : '<span class="ms-rmt-dim">—</span>';
     var notes = o.warnings.map(function (w) { return '<div class="ms-rmt-warn"><i class="fas fa-exclamation-triangle" style="font-size:9px;"></i> ' + __msRmtEsc(w) + '</div>'; }).join('');
-    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap;"><strong>' + __msRmtEsc(__msRmtDate(o.date)) + '</strong>' + (o.value_date && o.value_date !== o.date ? '<div class="ms-rmt-dim">value ' + __msRmtEsc(__msRmtDate(o.value_date)) + '</div>' : '') + (o.fy ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.fy) + '</div>' : '') + '</td>'
-        + '<td style="white-space:nowrap;">' + __msRmtEsc(o.bank || '—') + (o.acct ? '<div class="ms-rmt-dim">' + __msRmtEsc(__msRmtAcctLabel(o.acct)) + '</div>' : '') + (o.inward_no ? '<div class="ms-rmt-dim" style="font-family:monospace;">' + __msRmtEsc(o.inward_no) + '</div>' : '') + '</td>'
+    return '<tr data-id="' + __msRmtEsc(o.id) + '"><td style="white-space:nowrap;" data-sort="' + __msRmtEsc(o.date || '') + '"><strong>' + __msRmtEsc(__msRmtDate(o.date)) + '</strong>' + (o.value_date && o.value_date !== o.date ? '<div class="ms-rmt-dim">value ' + __msRmtEsc(__msRmtDate(o.value_date)) + '</div>' : '') + (o.fy ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.fy) + '</div>' : '') + '</td>'
+        + '<td style="white-space:nowrap;" data-sort="' + __msRmtEsc(o.bank || (o.acct ? __msRmtAcctLabel(o.acct) : '')) + '">' + __msRmtEsc(o.bank || '—') + (o.acct ? '<div class="ms-rmt-dim">' + __msRmtEsc(__msRmtAcctLabel(o.acct)) + '</div>' : '') + (o.inward_no ? '<div class="ms-rmt-dim" style="font-family:monospace;">' + __msRmtEsc(o.inward_no) + '</div>' : '') + '</td>'
         + '<td style="text-align:right; font-weight:600;">' + __msRmtEsc(__msRmtUsd(o.usd, o.cur)) + '</td><td style="text-align:right;">' + __msRmtEsc(__msRmtRate(o.rate)) + '</td><td style="text-align:right;"><strong>' + __msRmtEsc(o.inr !== null ? __msRmtInr(o.inr) : '—') + '</strong></td>'
-        + '<td>' + __msRmtEsc(o.remitter || '—') + (o.purpose ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.purpose) + '</div>' : '') + '</td><td>' + refs + '</td>'
+        + '<td data-sort="' + __msRmtEsc(o.remitter || '') + '">' + __msRmtEsc(o.remitter || '—') + (o.purpose ? '<div class="ms-rmt-dim">' + __msRmtEsc(o.purpose) + '</div>' : '') + '</td><td>' + refs + '</td>'
         + '<td>' + (o.file ? __msRmtPaperHtml({ kind: 'firc', file: o.file, label: 'FIRC' }) : '') + '</td><td style="text-align:center;">' + (__msRmtStatementPin(o) || '<span class="ms-rmt-dim">—</span>') + '</td><td style="max-width:220px;">' + notes + '</td></tr>';
 }
 // An export invoice named on a FIRC, in the Invoices module: the number ends with the reference (EXP134, 134).
@@ -52499,14 +52549,14 @@ function __msRmtRender() {
             }).join('') + '</div>';
         }
         var rows = S.out.slice(0, R.ui.limit).map(__msRmtRowHtml).join('');
-        html += byFy + '<div class="table-scroll-wrap"><table id="msRmtTable"><thead><tr><th>Date</th><th>Bank</th><th style="text-align:right;">Sent</th><th style="text-align:right;" title="USD:INR — from the bank\'s advice, or * worked out from the rupees and the invoices">Rate</th><th style="text-align:right;">Debited (₹)</th><th>Bills paid</th><th>Papers</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
+        html += byFy + '<div class="table-scroll-wrap"><table id="msRmtTable" class="ms-sortable"><thead><tr><th data-sort="date">Date</th><th data-sort="text">Bank</th><th style="text-align:right;" data-sort="num" title="In the remittance\'s currency (Debited sorts in rupees)">Sent</th><th style="text-align:right;" data-sort="num" title="USD:INR — from the bank\'s advice, or * worked out from the rupees and the invoices">Rate</th><th style="text-align:right;" data-sort="num">Debited (₹)</th><th>Bills paid</th><th>Papers</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
             + (rows || '<tr><td colspan="9" style="text-align:center; padding:20px; color:var(--text-dim);">' + (R.idx.outward.length ? 'No remittances for the filters chosen.' : 'The engine found no remittances abroad in the statements.') + '</td></tr>') + '</tbody></table></div>'
             + (S.out.length > R.ui.limit ? '<div style="margin-top:8px;"><button type="button" class="btn btn-ghost btn-sm" onclick="__msRmt.ui.limit += 150; __msRmtRender();">Show more (' + (S.out.length - R.ui.limit) + ' left)</button></div>' : '');
         var tin = __msRmtTotals(S.inn);
         html += '<h4 style="margin:22px 0 10px 0; font-size:13.5px; color:var(--text-main);"><i class="fas fa-arrow-down" style="color:var(--success);"></i> Received from abroad — FIRC / e-BRC'
             + ' <span style="font-size:12px; font-weight:400; color:var(--text-dim);">' + tin.n + (S.f.fy !== 'ALL' ? ' in ' + __msRmtEsc(__msRmtFyLabelOfFilter(S.f.fy)) : '') + (tin.n ? ' · ' + __msRmtEsc(__msRmtUsd(Math.round(tin.usd * 100) / 100)) + ' · ' + __msRmtEsc(__msRmtInr(Math.round(tin.net * 100) / 100)) : '') + (S.f.client !== 'ALL' ? ' · all clients' : '') + '</span></h4>';
         if (S.inn.length) {
-            html += '<div class="table-scroll-wrap table-scroll-wrap-sm"><table id="msRmtInTable"><thead><tr><th>Credited</th><th>Bank</th><th style="text-align:right;">Received</th><th style="text-align:right;">Rate</th><th style="text-align:right;">Amount (₹)</th><th>From</th><th>Export invoices</th><th>Certificate</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
+            html += '<div class="table-scroll-wrap table-scroll-wrap-sm"><table id="msRmtInTable" class="ms-sortable"><thead><tr><th data-sort="date">Credited</th><th data-sort="text">Bank</th><th style="text-align:right;" data-sort="num">Received</th><th style="text-align:right;" data-sort="num">Rate</th><th style="text-align:right;" data-sort="num">Amount (₹)</th><th data-sort="text">From</th><th>Export invoices</th><th>Certificate</th><th>Stmt</th><th>Notes</th></tr></thead><tbody>'
                 + S.inn.slice(0, R.ui.limit).map(__msRmtInRowHtml).join('') + '</tbody></table></div>';
         } else html += '<div class="ms-rmt-dim" style="padding:6px 0 2px 0;">' + (R.idx.inward.length ? 'No certificates for the year chosen.' : 'No FIRC / e-BRC certificates in Files/FIRC &amp; e-BRC yet.') + '</div>';
         var foot = [];
@@ -52516,6 +52566,7 @@ function __msRmtRender() {
         html += foot.join('');
     }
     card.innerHTML = html;
+    __msSortRefresh('msRmtTable'); __msSortRefresh('msRmtInTable');   // 8FL — the arrows (the rows are already in order)
 }
 
 // ---- the register's mark on a bill, and recording the remittance in it -----------------------------
@@ -53211,11 +53262,11 @@ function __msFilPathNote(r) {
 }
 function __msFilRows(list, cols) {
     return list.map(function (r) {
-        return '<tr>' + cols.map(function (c) { return '<td class="wrap">' + c(r) + '</td>'; }).join('') + '</tr>';
+        return '<tr>' + cols.map(function (c) { return '<td class="wrap"' + (c === __msFilRecCell ? ' data-sort="' + __msFilEsc(r.ref || r.docType || '') + '"' : '') + '>' + c(r) + '</td>'; }).join('') + '</tr>';
     }).join('');
 }
-function __msFilTable(heads, rows) {
-    return '<div style="overflow-x:auto;"><table class="ms-imp-table"><thead><tr>' + heads.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+function __msFilTable(heads, rows) {       // 8FL — sortable; the key is the table's own set of headings (one per section)
+    return '<div style="overflow-x:auto;"><table class="ms-imp-table ms-sortable" data-sort-key="' + __msFilEsc('msFil:' + heads.join('|')) + '"><thead><tr>' + heads.map(function (h) { return '<th' + (h ? ' data-sort="text"' : '') + '>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 function __msFilOpenBtn(r) { return '<button class="btn btn-ghost btn-sm" onclick="__msFilOpenRec(' + r.i + ')" title="Open the record"><i class="fas fa-arrow-up-right-from-square"></i></button>'; }
 function __msFilPickBtn(r) { return __msFilTauri() ? '<button class="btn btn-ghost btn-sm" onclick="__msFilPick(' + r.i + ')" title="Choose the file on the Mac and write its path on the record"><i class="fas fa-folder-open"></i> Pick file…</button> ' : ''; }
@@ -53329,6 +53380,7 @@ function renderFilesPage() {
         + MS_FIL_ENGINE_FOLDERS.map(function (fo) { var f = idx.folders[fo]; return '<span><b style="color:var(--text-main);">' + __msFilEsc(fo) + '</b> ' + (f && f.present ? f.files + ' file' + (f.files === 1 ? '' : 's') : 'not there') + '</span>'; }).join('')
         + '</div><div class="ms-imp-note" style="margin-top:6px;">Bills and tax challans are placed on their statement lines on the <a href="javascript:void(0)" onclick="showTab(\'expensesTab\'); return false;">Expenses</a> page (the Bills panel lists what is not placed); the remittances and FIRCs on the <a href="javascript:void(0)" onclick="showTab(\'purchaseInvoicesTab\'); return false;">Payables</a> page; the Masters\' rows and PDFs on <a href="javascript:void(0)" onclick="showTab(\'importTab\'); return false;">Import</a>.</div></div>';
     root.innerHTML = html;
+    var __ts = root.querySelectorAll('table.ms-sortable'); for (var __k = 0; __k < __ts.length; __k++) __msSortRefresh(__ts[__k]);   // 8FL
 }
 
 // ---- automatic linking (8FJ) ----------------------------------------------------------------------
@@ -54528,6 +54580,7 @@ function renderImportPage() {
     html += __msImpAddHtml(P);
     html += __msImpBatchesHtml();
     root.innerHTML = html;
+    ['msImpSales', 'msImpBills', 'msImpVendors', 'msImpPos', 'msImpQuotes'].forEach(function (id) { __msSortRefresh(id); });   // 8FL
 }
 function __msImpSetFy(fy) { __msImp.ui.fy = fy; renderImportPage(); }
 function __msImpSearch(q) { __msImp.ui.q = String(q || ''); clearTimeout(__msImp.ui.qt); __msImp.ui.qt = setTimeout(function () { renderImportPage(); var el = document.getElementById('msImpQ'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 120); }
@@ -54569,7 +54622,7 @@ function __msImpSalesHtml(P, fy) {
         nNew ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'sales\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'sales\', \'' + fy + '\', false)">none</a></span>' : '');
     if (!__msImp.ui.open.sales) return html + '</div>';
     html += '<div class="ms-imp-note" style="margin:4px 0 8px;">An invoice already in the Invoices module or on a contract cycle is left as it is (its PDF link is filled in — see Document links). A new one becomes an invoice record with its items, GST, the receipt and the TDS the client kept back.</div>';
-    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpSales"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Client</th><th class="num">Base</th><th class="num">GST</th><th class="num">Total</th><th>Receipt</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table ms-sortable" id="msImpSales"><thead><tr><th></th><th data-sort="text">Invoice</th><th data-sort="date">Date</th><th data-sort="text">Client</th><th class="num" data-sort="num">Base</th><th class="num" data-sort="num">GST</th><th class="num" data-sort="num">Total</th><th data-sort="date">Receipt</th><th data-sort="text">In the app</th><th>PDF</th></tr></thead><tbody>';
     shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (it) {
         var r = it.r, tick = '';
         if (it.state === 'new' && it.tickable && !it.proposal) tick = '<input type="checkbox"' + (__msImpTicked(it.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + it.id + '\', this.checked)" aria-label="Add ' + __msImpEsc(r.code) + '">';
@@ -54601,7 +54654,7 @@ function __msImpBillsHtml(P, fy) {
         nOpt ? '<span style="margin-left:auto; font-size:11px; font-weight:500;">' + nOpt + ' opt-in: <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'bills\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'bills\', \'' + fy + '\', false)">none</a></span>' : '');
     if (!__msImp.ui.open.bills) return html + '</div>';
     html += '<div class="ms-imp-note" style="margin:4px 0 8px;">A bill already on a contract is left as it is. A bill not in the app goes in with a <b>new contract</b> (below) when its sale is new too; a bill that belongs to a contract you entered is an <b>opt-in</b> — unticked, since adding it changes that contract\'s cycle.</div>';
-    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpBills"><thead><tr><th></th><th>Bill</th><th>Date</th><th>OEM · end client</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Total ₹</th><th>Paid</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table ms-sortable" id="msImpBills"><thead><tr><th></th><th data-sort="text">Bill</th><th data-sort="date">Date</th><th data-sort="text">OEM · end client</th><th class="num" data-sort="num" title="In the bill\'s currency (Total ₹ sorts in rupees)">Amount</th><th class="num" data-sort="num">Rate</th><th class="num" data-sort="num">Total ₹</th><th data-sort="date">Paid</th><th data-sort="text">In the app</th><th>PDF</th></tr></thead><tbody>';
     shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (bt) {
         var p = bt.p, tick = '', st;
         if (bt.state === 'app') st = __msImpStateHtml('app', 'on a cycle\'s bills', bt.refs.map(function (ref) { return __msImpContractLabel(contracts[ref.ci], ref.yi); }).join('\n')) + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[bt.refs[0].ci], bt.refs[0].yi)) + '</span>';
@@ -54635,7 +54688,7 @@ function __msImpVendorsHtml(P, fy) {
         nNew ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'vendors\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'vendors\', \'' + fy + '\', false)">none</a></span>' : '');
     if (!__msImp.ui.open.vendors) return html + '</div>';
     html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Each invoice becomes a payment in the Consultants module under its consultant (made where missing, with PAN, GSTIN and address from the Master). Vikas Chauhan and Stone Temple Systems are the one consultant already in the app.</div>';
-    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpVendors"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Party</th><th class="num">Base</th><th class="num">GST</th><th class="num">TDS</th><th class="num">Total</th><th>Paid</th><th>In the app</th><th>PDF</th></tr></thead><tbody>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table ms-sortable" id="msImpVendors"><thead><tr><th></th><th data-sort="text">Invoice</th><th data-sort="date">Date</th><th data-sort="text">Party</th><th class="num" data-sort="num">Base</th><th class="num" data-sort="num">GST</th><th class="num" data-sort="num">TDS</th><th class="num" data-sort="num">Total</th><th data-sort="date">Paid</th><th data-sort="text">In the app</th><th>PDF</th></tr></thead><tbody>';
     shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (vt) {
         var v = vt.v, tick = '', st;
         if (vt.state === 'app') st = __msImpStateHtml('app', 'in the app', 'Payment ' + (vt.pay.paymentNumber || '') + ' under ' + vt.consultant.name) + ' <span class="ms-imp-note">' + __msImpEsc(vt.pay.paymentNumber || '') + '</span>';
@@ -55648,7 +55701,7 @@ function __msImpPosHtml(P, fy) {
         nAdd ? '<span style="margin-left:auto; font-size:11px; font-weight:500;"><a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'pos\', \'' + fy + '\', true)">tick all</a> · <a href="javascript:void(0)" onclick="event.stopPropagation(); __msImpTickAll(\'pos\', \'' + fy + '\', false)">none</a></span>' : '');
     if (!__msImp.ui.open.pos) return html + '</div>';
     html += '<div class="ms-imp-note" style="margin:4px 0 8px;">One row per file under <b>Files › Internal POs</b> (a copy or an amendment is listed under the PO\'s own file; a Word draft beside its PDF is skipped). A PO already in the Purchase Orders module is left as it is. A PO whose number a contract carries becomes a PO record filled from that contract — its cycles, cost and currency, the file pinned, Closed once the bills are paid. A PO no contract names becomes a Closed record from the file\'s text.</div>';
-    html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpPos"><thead><tr><th></th><th>PO</th><th>Date</th><th>Supplier · end client</th><th>Term</th><th class="num">Total</th><th>In the app</th><th>File</th></tr></thead><tbody>';
+    html += '<div class="table-scroll-wrap"><table class="ms-imp-table ms-sortable" id="msImpPos"><thead><tr><th></th><th data-sort="text">PO</th><th data-sort="date">Date</th><th data-sort="text">Supplier · end client</th><th data-sort="text">Term</th><th class="num" data-sort="num">Total</th><th data-sort="text">In the app</th><th>File</th></tr></thead><tbody>';
     shown.slice(0, MS_IMP_MAX_ROWS).forEach(function (it) {
         var r = it.r, tick = '', st;
         if ((it.state === 'contract' || it.state === 'new') && it.tickable) tick = '<input type="checkbox"' + (__msImpTicked(it.id) ? ' checked' : '') + ' onchange="__msImpTick(\'' + it.id + '\', this.checked)" aria-label="Add PO ' + __msImpEsc(r.number) + '">';
@@ -55681,7 +55734,7 @@ function __msImpQuotesHtml(P) {
     html += '<div class="ms-imp-note" style="margin:4px 0 8px;">Each file under <b>Files › OEM Quotes</b> goes on its contract — the one whose PO file names the quote, the one that names it, else the client\'s contract starting within four months of its date: the file is pinned in the contract\'s OEM quote field and the number written where that field is empty (and on the contract\'s PO record in the module where its OEM reference is empty). The pins are listed under Document links.</div>';
     if (!list.length) html += '<div class="ms-imp-note">No OEM quote files' + (__msImp.idx && __msImp.idx.format === 1 ? ' — the engine\'s list is from the older CA pack; run the CA pack again' : '') + '.</div>';
     else {
-        html += '<div class="table-scroll-wrap"><table class="ms-imp-table" id="msImpQuotes"><thead><tr><th>Quote</th><th>Date</th><th>Client</th><th class="num">Total</th><th>Contract</th><th>File</th></tr></thead><tbody>';
+        html += '<div class="table-scroll-wrap"><table class="ms-imp-table ms-sortable" id="msImpQuotes"><thead><tr><th data-sort="text">Quote</th><th data-sort="date">Date</th><th data-sort="text">Client</th><th class="num" data-sort="num">Total</th><th data-sort="text">Contract</th><th>File</th></tr></thead><tbody>';
         list.forEach(function (it) {
             var q = it.q, st;
             if (it.state === 'app') st = __msImpStateHtml('app', 'on the contract', 'The contract names the quote and pins its file') + ' <span class="ms-imp-note">' + __msImpEsc(__msImpContractLabel(contracts[it.ci], null)) + '</span>';
@@ -56008,14 +56061,15 @@ async function __msExpCaChallansRows(start, end) {
 }
 // =================== /Phase 8FG — TDS, GST and professional-tax challans on the Expenses page ===================
 
-// =================== Phase 8FK — sortable tables ===================
+// =================== Phase 8FK/8FL — sortable tables ===================
 // Any <table class="ms-sortable"> whose header cells carry data-sort="text|num|date" sorts its rows when a header is
 // clicked: the first click sorts (text A→Z; numbers and dates largest or newest first), the second reverses, the third
 // puts the page's own order back. The choice is remembered per table (its data-sort-key, else its id) in localStorage
 // ms_sort_v1 — a per-Mac preference, never in the database. A cell may carry the value to sort by in data-sort (a
 // number, an ISO date or a timestamp); otherwise its text is read: ₹1,23,456 / 12.3 L / 1.2 Cr / 12% / (1,000) as
 // numbers, "07 Apr 2021" / 2021-04-07 / 07/04/2021 / "Apr 2021" as dates, anything else as text; an empty cell or a dash
-// sorts last either way. Rows that must not move keep their place: an empty-state or a totals row (any row with a
+// sorts last either way (a text cell too: a page whose placeholder is a word — "no remark", "+ note" — carries the raw
+// value in data-sort so the placeholder sorts as the empty value it stands for). Rows that must not move keep their place: an empty-state or a totals row (any row with a
 // spanning cell, or data-sort-fixed); a row marked data-sort-follow moves with the row above it (a detail row under its
 // record). A page re-renders its table exactly as it did before and then calls __msSortRefresh(table) so the chosen
 // order is applied to the new rows; nothing here reads or writes a record. The contract, for the pages that adopt it
@@ -56023,7 +56077,10 @@ async function __msExpCaChallansRows(start, end) {
 // own; a data row that spans columns is taken for a fixed row (mark a spanning data row with data-sort-row to move
 // it); the "page's own order" is the order the rows had when first seen, so a page that inserts rows later should
 // re-render instead; a table with neither data-sort-key nor id sorts but is not remembered. An ISO date-time keeps its
-// time (two documents of the same day order by the hour).
+// time (two documents of the same day order by the hour). 8FL: a page that draws only the first N rows of a long list
+// (Expenses, Bank Statements, remittances) sorts its data before slicing with __msSortData and registers
+// __msSortOnChange(key, redraw) so a header click redraws the page instead of shuffling the rows on screen; a "dd Mon yy"
+// date (a 2-digit year) and short money (₹12.5k, $1.2M, $1.2B) are read too.
 var MS_SORT_KEY = 'ms_sort_v1';
 var MS_SORT_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
 var __msSortState = null;
@@ -56061,7 +56118,7 @@ function __msSortParseNum(text) {
     var n = parseFloat(m[0]);
     if (/^\(.*\)$/.test(s) || /^\s*[−–-]\s*[₹$€£]?\s*\d/.test(s)) n = -Math.abs(n);     // (1,000), or a minus / en dash in front of the figure (not "FY 2024–25")
     var after = s.slice(m.index + m[0].length).trim();
-    if (/^Cr\b/i.test(after)) n *= 1e7; else if (/^L\b/.test(after)) n *= 1e5; else if (/^K\b/.test(after)) n *= 1e3;
+    if (/^Cr\b/i.test(after)) n *= 1e7; else if (/^L\b/.test(after)) n *= 1e5; else if (/^[Kk]\b/.test(after)) n *= 1e3; else if (/^M\b/.test(after)) n *= 1e6; else if (/^B\b/.test(after)) n *= 1e9;
     return n;
 }
 function __msSortParseDate(text) {
@@ -56071,6 +56128,8 @@ function __msSortParseDate(text) {
     if (/^\d{4}-\d{2}-\d{2}T/.test(s)) { var t = Date.parse(s); if (!isNaN(t)) return t; }          // an ISO date-time keeps its time
     if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
     if ((m = /(\d{1,2})[\s\-\/]+([A-Za-z]{3,4})\.?[\s\-\/,]+(\d{4})/.exec(s)) && MS_SORT_MONTHS[m[2].toLowerCase()] !== undefined) return Date.UTC(+m[3], MS_SORT_MONTHS[m[2].toLowerCase()], +m[1]);
+    if ((m = /(\d{1,2})[\s\-\/]+([A-Za-z]{3,4})\.?[\s\-\/,]+(\d{2})(?!\d)/.exec(s)) && MS_SORT_MONTHS[m[2].toLowerCase()] !== undefined) return Date.UTC(2000 + +m[3], MS_SORT_MONTHS[m[2].toLowerCase()], +m[1]);   // "07 Apr 21"
+    
     if ((m = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s))) return Date.UTC(+m[3], +m[2] - 1, +m[1]);
     if ((m = /\b([A-Za-z]{3,4})\.?\s+(\d{4})\b/.exec(s)) && MS_SORT_MONTHS[m[1].toLowerCase()] !== undefined) return Date.UTC(+m[2], MS_SORT_MONTHS[m[1].toLowerCase()], 1);
     return null;
@@ -56081,7 +56140,8 @@ function __msSortCellValue(td, kind) {
     var text = raw !== null ? raw : td.textContent;
     if (kind === 'num') return __msSortParseNum(text);
     if (kind === 'date') { if (raw !== null && /^-?\d{6,}$/.test(raw.trim())) return +raw; return __msSortParseDate(text); }
-    return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    var t = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return /^[\u2014\u2013\-]+$/.test(t) ? '' : t;                       // a dash alone is "nothing": last either way (review BUG-1)
 }
 function __msSortCompare(a, b, kind, dir) {
     var ea = (a === null || a === undefined || a === '' || (typeof a === 'number' && isNaN(a)));
@@ -56140,6 +56200,17 @@ function __msSortRefreshKey(key) {
     var ts = document.querySelectorAll('table.ms-sortable');
     for (var i = 0; i < ts.length; i++) if (__msSortKeyOf(ts[i]) === key) __msSortApply(ts[i]);
 }
+function __msSortHooks() { if (!window.__msSortHooksMap) window.__msSortHooksMap = {}; return window.__msSortHooksMap; }   // made on first use: the pages register their hooks as the file loads, before this module's own lines run
+function __msSortOnChange(key, fn) { __msSortHooks()[key] = fn; }    // a page that must redraw (its list is cut short) rather than shuffle rows
+function __msSortState_(key) { var st = __msSortLoad()[key]; return (st && typeof st.col === 'number') ? st : null; }
+function __msSortData(key, rows, accessors) {                         // the saved choice applied to a data array: accessors[col](row) → number | string | null
+    var st = __msSortState_(key);
+    if (!st || !accessors || typeof accessors[st.col] !== 'function') return rows;
+    var kind = (accessors.kinds && accessors.kinds[st.col]) || 'num', get = accessors[st.col];
+    var tagged = rows.map(function (r, i) { var v = get(r); return { r: r, i: i, v: (kind === 'text') ? String(v == null ? '' : v).replace(/\s+/g, ' ').trim().toLowerCase() : v }; });
+    tagged.sort(function (x, y) { return __msSortCompare(x.v, y.v, kind, st.dir) || (x.i - y.i); });
+    return tagged.map(function (t) { return t.r; });
+}
 function __msSortClick(th) {
     var table = th.closest('table');
     if (!table || !table.classList.contains('ms-sortable')) return;
@@ -56154,8 +56225,34 @@ function __msSortClick(th) {
     else next = null;                                   // the third click: the page's own order
     if (next) all[key] = next; else delete all[key];
     __msSortSave();
+    var hooks = __msSortHooks();
+    if (typeof hooks[key] === 'function') { try { hooks[key](); } catch (e) {} return; }
     __msSortRefreshKey(key);
 }
+// 8FL — "Sort by" for the lists that are cards or rows without column headings; the choice remembered per list
+var MS_SORTBY_KEY = 'ms_sortby_v1';
+function __msSortByGet(list, dflt) { try { var o = JSON.parse(localStorage.getItem(MS_SORTBY_KEY) || '{}'); return (o && typeof o[list] === 'string' && o[list]) ? o[list] : dflt; } catch (e) { return dflt; } }
+function __msSortBySet(list, value) {
+    var o = {}; try { o = JSON.parse(localStorage.getItem(MS_SORTBY_KEY) || '{}') || {}; } catch (e) { o = {}; }
+    if (typeof o !== 'object' || Array.isArray(o)) o = {};
+    if (value) o[list] = String(value); else delete o[list];
+    try { localStorage.setItem(MS_SORTBY_KEY, JSON.stringify(o)); } catch (e) {}
+}
+function __msSortBySync(selId, list, dflt) {                          // the select shows the remembered choice; returns it
+    var el = document.getElementById(selId), v = __msSortByGet(list, dflt);
+    if (!el) return v;
+    var has = false; for (var i = 0; i < el.options.length; i++) if (el.options[i].value === v) has = true;
+    if (!has) v = dflt;
+    if (el.value !== v) el.value = v;
+    return v;
+}
+// 8FL — "37 of 112 invoices" under a filtered list
+function __msListCount(id, shown, total, one, many) {
+    var el = document.getElementById(id); if (!el) return;
+    if (!total) { el.textContent = ''; return; }
+    el.textContent = (shown === total ? total : shown + ' of ' + total) + ' ' + (total === 1 && shown === total ? one : many);
+}
+try { localStorage.removeItem('ms_ar_sort_v1'); localStorage.removeItem('ms_ap_sort_v1'); } catch (e) {}   // 8FL — the 8BI / 8BH register sorters' keys (gone)
 document.addEventListener('click', function (e) {
     var th = (e.target && e.target.closest) ? e.target.closest('th[data-sort]') : null;
     if (th) __msSortClick(th);
