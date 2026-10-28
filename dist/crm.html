@@ -785,6 +785,55 @@ h2 {
     margin-top: 8px; padding-top: 6px;
     border-top: 1px solid var(--glass-border);
 }
+/* ===== 8FM — the Dashboard ===== */
+.dash-sub { font-size: 11.5px; color: var(--text-subtle); margin: -6px 0 12px 2px; }
+.dash-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); margin-bottom: var(--space-4); }
+@media (max-width: 1180px) { .dash-grid { grid-template-columns: repeat(2, 1fr); } }
+.dash-card {
+    background: var(--glass-panel); border: 1px solid var(--glass-border); border-radius: var(--radius-md);
+    padding: 14px 16px 10px; box-shadow: var(--shadow-sm); contain: layout style;
+    display: flex; flex-direction: column; min-width: 0;
+}
+.dash-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.dash-card-icon {
+    font-size: 12px; color: var(--accent-cyan); width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center; background: var(--accent-tint-low); border-radius: 4px;
+}
+.dash-card-lbl { font-size: 11px; color: var(--text-subtle); font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; }
+.dash-card-val {
+    font-size: 28px; font-weight: 650; line-height: 1.05; color: var(--text-main);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.015em; display: inline-block; align-self: flex-start;
+}
+.dash-card-val.dash-click { cursor: pointer; }
+.dash-card-val.dash-click:hover { color: var(--accent-cyan); }
+.dash-card-sub { font-size: 11.5px; color: var(--text-subtle); line-height: 1.4; margin: 4px 0 8px; }
+.dash-rows { border-top: 1px solid var(--glass-border); padding-top: 6px; font-size: 12.5px; }
+.dash-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; padding: 3px 4px; border-radius: 3px; }
+.dash-row[onclick] { cursor: pointer; transition: background-color 0.15s; }
+.dash-row[onclick]:hover, .dash-row[onclick]:focus-visible { background: var(--accent-tint-low); outline: none; }
+.dash-row-lbl { color: var(--text-main); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-row-sub .dash-row-lbl { padding-left: 14px; color: var(--text-subtle); font-weight: 400; }
+.dash-row-n { color: var(--text-subtle); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dash-row-val { color: var(--text-main); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 64px; text-align: right; }
+.dash-good .dash-row-val { color: var(--success); }
+.dash-warn .dash-row-val { color: var(--warning); }
+.dash-bad .dash-row-val { color: var(--danger); }
+.dash-dim .dash-row-lbl, .dash-dim .dash-row-n, .dash-dim .dash-row-val { color: var(--text-subtle); font-weight: 400; }
+.dash-net { border-top: 1px solid var(--glass-border); margin-top: 4px; padding-top: 6px; }
+.dash-net .dash-row-val { font-size: 14px; }
+.dash-row-val .bs-positive { color: var(--success); }
+.dash-row-val .bs-negative { color: var(--danger); }
+.dash-empty { color: var(--text-subtle); font-style: italic; padding: 6px 4px; font-size: 12px; }
+.bs-action-grid.dash-attn { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.bs-action-grid.dash-attn .bs-action-col { min-width: 0; }
+.bs-action-grid.dash-attn .bs-action-col-lbl { min-height: 34px; align-items: flex-start; }
+@media (max-width: 1180px) { .bs-action-grid.dash-attn { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dash-more-bar { display: flex; align-items: center; gap: 12px; margin: 20px 0 8px; }
+.dash-more-bar .btn { white-space: nowrap; flex-shrink: 0; }
+.dash-more-hint { font-size: 11.5px; color: var(--text-subtle); line-height: 1.4; }
+.dash-more { display: none; }
+.dash-more.open { display: block; }
+.dash-more-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 16px; }
 /* ===== Weekly Briefing modal (Phase 8CO) ===== */
 .wb-taxnote {
     font-size: 11px; color: var(--text-subtle);
@@ -3783,6 +3832,7 @@ details.ms-more[open] > summary { background: var(--hover-bg); }
 .ren-row.critical { border-left-color: var(--danger); }
 .ren-row.soon     { border-left-color: var(--warning); }
 .ren-row.upcoming { border-left-color: var(--accent-cyan); }
+.ren-row.past     { border-left-color: var(--glass-border-strong); }   /* 8FM — ended more than 14 days ago (an "Ending in FY …" window) */
 .ren-row-top {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 122px 104px auto;   /* 8FH.3 — fixed expiry / value columns: every row's date, amount and actions line up */
@@ -7377,10 +7427,9 @@ window.__msRenderMissingOneDriveLinks = function () {
   </div>
 
   <div class="nav-section-header">Overview</div>
-  <div class="nav-item active" title="Business Snapshot" onclick="showTab('businessSnapshotTab')"><i class="fas fa-gauge-high"></i> Business Snapshot</div>
-  <!-- 8FH.3 — Financial Intelligence (the #dashboard page) back in the sidebar: 8EA had retired the entry while the page
-       stayed in the file, computed at every launch and reachable only by chance. -->
-  <div class="nav-item" title="Financial Intelligence" onclick="showTab('dashboard')"><i class="fas fa-chart-line"></i> Financial Intelligence</div>
+  <!-- 8FM — the Dashboard: the Business Snapshot and Financial Intelligence as one page (the tab keeps its id; the
+       old analysis opens at its foot, and showTab('dashboard') still lands there with it open). -->
+  <div class="nav-item active" title="Dashboard" onclick="showTab('businessSnapshotTab')"><i class="fas fa-gauge-high"></i> Dashboard</div>
 
   <div class="nav-section-header">Sales &amp; CRM</div>
   <div class="nav-item" title="Client Master" onclick="showTab('clientMasterTab')"><i class="fas fa-address-card"></i> Client Master</div>
@@ -7453,153 +7502,80 @@ window.__msRenderMissingOneDriveLinks = function () {
 <div class="main-content">
   
   <div id="businessSnapshotTab">
-    <!-- 8CI — wrapped in dashboard-sticky-top for structural parity with the
-         Financial Intelligence tab: gives the header the same sticky top bar,
-         banner-aware top spacing (mac-app 30px + sticky-top 12px), and bottom
-         border/blur, fixing the cramped top spacing in both banner states. -->
+    <!-- 8FM — the Dashboard. The year on the picker (this FY to begin with); six cards — sales invoices, OEM bills,
+         consultants, expenses, renewals, today — every rupee figure base (the GST / TDS toggles add or deduct),
+         every figure a click to the list that shows exactly it; "Needs attention" is today's, whatever the year;
+         the old Financial Intelligence page is the analysis section at the foot. Drawn by renderDashboard
+         (dashboard module); renderBusinessSnapshot() is its old name. -->
     <div class="dashboard-sticky-top">
       <div class="page-header" style="margin-bottom: 14px; align-items: center;">
-        <h2 style="margin: 0;">Business Snapshot</h2>
+        <h2 style="margin: 0;">Dashboard</h2>
         <div style="display: flex; align-items: center; gap: 14px;">
-          <!-- 8CO — Weekly Briefing: opens a dated "what needs attention" digest
-               (overdue AR, bills to raise, vendor dues, OEM invoices to chase,
-               renewals, open POs). Copyable as text + printable via printHtml.
-               Honours the live GST/TDS toggle so figures match this Snapshot. -->
           <button class="btn btn-ghost btn-sm" onclick="openWeeklyBriefing()" title="Open the Weekly Briefing — everything that needs attention this week"><i class="fas fa-clipboard-list"></i> Weekly Briefing</button>
-          <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Toggle GST (18%) on all money figures"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
-          <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Toggle TDS (10%) on Receivables side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
-          <div id="bsFyLabel" style="font-size: 12px; color: var(--text-subtle); letter-spacing: 0.5px; text-transform: uppercase; font-weight: 600;">Current FY</div>
+          <div id="bsGstToggle" class="toggle-btn" onclick="toggleTax('gst')" title="Show every rupee figure with GST (18%)"><i id="bsGstIcon" class="far fa-square"></i> GST (18%)</div>
+          <div id="bsTdsToggle" class="toggle-btn" onclick="toggleTax('tds')" title="Deduct TDS (10%) on the sales side"><i id="bsTdsIcon" class="far fa-square"></i> TDS (10%)</div>
+          <select id="dashFy" onchange="__msDashSetFy(this.value)" style="width:200px;" aria-label="Financial year" title="The financial year the cards show (Needs attention and Today are today's, whatever the year)"></select>
         </div>
       </div>
     </div>
+    <div class="dash-sub"><span id="bsFyLabel">Current FY</span> · figures <span id="dashBasis">pre-GST</span> · every figure opens its list</div>
 
-    <!-- Row 1: 4-tile KPI strip -->
-    <div class="bs-kpi-strip">
-      <div class="bs-kpi-tile" id="bsKpi_invoiced" title="Click to open Invoices for current FY">
-        <div class="bs-kpi-head"><i class="fas fa-file-invoice-dollar bs-kpi-icon"></i><div class="bs-kpi-lbl">FY Invoiced</div></div>
-        <div class="bs-kpi-val" id="bsKpi_invoicedVal">—</div>
-        <div class="bs-kpi-desc">Revenue billed this fiscal year</div>
+    <div class="dash-grid">
+      <div class="dash-card" id="dashCardSales">
+        <div class="dash-card-head"><i class="fas fa-file-invoice-dollar dash-card-icon"></i><div class="dash-card-lbl">Sales invoices</div></div>
+        <div class="dash-card-val" id="dashSalesVal">—</div>
+        <div class="dash-card-sub" id="dashSalesSub">—</div>
+        <div class="dash-rows" id="dashSalesRows"></div>
       </div>
-      <div class="bs-kpi-tile" id="bsKpi_active" title="Click to open Subscription Portfolio (Active)">
-        <div class="bs-kpi-head"><i class="fas fa-clipboard-list bs-kpi-icon"></i><div class="bs-kpi-lbl">Active Contracts</div></div>
-        <div class="bs-kpi-val" id="bsKpi_activeVal">—</div>
-        <div class="bs-kpi-desc">Live contracts running today</div>
+      <div class="dash-card" id="dashCardBills">
+        <div class="dash-card-head"><i class="fas fa-file-import dash-card-icon"></i><div class="dash-card-lbl">OEM bills</div></div>
+        <div class="dash-card-val" id="dashBillsVal">—</div>
+        <div class="dash-card-sub" id="dashBillsSub">—</div>
+        <div class="dash-rows" id="dashBillsRows"></div>
       </div>
-      <div class="bs-kpi-tile bs-kpi-static" id="bsKpi_cash" title="Real cash position: Invoiced AR minus Received AP">
-        <div class="bs-kpi-head"><i class="fas fa-balance-scale bs-kpi-icon"></i><div class="bs-kpi-lbl">Net Cash Position</div></div>
-        <div class="bs-kpi-val" id="bsKpi_cashVal">—</div>
-        <div class="bs-kpi-desc">Real outstanding cash position</div>
+      <div class="dash-card" id="dashCardCon">
+        <div class="dash-card-head"><i class="fas fa-user-tie dash-card-icon"></i><div class="dash-card-lbl">Consultants</div></div>
+        <div class="dash-card-val" id="dashConVal">—</div>
+        <div class="dash-card-sub" id="dashConSub">—</div>
+        <div class="dash-rows" id="dashConRows"></div>
+      </div>
+      <div class="dash-card" id="dashCardExp">
+        <div class="dash-card-head"><i class="fas fa-wallet dash-card-icon"></i><div class="dash-card-lbl">Company expenses</div></div>
+        <div class="dash-card-val" id="dashExpVal">—</div>
+        <div class="dash-card-sub" id="dashExpSub">—</div>
+        <div class="dash-rows" id="dashExpRows"></div>
+      </div>
+      <div class="dash-card" id="dashCardRen">
+        <div class="dash-card-head"><i class="fas fa-sync-alt dash-card-icon"></i><div class="dash-card-lbl">Renewals</div></div>
+        <div class="dash-card-val" id="dashRenVal">—</div>
+        <div class="dash-card-sub" id="dashRenSub">—</div>
+        <div class="dash-rows" id="dashRenRows"></div>
+      </div>
+      <div class="dash-card" id="dashCardToday">
+        <div class="dash-card-head"><i class="fas fa-balance-scale dash-card-icon"></i><div class="dash-card-lbl">Today</div></div>
+        <div class="dash-card-val" id="bsKpi_activeVal">—</div>
+        <div class="dash-card-sub" id="dashTodaySub">—</div>
+        <div class="dash-rows" id="dashTodayRows"></div>
       </div>
     </div>
 
-    <!-- Row 2: Receivables -->
-    <div class="bs-section-lbl">Receivables</div>
-    <div class="bs-money-row">
-      <!-- Box 1: Invoiced & Pending Payment -->
-      <div class="bs-money-tile">
-        <div class="bs-money-head">
-          <div class="bs-tile-lbl">Invoiced &amp; Pending Payment</div>
-          <div class="bs-money-cf" id="bsRecCfWrap" title="Click to view carry-forward open AR (pre-current FY)">
-            CF <span id="bsRecCfVal">—</span>
-          </div>
-        </div>
-        <div class="bs-tile-desc">Money owed to you on invoices already raised</div>
-        <div class="bs-money-val" id="bsRecVal" title="Click to open Receivables">—</div>
-        <div class="bs-bucket-grid">
-          <div class="bs-bucket" id="bsRecB1" title="Click to view receivables 0–30 days old"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsRecB1Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB2" title="Click to view receivables 31–60 days old"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsRecB2Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB3" title="Click to view receivables 61–90 days old"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsRecB3Val">—</div></div>
-          <div class="bs-bucket" id="bsRecB4" title="Click to view receivables 90+ days old"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsRecB4Val">—</div></div>
-        </div>
-      </div>
-      <!-- Box 2: To Be Issued This FY -->
-      <div class="bs-money-tile">
-        <div class="bs-money-head">
-          <div class="bs-tile-lbl">To Be Issued This FY</div>
-          <div class="bs-money-cf"><span id="bsRecToIssueCount">—</span> cycles</div>
-        </div>
-        <div class="bs-tile-desc">Cycles due to be invoiced before 31 Mar end of FY</div>
-        <div class="bs-money-val" id="bsRecToIssueVal" title="Click to open Receivables (Pending)">—</div>
-        <div class="bs-urgency-rows" id="bsRecToIssueRows"></div>
-      </div>
-    </div>
-
-    <!-- Row 3: Payables -->
-    <div class="bs-section-lbl">Payables</div>
-    <div class="bs-money-row">
-      <!-- Box 3: Bills Received & Pending Payment -->
-      <div class="bs-money-tile">
-        <div class="bs-money-head">
-          <div class="bs-tile-lbl">Bills Received &amp; Pending Payment</div>
-          <div class="bs-money-cf" id="bsPayCfWrap" title="Click to view carry-forward open AP (pre-current FY)">
-            CF <span id="bsPayCfVal">—</span>
-          </div>
-        </div>
-        <div class="bs-tile-desc">OEM bills you've received but not paid yet</div>
-        <div class="bs-money-val" id="bsPayVal" title="Click to open Payables">—</div>
-        <div class="bs-bucket-grid">
-          <div class="bs-bucket" id="bsPayB1" title="Click to view payables 0–30 days old"><div class="bs-bucket-lbl">0-30</div><div class="bs-bucket-val" id="bsPayB1Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB2" title="Click to view payables 31–60 days old"><div class="bs-bucket-lbl">31-60</div><div class="bs-bucket-val" id="bsPayB2Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB3" title="Click to view payables 61–90 days old"><div class="bs-bucket-lbl">61-90</div><div class="bs-bucket-val" id="bsPayB3Val">—</div></div>
-          <div class="bs-bucket" id="bsPayB4" title="Click to view payables 90+ days old"><div class="bs-bucket-lbl">90+</div><div class="bs-bucket-val" id="bsPayB4Val">—</div></div>
-        </div>
-      </div>
-      <!-- Box 4: To Be Received This FY -->
-      <div class="bs-money-tile">
-        <div class="bs-money-head">
-          <div class="bs-tile-lbl">To Be Received This FY</div>
-          <div class="bs-money-cf"><span id="bsPayToReceiveCount">—</span> cycles</div>
-        </div>
-        <div class="bs-tile-desc">OEM bills expected before 31 Mar end of FY</div>
-        <div class="bs-money-val" id="bsPayToReceiveVal" title="Click to open Payables">—</div>
-        <div class="bs-urgency-rows" id="bsPayToReceiveRows"></div>
-      </div>
-    </div>
-
-    <!-- Row 4: Activity tiles — 8EA: retired from view (Contracts live in the
-         KPI strip; Renewals/POs live in the Action Center). Kept in the DOM so
-         renderBusinessSnapshot's element fillers stay valid; physical deletion
-         planned for the FI cleanup phase. 8EY: the Prospects tile went with the
-         Prospect Pipeline module. -->
-    <div class="bs-section-lbl" style="display:none;">Activity</div>
-    <div class="bs-activity-row" style="display:none;">
-      <div class="bs-activity-tile">
-        <div class="bs-tile-head"><i class="fas fa-shopping-cart bs-tile-icon"></i><div class="bs-tile-lbl">Purchase Orders</div></div>
-        <div class="bs-tile-desc">POs raised this fiscal year</div>
-        <div class="bs-tile-val" id="bsPoCount" title="Click to open Purchase Orders">—</div>
-        <div class="bs-tile-sub" id="bsPoSub">—</div>
-        <div class="bs-tile-rows" id="bsPoRows"></div>
-      </div>
-      <div class="bs-activity-tile">
-        <div class="bs-tile-head"><i class="fas fa-sync-alt bs-tile-icon"></i><div class="bs-tile-lbl">Renewals</div></div>
-        <div class="bs-tile-desc">Contracts expiring this fiscal year</div>
-        <div class="bs-tile-val" id="bsRnCount" title="Click to open Renewal Engine">—</div>
-        <div class="bs-tile-sub" id="bsRnSub">—</div>
-        <div class="bs-tile-rows" id="bsRnRows"></div>
-      </div>
-      <div class="bs-activity-tile">
-        <div class="bs-tile-head"><i class="fas fa-book bs-tile-icon"></i><div class="bs-tile-lbl">Contracts</div></div>
-        <div class="bs-tile-desc">Your active subscription portfolio</div>
-        <div class="bs-tile-val" id="bsCtCount" title="Click to open Subscription Portfolio">—</div>
-        <div class="bs-tile-sub" id="bsCtSub">—</div>
-        <div class="bs-tile-rows" id="bsCtRows"></div>
-      </div>
-    </div>
-
-    <!-- Row 5: Action Center -->
     <div class="bs-action-center">
       <div class="bs-action-head">
-        <div class="bs-section-lbl" style="margin: 0;">Action Center · what needs attention</div>
-        <div style="font-size: 11px; color: var(--text-subtle);">Click any item to drill in</div>
+        <div class="bs-section-lbl" style="margin: 0;">Needs attention · today</div>
+        <div style="font-size: 11px; color: var(--text-subtle);">Click any item to open its list</div>
       </div>
-      <div class="bs-action-grid">
+      <div class="bs-action-grid dash-attn">
         <div class="bs-action-col">
           <div class="bs-action-col-lbl bs-action-warning"><i class="fas fa-exclamation-triangle"></i> Renewals due this month</div>
           <div class="bs-action-list" id="bsActRenewals"></div>
         </div>
         <div class="bs-action-col">
-          <div class="bs-action-col-lbl bs-action-danger"><i class="fas fa-circle-exclamation"></i> Overdue receivables</div>
+          <div class="bs-action-col-lbl bs-action-danger"><i class="fas fa-circle-exclamation"></i> Overdue invoices</div>
           <div class="bs-action-list" id="bsActOverdue"></div>
+        </div>
+        <div class="bs-action-col">
+          <div class="bs-action-col-lbl bs-action-warning"><i class="fas fa-file-export"></i> To raise, past the bill date</div>
+          <div class="bs-action-list" id="bsActToRaise"></div>
         </div>
         <div class="bs-action-col">
           <div class="bs-action-col-lbl bs-action-info"><i class="fas fa-truck"></i> Open POs awaiting vendor</div>
@@ -7608,6 +7584,14 @@ window.__msRenderMissingOneDriveLinks = function () {
       </div>
     </div>
 
+    <!-- 8FM — the analysis: the old Performance & History block and the Financial Intelligence page, as they were,
+         shown on demand (the choice remembered on this Mac in ms_dash_more_v1). Every id is kept: calcDashboard fills
+         them; renderFyBasisToggle draws into fyBasisToggleDashboard; the multiselects are its filters. -->
+    <div class="dash-more-bar">
+      <button type="button" class="btn btn-ghost btn-sm" id="dashMoreBtn" onclick="__msDashToggleMore()" aria-expanded="false" aria-controls="dashMore"><i class="fas fa-chevron-down"></i> More analysis</button>
+      <span class="dash-more-hint">Realized revenue, cost and margin by year, concentration, FX, margin leakage, the client leaderboard, the growth chart — the old Financial Intelligence page, with its own client and year filters.</span>
+    </div>
+    <div id="dashMore" class="dash-more">
     <!-- Phase 8EA — Performance & History (moved verbatim from Financial
          Intelligence; element ids unchanged so the existing calcDashboard
          engine fills them). Figures reflect All Clients / All Years on the
@@ -7671,19 +7655,12 @@ window.__msRenderMissingOneDriveLinks = function () {
               </table>
           </div>
     </div>
-  </div>
 
-  <div id="dashboard" class="hidden">
-    <div class="dashboard-sticky-top">
-        <!-- Row 1: Title + primary action -->
-        <div class="page-header" style="margin-bottom: 14px;">
-          <h2>Financial Intelligence</h2>
-          <button class="btn btn-primary" onclick="goToAddContract()"><i class="fas fa-plus"></i> New Contract</button>
-        </div>
-
+      <div class="bs-section-lbl" style="margin-top:24px;">Financial Intelligence · filtered</div>
+      <div class="dash-more-filters">
         <!-- Row 2: Filters cluster -->
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <div class="controls-bar">
+            <div class="controls-bar" style="display:none;"><!-- 8FM — the toggles are the Dashboard's (toggleTax still writes these) -->
                 <div id="gstToggle" class="toggle-btn" onclick="toggleTax('gst')"><i id="gstIcon" class="far fa-square"></i> GST (18%)</div>
                 <div id="tdsToggle" class="toggle-btn" onclick="toggleTax('tds')"><i id="tdsIcon" class="far fa-square"></i> TDS (10%)</div>
             </div>
@@ -7711,10 +7688,8 @@ window.__msRenderMissingOneDriveLinks = function () {
             <!-- FY Basis toggle: switches FY bucketing between Cycle / Invoice / Payment date -->
             <div id="fyBasisToggleDashboard"></div>
         </div>
-    </div>
-    
-    <!-- 8EA: Core Performance Metrics + Risk & Variance tiles moved to the
-         Business Snapshot (Performance & History section). -->
+      </div>
+
     <div class="dashboard-grid-halves">
       <div class="card" style="border-top: 3px solid var(--warning);">
         <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -7892,6 +7867,7 @@ window.__msRenderMissingOneDriveLinks = function () {
               <div id="growthChartContainer" style="position: relative; height: 260px; width: 100%;">
                   </div>
         </div>
+    </div>
     </div>
   </div>
 
@@ -10583,7 +10559,10 @@ window.__msRenderMissingOneDriveLinks = function () {
         <input type="text" id="invSearch" placeholder="Search invoice #, client, subject..." style="flex:1; min-width:220px; max-width:340px;" oninput="__msInvSearchInput()">
         <select id="invStatusFilter" onchange="renderInvoicesPage()" style="width:170px;">
           <option value="ALL" selected>All Statuses</option>
+          <option value="RAISED">Raised (Issued / Part-paid / Paid)</option>
           <option value="OUTSTANDING">Outstanding Only</option>
+          <option value="OVERDUE">Overdue</option>
+          <option value="COLLECTED">Paid or part-paid</option>
           <option value="Draft">Draft</option>
           <option value="Issued">Issued</option>
           <option value="Partially Paid">Partially Paid</option>
@@ -13896,7 +13875,9 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FL-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FM-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
+const DEFAULT_PAYMENT_TERMS_DAYS = 30;          // 8FM — up here (they were declared after the boot-time landing on the Dashboard, which reads them)
+const DEFAULT_VENDOR_PAYMENT_TERMS_DAYS = 30;
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
 
 // List of ALL localStorage keys used by the CRM — this is the canonical
@@ -20229,7 +20210,8 @@ function getCalculatedValues(rev, cost) {
 }
 
 function showTab(tab) {
-    if (tab !== 'dashboard' && growthChartInstance) {
+    if (tab === 'dashboard') { tab = 'businessSnapshotTab'; __msDashOpenMoreOnShow = true; }   // 8FM — the Financial Intelligence page is the Dashboard's analysis section
+    if (growthChartInstance) {   // 8FM — drawn again when the analysis section shows (a chart drawn while hidden has no size)
         growthChartInstance.destroy();
         growthChartInstance = null;
     }
@@ -20239,7 +20221,7 @@ function showTab(tab) {
     // Invoice form gets cleared when the user navigates away (sidebar click,
     // closeInvoiceForm() returning to Invoices, etc.). Reachable only via the
     // "+ New Invoice" button on the Invoices list, not from the sidebar.
-    document.querySelectorAll('#businessSnapshotTab,#dashboard,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab,#importTab,#filesTab').forEach(d => {
+    document.querySelectorAll('#businessSnapshotTab,#contractsTab,#backupTab,#provisionTab,#clientSummaryTab,#clientMasterTab,#resellerMasterTab,#proposalsTab,#purchaseOrdersTab,#invoicesTab,#purchaseInvoicesTab,#renewalsTab,#invoiceFormTab,#proposalFormTab,#poFormTab,#cmFormTab,#rmFormTab,#consultantsTab,#conPaymentFormTab,#conMasterFormTab,#caExportTab,#documentsTab,#docExportTab,#expensesTab,#bankStatementsTab,#importTab,#filesTab').forEach(d => {
         if(d) d.classList.add('hidden');
     });
     
@@ -20255,12 +20237,7 @@ function showTab(tab) {
         if (typeof renderFyBasisToggle === 'function') renderFyBasisToggle('fyBasisTogglePortfolio');
     }
     
-    if(tab === 'dashboard') {
-        setTimeout(debouncedCalcDashboard, 50);
-        if (typeof renderFyBasisToggle === 'function') renderFyBasisToggle('fyBasisToggleDashboard');
-    }
-
-    if(tab === 'businessSnapshotTab') {
+    if(tab === 'businessSnapshotTab') {   // 8FM — the Dashboard (its analysis section, when open, runs calcDashboard and the FY-basis toggle itself)
         if (typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot();
     }
 
@@ -23887,6 +23864,7 @@ function setFyBasis(newBasis) {
         if (typeof renderContracts === 'function') renderContracts();
         if (typeof renderARApPage === 'function') renderARApPage();
         if (typeof renderClientSummary === 'function') renderClientSummary();
+        if (typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot();   // 8FM — the Dashboard's ledger rows follow the basis
     } catch (e) { console.warn("FY basis refresh error:", e); }
 }
 
@@ -32089,7 +32067,8 @@ function populateInvoicesFilters() {
             const fyStart = m >= 3 ? y : y - 1;
             fys.add(`FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`);
         });
-        fySel.innerHTML = '<option value="ALL">All Fiscal Years</option>' + [...fys].sort().reverse().map(fy => `<option value="${pEsc(fy)}"${current === fy ? ' selected' : ''}>${pEsc(fy)}</option>`).join('');
+        fySel.innerHTML = '<option value="ALL">All Fiscal Years</option>' + [...fys].sort().reverse().map(fy => `<option value="${pEsc(fy)}"${current === fy ? ' selected' : ''}>${pEsc(fy)}</option>`).join('')
+            + `<option value="CF"${current === 'CF' ? ' selected' : ''}>Before this FY</option>`;   // 8FM — the carry-forward (the Dashboard's "from before this FY")
     }
 }
 
@@ -32100,15 +32079,19 @@ function getFilteredInvoices() {
     const fyF = (document.getElementById('invFyFilter') || {}).value || 'ALL';
     return invoices.filter(inv => {
         if (statusF === 'OUTSTANDING' && !isInvoiceOutstanding(inv)) return false;
-        if (statusF !== 'ALL' && statusF !== 'OUTSTANDING' && inv.status !== statusF) return false;
+        if (statusF === 'OVERDUE' && !isInvoiceOverdue(inv)) return false;   // 8FM — past the due date (the Dashboard's row)
+        if (statusF === 'RAISED' && inv.status !== 'Issued' && inv.status !== 'Partially Paid' && inv.status !== 'Paid') return false;   // 8FM — not Draft / Cancelled / Credit Note
+        if (statusF === 'COLLECTED' && inv.status !== 'Partially Paid' && inv.status !== 'Paid') return false;   // 8FM — money has come in on it (the Dashboard's Collected row)
+        if (statusF !== 'ALL' && statusF !== 'OUTSTANDING' && statusF !== 'OVERDUE' && statusF !== 'RAISED' && statusF !== 'COLLECTED' && inv.status !== statusF) return false;
         if (clientF !== 'ALL' && inv.clientName !== clientF) return false;
-        if (fyF !== 'ALL' && inv.invoiceDate) {
+        if (fyF !== 'ALL') {
+            if (!inv.invoiceDate) return false;   // 8FM — an invoice with no date belongs to no year (the Dashboard counts none; review NIT-3)
             const d = new Date(inv.invoiceDate);
             const y = d.getFullYear();
             const m = d.getMonth();
             const fyStart = m >= 3 ? y : y - 1;
-            const fy = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`;
-            if (fy !== fyF) return false;
+            if (fyF === 'CF') { const _n = new Date(), _cur = _n.getMonth() >= 3 ? _n.getFullYear() : _n.getFullYear() - 1; if (fyStart >= _cur) return false; }   // 8FM — before this FY
+            else { const fy = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`; if (fy !== fyF) return false; }
         }
         if (s) {
             const hay = [inv.invoiceNumber, inv.clientName, inv.subject, inv.notes].join(' ').toLowerCase();
@@ -35691,6 +35674,11 @@ function getContractDaysToExpiry(c) {
 // Is this contract "upcoming for renewal" given a window in days
 function isContractRenewable(c, windowDays) {
     if (c && c.type === 'service') return false; // 8DD — excluded from renewals
+    if (typeof windowDays === 'string' && /^fy\d{4}$/.test(windowDays)) {   // 8FM — "ending in FY …": the end date in that year
+        if (!c || !c.endDate) return false;
+        const fy = parseInt(windowDays.slice(2), 10), e = __msLocalDate(c.endDate) || new Date(c.endDate);
+        return !!e && !isNaN(e.getTime()) && e >= new Date(fy, 3, 1) && e <= new Date(fy + 1, 2, 31, 23, 59, 59, 999);
+    }
     const days = getContractDaysToExpiry(c);
     if (days === null) return false;
     // Include slightly past-due (up to 14 days past expiry) — these need urgent attention
@@ -35717,6 +35705,7 @@ function getContractRenewalValue(c) {
 // ===== Rendering =====
 function renderRenewalsPage() {
     if (!document.getElementById('renewalsTab')) return;
+    __msRenSyncFyWindows();   // 8FM — "Ending in FY …" choices (before the window is read: a choice that vanished falls back cleanly)
     const windowFilter = (document.getElementById('renWindowFilter') || {}).value || '90';
     const statusFilter = (document.getElementById('renStatusFilter') || {}).value || 'ACTIVE';
     const clientFilter = (document.getElementById('renClientFilter') || {}).value || 'ALL';
@@ -35724,7 +35713,7 @@ function renderRenewalsPage() {
 
     populateRenewalClientFilter();
 
-    const windowNum = windowFilter === 'all' ? 'all' : parseInt(windowFilter);
+    const windowNum = (windowFilter === 'all' || /^fy\d{4}$/.test(windowFilter)) ? windowFilter : parseInt(windowFilter);
 
     // Pass 1 — apply window/status/client/search filters (used by the urgency
     // strip including the Pipeline Gaps card, so its breakdown always shows
@@ -35760,6 +35749,31 @@ function renderRenewalsPage() {
     renderRenewalList(filteredCandidates);
 }
 
+// 8FM — the window box offers "Ending in FY …" for every year a contract (not service) ends in, newest first; the
+// Dashboard's renewal rows open on them. The choice in the box is kept.
+function __msRenSyncFyWindows() {
+    const sel = document.getElementById('renWindowFilter');
+    if (!sel) return;
+    const current = sel.value;
+    const years = new Set();
+    (contracts || []).forEach(c => {
+        if (!c || !c.endDate || c.type === 'service') return;
+        const e = __msLocalDate(c.endDate) || new Date(c.endDate);
+        if (!e || isNaN(e.getTime())) return;
+        const fy = e.getMonth() >= 3 ? e.getFullYear() : e.getFullYear() - 1;
+        if (fy > 2000 && fy < 2100) years.add(fy);
+    });
+    let grp = sel.querySelector('optgroup[data-ms="fy"]');
+    if (!grp) { grp = document.createElement('optgroup'); grp.setAttribute('data-ms', 'fy'); grp.label = 'Ending in a year'; sel.appendChild(grp); }
+    const list = [...years].sort((a, b) => b - a);
+    const want = list.map(fy => 'fy' + fy);
+    const have = [...grp.querySelectorAll('option')].map(o => o.value);
+    if (want.join(',') !== have.join(',')) {
+        grp.innerHTML = list.map(fy => `<option value="fy${fy}">Ending in FY ${fy}-${String(fy + 1).slice(2)}</option>`).join('');
+        if ([...sel.options].some(o => o.value === current)) sel.value = current;
+    }
+}
+
 function populateRenewalClientFilter() {
     const sel = document.getElementById('renClientFilter');
     if (!sel) return;
@@ -35781,7 +35795,7 @@ function renderRenewalKPIs() {
     // 8FH.2 — At Risk / Confirmed count the window the page shows, as the list does (they were lifetime counts: a
     // renewal confirmed two years ago, a contract 200 days expired and still marked At Risk)
     const _wf = (document.getElementById('renWindowFilter') || {}).value || '90';
-    const _win = _wf === 'all' ? 'all' : parseInt(_wf);
+    const _win = (_wf === 'all' || /^fy\d{4}$/.test(_wf)) ? _wf : parseInt(_wf);   // 8FM
     upcoming.forEach(c => {
         const days = getContractDaysToExpiry(c);
         if (days === null) return;
@@ -35813,7 +35827,7 @@ function renderRenewalUrgencyStrip(candidates) {
     const critical = [], soon = [], upcoming = [];
     candidates.forEach(({ c, i }) => {
         const days = getContractDaysToExpiry(c);
-        if (days === null) return;
+        if (days === null || days < -14) return;   // 8FM — an "Ending in FY …" window lists past contracts too; they are nobody's urgency
         if (days <= 30) critical.push({ c, i, days });
         else if (days <= 60) soon.push({ c, i, days });
         else if (days <= 90) upcoming.push({ c, i, days });
@@ -35827,6 +35841,7 @@ function renderRenewalUrgencyStrip(candidates) {
     candidates.forEach(({ c }) => {
         const st = c.renewalStatus || 'Not Started';
         if (st === 'Lost') return;  // exclude lost from the operational view
+        if (getContractDaysToExpiry(c) < -14) return;   // 8FM — long ended (an "Ending in FY …" window): no pipeline to fill
         if (!c.renewalQuoteSent) gNotQuoted++;
         else if (!c.renewalClientPOReceived) gAwaitingClientPO++;
         else if (!c.renewalOemPORaised) gAwaitingOemPO++;
@@ -35935,8 +35950,9 @@ function renderRenewalList(candidates) {
     candidates.sort((a, b) => { const ka = __key(a), kb = __key(b); return (ka < kb ? -1 : ka > kb ? 1 : 0) || (__days(a) - __days(b)); });
     host.innerHTML = candidates.map(({ c, i }) => {
         const days = getContractDaysToExpiry(c);
-        const urgency = days <= 30 ? 'critical' : (days <= 60 ? 'soon' : 'upcoming');
-        const daysLabel = days < 0 ? `<span class="days urgent">${Math.abs(days)}d past expiry</span>` :
+        const urgency = days < -14 ? 'past' : days <= 30 ? 'critical' : (days <= 60 ? 'soon' : 'upcoming');   // 8FM — 'past': an "Ending in FY …" window lists contracts long ended
+        const daysLabel = days < -14 ? `<span class="days">ended ${Math.abs(days)}d ago</span>` :
+                          days < 0 ? `<span class="days urgent">${Math.abs(days)}d past expiry</span>` :
                           days === 0 ? `<span class="days urgent">Expires today</span>` :
                           days <= 30 ? `<span class="days urgent">${days}d remaining</span>` :
                           days <= 60 ? `<span class="days warn">${days}d remaining</span>` :
@@ -40745,8 +40761,10 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
     // or status filter), producing a wrong combination. Selects reset to 'ALL',
     // free-text search boxes reset to ''. Then the click's overrides win.
     const RESET_GROUPS = {
-        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL' },
+        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL',
+                               invSearch: '', invStatusFilter: 'ALL', invClientFilter: 'ALL', invFyFilter: 'ALL' },   // 8FM — the invoice list's own boxes too
         purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL', apPendingUrgency: 'ALL' },
+        consultantsTab:      { conSearch: '', conFyFilter: 'ALL', conConsultantFilter: 'ALL', conStatusFilter: 'ALL', conPeriodFilter: 'ALL' },   // 8FM
         // 8FH.2 — the WHOLE filter group of each page (a leftover client / OEM / window / search filter made the list a subset of the number clicked)
         purchaseOrdersTab:   { poStatusFilter: 'ALL', poOemFilter: 'ALL', poSearch: '' },
         contractsTab:        { portfolioStatusFilter: 'ALL', portfolioClientFilter: 'ALL', portfolioFyFilter: 'ALL' },
@@ -40760,15 +40778,20 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
         // <select> so the page re-renders exactly once with all values in place.
         // (Search boxes use oninput, not onchange, so we never dispatch on them —
         // their cleared value is picked up by the render the select triggers.)
-        let lastSelect = null;
+        // 8FM — one 'change' per renderer (the last select of each onchange): the invoice list and the Receivables
+        // register share the invoices tab, and the one event used to reach only whichever select came last
+        const lastByRenderer = {};
         ids.forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.value = finalState[id];
-                if (el.tagName === 'SELECT') lastSelect = el;
+                if (el.tagName === 'SELECT' && el.value !== finalState[id] && finalState[id] !== 'ALL') {   // 8FM — a box whose choices follow the other boxes (the consultant register's) may not offer it yet: the page's draw fills the boxes again
+                    const o = document.createElement('option'); o.value = finalState[id]; o.textContent = /^\d{4}-\d{4}$/.test(finalState[id]) ? 'FY ' + finalState[id] : finalState[id]; el.appendChild(o); el.value = finalState[id];
+                }
+                if (el.tagName === 'SELECT') lastByRenderer[el.getAttribute('onchange') || ''] = el;
             }
         });
-        if (lastSelect) { try { lastSelect.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+        Object.keys(lastByRenderer).forEach(k => { try { lastByRenderer[k].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} });
     }, 60);
 }
 
@@ -40779,347 +40802,414 @@ function bsEsc(s) {
     );
 }
 
-// Main render — pulls live data and writes into the snapshot tab DOM.
-function renderBusinessSnapshot() {
-    if (!document.getElementById('businessSnapshotTab')) return;
-    const fy = bsGetCurrentFYRange();
-    const today = new Date(); today.setHours(0,0,0,0);
-
-    // Header label
-    const fyLbl = document.getElementById('bsFyLabel');
-    if (fyLbl) fyLbl.textContent = `Current FY · ${fy.label}`;
-
-    // Sync GST/TDS toggle visual state from globals (in case user toggled
-    // them on FI before navigating here).
-    const bsGstIcon = document.getElementById('bsGstIcon');
-    const bsGstBtn  = document.getElementById('bsGstToggle');
-    const bsTdsIcon = document.getElementById('bsTdsIcon');
-    const bsTdsBtn  = document.getElementById('bsTdsToggle');
-    const gstOn = (typeof showGST !== 'undefined') && showGST;
-    const tdsOn = (typeof showTDS !== 'undefined') && showTDS;
-    if (bsGstIcon) bsGstIcon.className = gstOn ? 'fas fa-check-square' : 'far fa-square';
-    if (bsGstBtn)  bsGstBtn.classList.toggle('active', gstOn);
-    if (bsTdsIcon) bsTdsIcon.className = tdsOn ? 'fas fa-check-square' : 'far fa-square';
-    if (bsTdsBtn)  bsTdsBtn.classList.toggle('active', tdsOn);
-
-    const setT = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-
-    // ---------- Build money records ----------
-    const { arInvoiced, arToIssue, apReceived, apToReceive } = bsBuildMoneyRecords();
-
-    // Tax-applied totals
-    const recInvoicedTotal = arInvoiced.reduce((s, r) => s + bsApplyTax(r.amount, 'AR'), 0);
-    const payReceivedTotal = apReceived.reduce((s, r) => s + bsApplyTax(r.amount, 'AP'), 0);
-
-    // Aging buckets for the "raised" boxes
-    const recBuckets = bsAgeBuckets(arInvoiced, 'AR');
-    const payBuckets = bsAgeBuckets(apReceived, 'AP');
-
-    // Carry-forward = invoices dated before current FY start
-    const recCF = arInvoiced
-        .filter(r => r.fyDate && r.fyDate < fy.start)
-        .reduce((s, r) => s + bsApplyTax(r.amount, 'AR'), 0);
-    const payCF = apReceived
-        .filter(r => r.fyDate && r.fyDate < fy.start)
-        .reduce((s, r) => s + bsApplyTax(r.amount, 'AP'), 0);
-
-    // Urgency buckets for the "to be issued/received" boxes
-    const recToIssueBuckets = bsUrgencyBuckets(arToIssue, 'AR');
-    const payToReceiveBuckets = bsUrgencyBuckets(apToReceive, 'AP');
-
-    // ---------- Money tiles: write to DOM ----------
-    setT('bsRecVal',          bsFmtINRShort(recInvoicedTotal));
-    setT('bsRecCfVal',        bsFmtINRShort(recCF));
-    setT('bsRecB1Val',        bsFmtINRShort(recBuckets.b1));
-    setT('bsRecB2Val',        bsFmtINRShort(recBuckets.b2));
-    setT('bsRecB3Val',        bsFmtINRShort(recBuckets.b3));
-    setT('bsRecB4Val',        bsFmtINRShort(recBuckets.b4));
-    setT('bsRecToIssueVal',   bsFmtINRShort(recToIssueBuckets.total));
-    setT('bsRecToIssueCount', String(arToIssue.length));
-
-    setT('bsPayVal',           bsFmtINRShort(payReceivedTotal));
-    setT('bsPayCfVal',         bsFmtINRShort(payCF));
-    setT('bsPayB1Val',         bsFmtINRShort(payBuckets.b1));
-    setT('bsPayB2Val',         bsFmtINRShort(payBuckets.b2));
-    setT('bsPayB3Val',         bsFmtINRShort(payBuckets.b3));
-    setT('bsPayB4Val',         bsFmtINRShort(payBuckets.b4));
-    setT('bsPayToReceiveVal',  bsFmtINRShort(payToReceiveBuckets.total));
-    setT('bsPayToReceiveCount', String(apToReceive.length));
-
-    // Urgency rows for Box 2 (AR To Be Issued)
-    // 8U item #10: clicks now also set arStatusFilter='PENDING' so the AR
-    // register lands pre-filtered on "Pending to Raise" cycles.
-    const rtiEl = document.getElementById('bsRecToIssueRows');
-    if (rtiEl) {
-        rtiEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'past' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-danger">Past bill date · action needed</span><span class="bs-urg-val">${recToIssueBuckets.pastCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'month' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-warning">Due this month</span><span class="bs-urg-val">${recToIssueBuckets.monthCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING', arPendingUrgency: 'later' }, null, 'ar')"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${recToIssueBuckets.laterCount} · ${bsEsc(bsFmtINRShort(recToIssueBuckets.laterVal))}</span></div>
-        `;
-    }
-    // Urgency rows for Box 4 (AP To Be Received)
-    // 8U item #10: clicks set apStatusFilter='PENDING' (OEM Invoice Awaited).
-    const ptrEl = document.getElementById('bsPayToReceiveRows');
-    if (ptrEl) {
-        ptrEl.innerHTML = `
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'past' })"><span class="bs-urg-lbl bs-urg-danger">Past expected date · chase OEM</span><span class="bs-urg-val">${payToReceiveBuckets.pastCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.pastVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'month' })"><span class="bs-urg-lbl bs-urg-warning">Expected this month</span><span class="bs-urg-val">${payToReceiveBuckets.monthCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.monthVal))}</span></div>
-          <div class="bs-urgency-row" onclick="bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING', apPendingUrgency: 'later' })"><span class="bs-urg-lbl bs-urg-muted">Later this FY</span><span class="bs-urg-val">${payToReceiveBuckets.laterCount} · ${bsEsc(bsFmtINRShort(payToReceiveBuckets.laterVal))}</span></div>
-        `;
-    }
-
-    // ---------- Headline KPI strip ----------
-    // 1) FY Invoiced — sum of AR invoice amounts dated this FY (tax-aware)
-    let fyInvoicedBase = 0;
-    if (Array.isArray(contracts)) {
-        contracts.forEach(c => {
-            if (!c || !c.billingYears) return;
-            c.billingYears.forEach(y => {
-                const baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
-                const cycleRev = baseSell * (y.ratio || 0);
-                if (cycleRev <= 0) return;
-                const arInvs = __msCycleArLive(y, c);   // 8FH.2 — one reader; a credit-noted invoice is not "invoiced this FY"
-                const raised = arInvs.filter(i => !!i.date);
-                // 8CS — mirror the 8CH base alignment used by the AR card: a single-invoice
-                // cycle uses the pre-GST cycleRev (not the GST-inclusive stored grandTotal),
-                // so the GST toggle adds 18% once instead of double-counting. Multi-invoice
-                // cycles keep stored amounts (the known shared latent item).
-                const singleInvoiceCycle = raised.length < 2;
-                raised.forEach(inv => {
-                    const d = __msLocalDate(inv.date) || new Date(inv.date);   // 8FH.2
-                    if (d >= fy.start && d <= fy.end) {
-                        fyInvoicedBase += singleInvoiceCycle
-                            ? cycleRev
-                            : ((inv.amount !== undefined && inv.amount !== null && inv.amount !== '')
-                                ? (Number(inv.amount) || 0)
-                                : cycleRev);
-                    }
-                });
-            });
-        });
-    }
-    const fyInvoiced = bsApplyTax(fyInvoicedBase, 'AR');
-
-    // 2) Active contracts — today between c.start and c.endDate
-    const activeContracts = (Array.isArray(contracts) ? contracts : []).filter(c => isContractActive(c));   // 8FH.2 — the same test as the list this card opens
-
-    // 3) Net cash position (real cash only — excludes future commitments)
-    const netCash = recInvoicedTotal - payReceivedTotal;
-
-    setT('bsKpi_invoicedVal', bsFmtINRShort(fyInvoiced));
-    setT('bsKpi_activeVal',   String(activeContracts.length));
-    const cashEl = document.getElementById('bsKpi_cashVal');
-    if (cashEl) {
-        cashEl.textContent = bsFmtINRSigned(netCash);
-        cashEl.classList.remove('bs-positive', 'bs-negative');
-        if (netCash > 0) cashEl.classList.add('bs-positive');
-        else if (netCash < 0) cashEl.classList.add('bs-negative');
-    }
-    // ---------- Activity tiles ----------
-    // Purchase Orders — POs created in current FY by po.createdAt
-    const fyPOs = (Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(po => {
-        if (!po.createdAt) return false;
-        const d = new Date(po.createdAt);
-        return !isNaN(d.getTime()) && d >= fy.start && d <= fy.end;
-    });
-    const fyPOTotal = fyPOs.reduce((s, po) => s + bsPOTotalINR(po), 0);
-    const poByStatus = { Open: 0, AwaitingVendor: 0, Closed: 0 };
-    fyPOs.forEach(po => {
-        if (po.status === 'Draft' || po.status === 'Issued') poByStatus.Open++;
-        else if (po.status === 'Acknowledged' || po.status === 'Received') poByStatus.AwaitingVendor++;
-        else poByStatus.Closed++;
-    });
-    setT('bsPoCount', String(fyPOs.length));
-    setT('bsPoSub', `FY total · ${bsFmtINRShort(fyPOTotal)}`);
-    const poRowsEl = document.getElementById('bsPoRows');
-    if (poRowsEl) {
-        poRowsEl.innerHTML = `
-            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Issued')"><span class="bs-tile-row-lbl">Open</span><span class="bs-tile-row-val">${poByStatus.Open}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Acknowledged')"><span class="bs-tile-row-lbl">Awaiting vendor</span><span class="bs-tile-row-val">${poByStatus.AwaitingVendor}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','Closed')"><span class="bs-tile-row-lbl">Closed</span><span class="bs-tile-row-val">${poByStatus.Closed}</span></div>
-        `;
-    }
-
-    // Renewals — contracts expiring in current FY
-    const fyExpiring = (Array.isArray(contracts) ? contracts : []).filter(c => {
-        if (!c || !c.endDate) return false;
-        if (c.type === 'service') return false; // 8DD — one-time engagements never renew
-        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
-        return e >= fy.start && e <= fy.end;
-    });
-    const renewedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Confirmed');
-    const churnedThisFY = fyExpiring.filter(c => (c.renewalStatus || 'Not Started') === 'Lost');
-    const renewedValueINR = renewedThisFY.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
-    const buckets30 = []; const buckets60 = []; const buckets90 = [];
-    fyExpiring.forEach(c => {
-        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
-        const daysOut = Math.floor((e - today) / 86400000);
-        if (daysOut < 0) return;
-        if ((c.renewalStatus || 'Not Started') === 'Confirmed' || (c.renewalStatus || 'Not Started') === 'Lost') return;
-        if (daysOut <= 30) buckets30.push(c);
-        else if (daysOut <= 60) buckets60.push(c);
-        else if (daysOut <= 90) buckets90.push(c);
-    });
-    setT('bsRnCount', String(fyExpiring.length));
-    setT('bsRnSub', `Secured · ${bsFmtINRShort(renewedValueINR)} · Churn ${churnedThisFY.length}`);
-    const rnRowsEl = document.getElementById('bsRnRows');
-    if (rnRowsEl) {
-        rnRowsEl.innerHTML = `
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '30' })"><span class="bs-tile-row-lbl">≤ 30 days</span><span class="bs-tile-row-val">${buckets30.length}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '60' })"><span class="bs-tile-row-lbl">31-60 days</span><span class="bs-tile-row-val">${buckets60.length}</span></div>
-            <div class="bs-tile-row" onclick="bsGotoTab('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '90' })"><span class="bs-tile-row-lbl">61-90 days</span><span class="bs-tile-row-val">${buckets90.length}</span></div>
-        `;
-    }
-
-    // Contracts
-    const acvTotal = activeContracts.reduce((s, c) => s + (Number(c.sellINR) || 0), 0);
-    const newInFY = activeContracts.filter(c => {
-        if (!c.start) return false;
-        const s = __msLocalDate(c.start) || new Date(c.start);   // 8FH.2
-        return s >= fy.start && s <= fy.end;
-    });
-    const oemCounts = {};
-    activeContracts.forEach(c => {
-        const k = c.oem || '(none)';
-        oemCounts[k] = (oemCounts[k] || 0) + 1;
-    });
-    const sortedOems = Object.entries(oemCounts).sort((a, b) => b[1] - a[1]);
-    const top2 = sortedOems.slice(0, 2);
-    const othersCount = sortedOems.slice(2).reduce((s, e) => s + e[1], 0);
-    setT('bsCtCount', String(activeContracts.length));
-    setT('bsCtSub', `ACV ${bsFmtINRShort(acvTotal)} · ${newInFY.length} new`);
-    const ctRowsEl = document.getElementById('bsCtRows');
-    if (ctRowsEl) {
-        let html = top2.map(([oem, n]) =>
-            `<div class="bs-tile-row" title="${bsEsc(oem)}" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">${bsEsc(getOemDisplayName(oem))}</span><span class="bs-tile-row-val">${n}</span></div>`
-        ).join('');
-        if (othersCount > 0) {
-            html += `<div class="bs-tile-row" onclick="bsGotoTab('contractsTab','portfolioStatusFilter','ACTIVE')"><span class="bs-tile-row-lbl">Others</span><span class="bs-tile-row-val">${othersCount}</span></div>`;
-        }
-        ctRowsEl.innerHTML = html;
-    }
-
-    // ---------- Action Center ----------
-    // Column 1: Renewals due this month (≤30 days, not Confirmed/Lost)
-    const urgentRenewals = (Array.isArray(contracts) ? contracts : []).filter(c => {
-        if (!c || !c.endDate) return false;
-        if (c.type === 'service') return false; // 8DD — one-time engagements never renew
-        const e = __msLocalDate(c.endDate) || new Date(c.endDate);   // 8FH.2
-        const daysOut = Math.floor((e - today) / 86400000);
-        if (daysOut < 0 || daysOut > 30) return false;
-        const st = c.renewalStatus || 'Not Started';
-        return st !== 'Confirmed' && st !== 'Lost';
-    }).map(c => ({
-        label: c.client || '(no client)',
-        sub: c.product || (c.oem ? getOemDisplayName(c.oem) : ''),
-        meta: `${Math.floor(((__msLocalDate(c.endDate) || new Date(c.endDate)) - today) / 86400000)}d`,   // 8FH.2
-        c
-    }));
-    const renEl = document.getElementById('bsActRenewals');
-    if (renEl) {
-        if (urgentRenewals.length === 0) {
-            renEl.innerHTML = `<div class="bs-action-empty">None due this month</div>`
-              + `<div class="bs-action-meta">${buckets60.length + buckets90.length} contracts in 31-90 day window</div>`;
-        } else {
-            const top = urgentRenewals.slice(0, 3);
-            let html = top.map(r =>
-                `<div class="bs-action-item" onclick="bsGotoTab('renewalsTab','renStatusFilter','ACTIVE')"><span class="bs-action-item-lbl">${bsEsc(r.label)}${r.sub ? ' · ' + bsEsc(r.sub) : ''}</span><span class="bs-action-item-val">${r.meta}</span></div>`
-            ).join('');
-            const more = urgentRenewals.length - 3;
-            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
-            renEl.innerHTML = html;
-        }
-    }
-
-    // Column 2: Overdue receivables (raised invoices > 60 days old)
-    const overdueAR = arInvoiced.filter(r => r.ageDays !== null && r.ageDays > 60)
-        .map(r => ({ ...r, taxedAmount: bsApplyTax(r.amount, 'AR') }))
-        .sort((a, b) => b.taxedAmount - a.taxedAmount);
-    const ovdEl = document.getElementById('bsActOverdue');
-    if (ovdEl) {
-        if (overdueAR.length === 0) {
-            ovdEl.innerHTML = `<div class="bs-action-empty">None over 60 days</div>`
-              + `<div class="bs-action-meta">${bsFmtINRShort(recBuckets.b2)} in 31-60 day bucket</div>`;
-        } else {
-            const top = overdueAR.slice(0, 3);
-            let html = top.map(r =>
-                // 8U item #10: this row surfaces invoices >60 days old → land
-                // on AR register pre-filtered to OVERDUE.
-                `<div class="bs-action-item" onclick="bsGotoTab('invoicesTab', { arStatusFilter: 'OVERDUE' }, null, 'ar')"><span class="bs-action-item-lbl">${bsEsc(r.client)} · ${r.ageDays}d</span><span class="bs-action-item-val">${bsFmtINRShort(r.taxedAmount)}</span></div>`
-            ).join('');
-            const more = overdueAR.length - 3;
-            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
-            ovdEl.innerHTML = html;
-        }
-    }
-
-    // Column 3: Open POs awaiting vendor (Acknowledged or Received)
-    const awaitingPOs = (Array.isArray(purchaseOrders) ? purchaseOrders : [])
-        .filter(po => po.status === 'Acknowledged' || po.status === 'Received')
-        .map(po => ({
-            label: po.poNumber || po.poNo || ('PO #' + (po.id || '')),
-            oem: po.oem || '',
-            value: bsPOTotalINR(po),
-            po
-        }))
-        .sort((a, b) => b.value - a.value);
-    const poEl = document.getElementById('bsActPOs');
-    if (poEl) {
-        if (awaitingPOs.length === 0) {
-            const allOpen = (Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(po => po.status === 'Draft' || po.status === 'Issued').length;
-            poEl.innerHTML = `<div class="bs-action-empty">None awaiting vendor</div>`
-              + `<div class="bs-action-meta">${allOpen} POs in Draft/Issued</div>`;
-        } else {
-            const top = awaitingPOs.slice(0, 3);
-            let html = top.map(p =>
-                `<div class="bs-action-item" onclick="bsGotoTab('purchaseOrdersTab','poStatusFilter','${bsEsc((p.po && p.po.status) || 'Acknowledged')}')"><span class="bs-action-item-lbl">${bsEsc(p.label)}${p.oem ? ' · ' + bsEsc(p.oem) : ''}</span><span class="bs-action-item-val">${bsFmtINRShort(p.value)}</span></div>`
-            ).join('');
-            const more = awaitingPOs.length - 3;
-            if (more > 0) html += `<div class="bs-action-meta">+${more} more</div>`;
-            poEl.innerHTML = html;
-        }
-    }
-
-    // ---------- Click handlers (KPI strip + money headlines) ----------
-    const wireClick = (id, fn) => {
-        const el = document.getElementById(id);
-        if (el) el.onclick = fn;
-    };
-    wireClick('bsKpi_invoiced', () => bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'ISSUED' }, null, 'ar'));
-    wireClick('bsKpi_active',   () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
-
-    wireClick('bsRecVal',         () => bsGotoTab('invoicesTab', { arStatusFilter: 'INVOICED' }, null, 'ar'));
-    wireClick('bsPayVal',         () => bsGotoTab('purchaseInvoicesTab', { apStatusFilter: 'INVOICED' }));
-    wireClick('bsRecToIssueVal',  () => bsGotoTab('invoicesTab', { arFyFilter: bsGetCurrentFYRange().filterValue, arStatusFilter: 'PENDING' }, null, 'ar'));
-    wireClick('bsPayToReceiveVal',() => bsGotoTab('purchaseInvoicesTab', { apFyFilter: bsGetCurrentFYRange().filterValue, apStatusFilter: 'PENDING' }));
-    // 8FH.2 — the carry-forward figure opens the register on the unpaid rows dated before this FY (it showed the whole register)
-    wireClick('bsRecCfWrap',      () => bsGotoTab('invoicesTab', { arFyFilter: 'CF', arStatusFilter: 'INVOICED' }, null, 'ar'));
-    wireClick('bsPayCfWrap',      () => bsGotoTab('purchaseInvoicesTab', { apFyFilter: 'CF', apStatusFilter: 'INVOICED' }));
-
-    // 8U item #9: BS bucket clicks now reset status to ALL and set the aging
-    // filter to the bucket's key. Path 2 — without the status reset, a
-    // pre-existing status filter (e.g. PAID) would clash with the aging filter
-    // (PAID rows aren't in any bucket) and the user would see an empty register.
-    const bsBucketMap = { bsRecB1: '0_30', bsRecB2: '31_60', bsRecB3: '61_90', bsRecB4: '90plus' };
-    Object.keys(bsBucketMap).forEach(id => wireClick(id, () =>
-        bsGotoTab('invoicesTab', { arStatusFilter: 'ALL', arAgingFilter: bsBucketMap[id] }, null, 'ar')));
-    const bsPayBucketMap = { bsPayB1: '0_30', bsPayB2: '31_60', bsPayB3: '61_90', bsPayB4: '90plus' };
-    Object.keys(bsPayBucketMap).forEach(id => wireClick(id, () =>
-        bsGotoTab('purchaseInvoicesTab', { apStatusFilter: 'ALL', apAgingFilter: bsPayBucketMap[id] })));
-
-    wireClick('bsPoCount', () => bsGotoTab('purchaseOrdersTab'));
-    wireClick('bsRnCount', () => bsGotoTab('renewalsTab'));
-    wireClick('bsCtCount', () => bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'));
-
-    // 8EA — the Performance & History section (moved from Financial
-    // Intelligence) is computed by the existing calcDashboard engine; refresh
-    // it whenever the Snapshot re-renders. Debounced wrapper preferred — the
-    // engine also repaints dormant FI leftovers, which is cheap and harmless.
-    try {
-        if (typeof debouncedCalcDashboard === 'function') debouncedCalcDashboard();
-        else if (typeof calcDashboard === 'function') calcDashboard();
-    } catch (_) {}
+// =================== Phase 8FM — the Dashboard ===================
+// One page in place of the Business Snapshot and Financial Intelligence: the year on the picker (this FY to begin with),
+// six cards — sales invoices, OEM bills, consultants, expenses, renewals, today — every rupee figure base (pre-GST; the
+// GST / TDS toggles add or deduct as the Snapshot did), every figure a click away from the list that shows exactly it;
+// "Needs attention" (today's items, whatever the year picked); and the old Financial Intelligence page, untouched, as a
+// section that opens on demand at the foot. The tab keeps its id (businessSnapshotTab) and renderBusinessSnapshot()
+// keeps its name: every caller lands here. Nothing here writes a record; the open / closed state of the analysis
+// section is a per-Mac preference (localStorage ms_dash_more_v1).
+//
+// Where each figure comes from — and the list it opens, which counts the same rows:
+//   Sales invoices — the Invoices module (service invoices included). Raised = invoices dated in the year that are
+//     Issued, Partially Paid or Paid (the list's "Raised"); collected = what has come in on them (the pre-GST share of
+//     the payments) — the list's "Paid or part-paid"; outstanding = open today (Issued / Partially Paid), of which
+//     overdue by the invoice's due date. To raise = the Receivables register's PENDING cycles in the year (the FY basis),
+//     of which past their bill date.
+//   OEM bills — the contracts' ledger as the Payables register reads it (its FY basis; an unpaid dollar bill at the live
+//     rate when one has been fetched): received = bills dated in the year; paid; unpaid, of which overdue (30 days
+//     from the bill's date); expected = cycles with no bill yet, of which past their bill date.
+//   Consultants — the payment register: paid = status Paid with the invoice date in the year (the register's year),
+//     base = the subtotal, the TDS deducted shown beside; pending = every payment still Pending, whatever the year.
+//   Expenses — the Expenses page's "Company expenses" for the year (every line under a company head), the heads
+//     largest first — once the module has read its years (a moment after the app opens).
+//   Renewals — the Renewal Engine: contracts (not service) ending in the year, confirmed / lost / still open, and the
+//     open ones ending within 30 / 60 / 90 days of today.
+//   Today — today's position, whatever the year picked: active contracts, open receivables (the Invoices module —
+//     every open invoice, contract or standalone — of which from before this FY), unpaid OEM bills (the ledger,
+//     likewise), and the net of the two.
+var __msDashFy = null;                                  // the year on the picker (its starting year); null = this FY
+var MS_DASH_MORE_KEY = 'ms_dash_more_v1';
+var __msDashExpWait = 0;
+var __msDashOpenMoreOnShow = false;                     // showTab('dashboard') — the old Financial Intelligence entry — opens the analysis section
+function __msDashCurrentFy() { var d = new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; }
+function __msDashFyOf(v) {
+    if (!v) return null;
+    var d = (v instanceof Date) ? v : (__msLocalDate(v) || new Date(v));
+    if (!d || isNaN(d.getTime())) return null;
+    return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
 }
+function __msDashRange(fy) { return { start: new Date(fy, 3, 1), end: new Date(fy + 1, 2, 31, 23, 59, 59, 999) }; }
+function __msDashInRange(d, R) { return !!d && !isNaN(d.getTime()) && d >= R.start && d <= R.end; }
+function __msDashFyLabel(fy) { return 'FY ' + fy + '-' + String(fy + 1).slice(2); }
+function __msDashFyShort(fy) { return 'FY ' + String(fy).slice(2) + '-' + String(fy + 1).slice(2); }   // the invoice list's and the consultant register's form
+function __msDashFyLong(fy) { return fy + '-' + (fy + 1); }                                            // the AR / AP registers' and the Portfolio's form
+function __msDashChosenFy() { var cur = __msDashCurrentFy(); return (__msDashFy === null || isNaN(__msDashFy)) ? cur : __msDashFy; }
+function __msDashSetFy(v) { var n = parseInt(v, 10); __msDashFy = isNaN(n) ? null : n; renderDashboard(); }
+function __msDashFyList() {                              // every year the data knows, newest first; this FY always
+    var set = {}; set[__msDashCurrentFy()] = true;
+    var add = function (v) { var fy = __msDashFyOf(v); if (fy !== null && fy > 2000 && fy < 2100) set[fy] = true; };
+    try { (typeof invoices !== 'undefined' ? invoices : []).forEach(function (i) { if (i) add(i.invoiceDate); }); } catch (e) {}
+    try { (typeof contracts !== 'undefined' ? contracts : []).forEach(function (c) { if (!c) return; if (c.billingYears) c.billingYears.forEach(function (y) { if (!y) return; add(y.billDate); ['invoice', 'payment'].forEach(function (b) { try { add(getArFYDate(c, y, b)); add(getApFYDate(c, y, b)); } catch (e) {} }); }); add(c.endDate); }); } catch (e) {}   // every basis (review NIT-5)
+    try { (typeof consultantPayments !== 'undefined' ? consultantPayments : []).forEach(function (p) { if (p) add(p.invoiceDate); }); } catch (e) {}
+    try { if (typeof __msExp !== 'undefined' && __msExp && __msExp.fys) Object.keys(__msExp.fys).forEach(function (k) { if (__msExp.fys[k] && __msExp.fys[k].lines && __msExp.fys[k].lines.length) set[Number(k)] = true; }); } catch (e) {}
+    return Object.keys(set).map(Number).sort(function (a, b) { return b - a; });
+}
+// A rupee figure: { base, gst } — gst null when the record carries none (then the Snapshot's 18 %); TDS on the AR side only.
+function __msDashTaxed(rec, side) {
+    var base = Number(rec && rec.base) || 0, v = base;
+    if (typeof showGST !== 'undefined' && showGST) v += (rec && rec.gst !== null && rec.gst !== undefined && isFinite(rec.gst)) ? Number(rec.gst) : base * 0.18;
+    if (side === 'AR' && typeof showTDS !== 'undefined' && showTDS) v -= base * 0.10;
+    return v;
+}
+function __msDashMoney(rec, side) { return bsFmtINRShort(__msDashTaxed(rec, side)); }
+function __msDashAcc() { return { n: 0, base: 0, gst: 0 }; }
+function __msDashAdd(acc, base, gst) { acc.n++; acc.base += base; if (gst === null || gst === undefined || !isFinite(gst)) acc.gst = null; else if (acc.gst !== null) acc.gst += gst; }
+function __msDashInvRaised(i) { return !!i && (i.status === 'Issued' || i.status === 'Partially Paid' || i.status === 'Paid'); }
+function __msDashInvPaid(i) {                            // what has come in on an invoice (GST-inclusive): its payments, else its figures
+    var p = Array.isArray(i.payments) ? i.payments.reduce(function (s, x) { return s + (parseFloat(x && x.amount) || 0); }, 0) : NaN;
+    if (!isFinite(p) || p <= 0) p = parseFloat(i.amountPaid);
+    if (!isFinite(p) || p <= 0) p = (parseFloat(i.grandTotal) || 0) - (parseFloat(i.amountOutstanding) || 0);
+    var g = parseFloat(i.grandTotal) || 0;
+    return Math.max(0, Math.min(p, g > 0 ? g : p));
+}
+// The contracts' ledger as the two registers read it (renderARApPage): one AR row per cycle — or per invoice when a
+// cycle was billed in parts — with its status and the open amount (the Dashboard reads the PENDING ones: the cycles to
+// invoice); one AP row per bill (or a PENDING placeholder for a cycle with none), in rupees at the bill's rate, an
+// unpaid foreign bill at the live rate when one has been fetched.
+function __msDashLedger() {
+    var ar = [], ap = [];
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var liveFx = (typeof getLiveFxRate === 'function') ? getLiveFxRate() : null;
+    var curStart = __msDashRange(__msDashCurrentFy()).start;
+    (typeof contracts !== 'undefined' && Array.isArray(contracts) ? contracts : []).forEach(function (c, cIdx) {
+        if (!c || !c.billingYears) return;
+        c.billingYears.forEach(function (y, yIdx) {
+            if (!y) return;
+            var baseSell = (y.baseSell !== undefined ? y.baseSell : c.sellINR) || 0;
+            var baseCost = (y.baseCost !== undefined ? y.baseCost : c.costUSD) || 0;
+            var cycleRev = baseSell * (y.ratio || 0), cycleCostUSD = baseCost * (y.ratio || 0);
+            var effFX = getEffectiveFX(c, y, yIdx), cycleCostINR = cycleCostUSD * effFX;
+            var billDate = y.billDate ? (__msLocalDate(y.billDate) || new Date(y.billDate)) : null;
+            if (billDate && isNaN(billDate.getTime())) billDate = null;
+            var arFyDate = getArFYDate(c, y), apFyDate = getApFYDate(c, y);
+            var apCf = getApFYDate(c, y, 'invoice') < curStart;   // the Payables register's "Before this FY"
+            var row = function (status, amount, extra) { var r = { cIdx: cIdx, yIdx: yIdx, client: c.client || '(no client)', product: c.product || '', oem: c.oem || '', status: status, amount: amount, billDate: billDate, past: !!(billDate && billDate < today) }; for (var k in extra) r[k] = extra[k]; return r; };
+            if (cycleRev > 0) {
+                var arInvs = __msCycleArLive(y, c);
+                if (arInvs.length >= 2) {
+                    var cyclePaid = !!y.paid;
+                    arInvs.forEach(function (inv) {
+                        var amt = ((inv.amount !== undefined && inv.amount !== null && inv.amount !== '') ? (Number(inv.amount) || 0) : 0) * __msArOpenFraction(inv);
+                        var paid = !!inv.paidDate || cyclePaid, dated = !!inv.date;
+                        var st = paid ? 'PAID' : (dated ? ((getInvoiceBasedDaysOverdue(inv.date) || 0) > 0 ? 'OVERDUE' : 'INVOICED') : 'PENDING');
+                        ar.push(row(st, amt, { fyDate: arFyDate, invDate: inv.date || null }));
+                    });
+                } else {
+                    var dated = arInvs.filter(function (i) { return i && i.date; });
+                    var invDate = dated.length ? dated[0].date : null;
+                    var ledgerPaid = dated.length > 0 && dated.every(function (i) { return i.paidDate; });
+                    var st1 = 'PENDING';
+                    if (y.paid || ledgerPaid) st1 = 'PAID';
+                    else if (y.invoiceRaised || invDate) st1 = ((invDate ? getInvoiceBasedDaysOverdue(invDate) : null) > 0) ? 'OVERDUE' : 'INVOICED';
+                    ar.push(row(st1, cycleRev * (arInvs.length === 1 ? __msArOpenFraction(arInvs[0]) : 1), { fyDate: arFyDate, invDate: invDate }));
+                }
+            }
+            if (cycleCostUSD > 0) {
+                var apInvs = __msCycleApList(y, c, yIdx).filter(function (i) { return i && (!!i.date || !!i.payDate); });
+                var isINR = c.costCurrency === 'INR', vendorPaid = !!y.vendorPaid;
+                if (!apInvs.length) {
+                    var pend = cycleCostINR;
+                    if (!isINR && liveFx > 0) pend = cycleCostUSD * liveFx;
+                    ap.push(row('PENDING', pend, { fyDate: apFyDate, cf: apCf, invDate: null }));
+                } else {
+                    apInvs.forEach(function (inv) {
+                        var orig = (inv.amount !== undefined && inv.amount !== null && inv.amount !== '') ? (Number(inv.amount) || 0) : 0;
+                        var fx = isINR ? 1 : ((Number(inv.payFx) > 0) ? Number(inv.payFx) : (inv.fx ? (Number(inv.fx) || effFX) : effFX));
+                        var paid = !!inv.payDate || vendorPaid, dated = !!inv.date;
+                        var st2 = paid ? 'SETTLED' : (dated ? ((getInvoiceBasedDaysOverdue(inv.date, DEFAULT_VENDOR_PAYMENT_TERMS_DAYS) || 0) > 0 ? 'OVERDUE' : 'INVOICED') : 'PENDING');
+                        var inr = orig * fx;
+                        if (st2 !== 'SETTLED' && !isINR && liveFx > 0 && orig > 0) inr = orig * liveFx;   // 8BD — today's obligation (the register reprices the same rows)
+                        ap.push(row(st2, inr, { fyDate: apFyDate, cf: apCf, invDate: inv.date || null }));
+                    });
+                }
+            }
+        });
+    });
+    return { ar: ar, ap: ap };
+}
+function __msDashData(fy) {
+    var R = __msDashRange(fy), today = new Date(); today.setHours(0, 0, 0, 0);
+    var out = { fy: fy, range: R };
+    // ---- sales invoices (the Invoices module)
+    var S = { raised: __msDashAcc(), collected: __msDashAcc(), paidN: 0, partN: 0, outstanding: __msDashAcc(), overdue: __msDashAcc(), toRaise: __msDashAcc(), pastDue: __msDashAcc() };
+    var T = { arOpen: __msDashAcc(), arCf: __msDashAcc(), apOpen: __msDashAcc(), apCf: __msDashAcc() };
+    var curStart = __msDashRange(__msDashCurrentFy()).start;
+    var overdueList = [];
+    (typeof invoices !== 'undefined' && Array.isArray(invoices) ? invoices : []).forEach(function (i) {
+        if (!__msDashInvRaised(i)) return;
+        var g = parseFloat(i.grandTotal) || 0, sub = parseFloat(i.subtotal);
+        if (!isFinite(sub)) sub = g;
+        var ratio = (g > 0) ? Math.min(1, Math.max(0, sub / g)) : 1;
+        var open = typeof isInvoiceOutstanding === 'function' && isInvoiceOutstanding(i);
+        var openIncl = open ? Math.max(0, parseFloat(i.amountOutstanding) || 0) : 0;
+        var openBase = openIncl * ratio;
+        var isOverdue = typeof isInvoiceOverdue === 'function' && isInvoiceOverdue(i);
+        if (isOverdue) { var due = __msLocalDate(i.dueDate) || new Date(i.dueDate); overdueList.push({ client: i.clientName || '(no client)', number: i.invoiceNumber || '', days: Math.floor((today - due) / 86400000), base: openBase, gst: openIncl - openBase }); }
+        var invDate = __msLocalDate(i.invoiceDate) || new Date(NaN);
+        if (open) {                                       // today's receivables, whatever the year (the list's Outstanding; "Before this FY" for the carry-forward)
+            __msDashAdd(T.arOpen, openBase, openIncl - openBase);
+            if (!isNaN(invDate.getTime()) && invDate < curStart) __msDashAdd(T.arCf, openBase, openIncl - openBase);
+        }
+        if (!__msDashInRange(invDate, R)) return;
+        __msDashAdd(S.raised, sub, Math.max(0, g - sub));
+        var paidIncl = __msDashInvPaid(i);
+        if (paidIncl > 0) { S.collected.base += paidIncl * ratio; S.collected.gst += paidIncl - paidIncl * ratio; }
+        if (i.status === 'Paid') { S.paidN++; S.collected.n++; } else if (i.status === 'Partially Paid') { S.partN++; S.collected.n++; }
+        if (open) {
+            __msDashAdd(S.outstanding, openBase, openIncl - openBase);
+            if (isOverdue) __msDashAdd(S.overdue, openBase, openIncl - openBase);
+        }
+    });
+    overdueList.sort(function (a, b) { return b.base - a.base; });
+    // ---- the contracts' ledger: cycles to invoice (AR), the OEM's bills (AP), the registers today
+    var L = __msDashLedger();
+    var toRaiseList = [];
+    L.ar.forEach(function (r) {
+        if (r.status !== 'PENDING') return;
+        if (r.past) toRaiseList.push(r);
+        if (!__msDashInRange(r.fyDate, R)) return;
+        __msDashAdd(S.toRaise, r.amount, null);
+        if (r.past) __msDashAdd(S.pastDue, r.amount, null);
+    });
+    toRaiseList.sort(function (a, b) { return (a.billDate - b.billDate) || (b.amount - a.amount); });   // the longest past first
+    var B = { received: __msDashAcc(), paid: __msDashAcc(), unpaid: __msDashAcc(), overdue: __msDashAcc(), expected: __msDashAcc(), pastDue: __msDashAcc() };
+    L.ap.forEach(function (r) {
+        if (!__msDashInRange(r.fyDate, R)) return;
+        if (r.status === 'PENDING') { __msDashAdd(B.expected, r.amount, null); if (r.past) __msDashAdd(B.pastDue, r.amount, null); return; }
+        __msDashAdd(B.received, r.amount, null);
+        if (r.status === 'SETTLED') __msDashAdd(B.paid, r.amount, null);
+        else { __msDashAdd(B.unpaid, r.amount, null); if (r.status === 'OVERDUE') __msDashAdd(B.overdue, r.amount, null); }
+    });
+    L.ap.forEach(function (r) { if (r.status === 'INVOICED' || r.status === 'OVERDUE') { __msDashAdd(T.apOpen, r.amount, null); if (r.cf) __msDashAdd(T.apCf, r.amount, null); } });
+    // ---- consultants (the register's year: the invoice date)
+    var C = { paid: __msDashAcc(), pending: __msDashAcc(), tds: 0 };
+    (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments) ? consultantPayments : []).forEach(function (p) {
+        if (!p) return;
+        var sub = parseFloat(p.subtotal), tot = parseFloat(p.totalAmount) || 0;
+        if (!isFinite(sub)) sub = tot;
+        var gst = isFinite(parseFloat(p.gstAmount)) ? parseFloat(p.gstAmount) : Math.max(0, tot - sub);
+        if (p.status === 'Pending') { __msDashAdd(C.pending, sub, gst); return; }
+        if (p.status !== 'Paid') return;
+        if (__msConFyOf(p.invoiceDate) !== __msDashFyShort(fy)) return;
+        __msDashAdd(C.paid, sub, gst);
+        C.tds += parseFloat(p.tdsAmount) || 0;
+    });
+    // ---- expenses (the Expenses page's company group, once read)
+    var E = { ready: false, state: (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : ((window.__TAURI__ && window.__TAURI__.core) ? 'loading' : 'unavailable'), total: 0, n: 0, heads: [] };   // at the boot-time landing the module's lines have not run yet: in the Mac app it is coming
+    try {
+        if (E.state === 'ready' && __msExp.fys) {
+            E.ready = true;
+            var st = __msExp.fys[fy];
+            var lines = (st && st.lines) ? st.lines.filter(function (ln) { return __msExpGroupOf(ln) === 'exp'; }) : [];
+            var X = __msExpTotals(lines, fy);
+            E.total = X.groups.exp || 0; E.n = lines.length;
+            E.heads = Object.keys(X.by).map(function (h) { return { id: h, label: __msExpHeadLabel(h), total: X.by[h].total, n: X.by[h].n }; }).sort(function (a, b) { return b.total - a.total; });
+        }
+    } catch (e) { E.ready = false; E.state = 'failed'; }
+    // ---- renewals (the Renewal Engine's rules: isContractRenewable)
+    var N = { ending: 0, value: 0, confirmed: 0, confirmedValue: 0, lost: 0, lostValue: 0, open: 0, openValue: 0, d30: 0, d30v: 0, d60: 0, d60v: 0, d90: 0, d90v: 0, dueMonth: [] };
+    (typeof contracts !== 'undefined' && Array.isArray(contracts) ? contracts : []).forEach(function (c) {
+        if (!c || !c.endDate) return;
+        var val = getContractRenewalValue(c) || 0;
+        var st = c.renewalStatus || 'Not Started', active = st !== 'Confirmed' && st !== 'Lost';
+        if (active && isContractRenewable(c, 30)) { N.d30++; N.d30v += val; N.dueMonth.push({ client: c.client || '(no client)', product: c.product || (c.oem ? getOemDisplayName(c.oem) : ''), days: getContractDaysToExpiry(c), value: val }); }
+        if (active && isContractRenewable(c, 60)) { N.d60++; N.d60v += val; }
+        if (active && isContractRenewable(c, 90)) { N.d90++; N.d90v += val; }
+        if (!isContractRenewable(c, 'fy' + fy)) return;
+        N.ending++; N.value += val;
+        if (st === 'Confirmed') { N.confirmed++; N.confirmedValue += val; }
+        else if (st === 'Lost') { N.lost++; N.lostValue += val; }
+        else { N.open++; N.openValue += val; }
+    });
+    N.dueMonth.sort(function (a, b) { return a.days - b.days || b.value - a.value; });
+    // ---- today
+    var active = (typeof contracts !== 'undefined' && Array.isArray(contracts) ? contracts : []).filter(function (c) { return c && isContractActive(c); });
+    T.active = active.length; T.acv = active.reduce(function (s, c) { return s + (Number(c.sellINR) || 0); }, 0);
+    // ---- needs attention
+    var awaitingPOs = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(function (po) { return po && (po.status === 'Acknowledged' || po.status === 'Received'); })
+        .map(function (po) { return { label: po.poNumber || po.poNo || ('PO #' + (po.id || '')), oem: po.oem || '', value: bsPOTotalINR(po), status: po.status }; })
+        .sort(function (a, b) { return b.value - a.value; });
+    var openPOs = (typeof purchaseOrders !== 'undefined' && Array.isArray(purchaseOrders) ? purchaseOrders : []).filter(function (po) { return po && (po.status === 'Draft' || po.status === 'Issued'); }).length;
+    out.sales = S; out.bills = B; out.consultants = C; out.expenses = E; out.renewals = N; out.today = T;
+    out.attention = { renewals: N.dueMonth, overdue: overdueList, toRaise: toRaiseList, pos: awaitingPOs, openPOs: openPOs };
+    return out;
+}
+// ---- drawing --------------------------------------------------------------------------------------------------
+function __msDashSet(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
+function __msDashN(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+// a row of a card: label · count · money; a click opens the list (none when the row is empty)
+function __msDashRow(o) {
+    var empty = !o.n && !(o.rec && o.rec.base);
+    var money = o.money !== undefined ? o.money : (o.rec ? __msDashMoney(o.rec, o.side) : '');
+    var cls = 'dash-row' + (empty ? ' dash-dim' : (o.cls ? ' ' + o.cls : '')) + (o.sub ? ' dash-row-sub' : '');
+    var click = (!empty && o.go) ? ' onclick="' + o.go + '" tabindex="0" role="button" onkeydown="if (event.key === \'Enter\' || event.key === \' \') { event.preventDefault(); this.click(); }"' : '';
+    return '<div class="' + cls + '"' + (o.id ? ' id="' + o.id + '"' : '') + (o.title ? ' title="' + bsEsc(o.title) + '"' : '') + click + '>'
+        + '<span class="dash-row-lbl">' + o.label + '</span><span class="dash-row-n">' + (o.count || '') + '</span><span class="dash-row-val">' + money + '</span></div>';
+}
+function __msDashGo(tab, overrides, subTab) {          // the filters as a literal inside an onclick attribute
+    return 'bsGotoTab(\'' + tab + '\', ' + JSON.stringify(overrides).replace(/"/g, '&quot;') + (subTab ? ', null, \'' + subTab + '\'' : '') + ')';
+}
+function __msDashHead(id, go, title) {                   // the big figure of a card opens its list
+    var el = document.getElementById(id); if (!el) return;
+    el.onclick = go ? function () { try { go(); } catch (e) {} } : null;
+    el.classList.toggle('dash-click', !!go);
+    if (title) el.title = title;
+}
+function renderDashboard() {
+    var host = document.getElementById('businessSnapshotTab');
+    if (!host) return;
+    var focusAt = null;                                   // a card row under the keyboard: found again after the redraw (review RISK-7)
+    try { var ae = document.activeElement; if (ae && ae.classList && ae.classList.contains('dash-row') && host.contains(ae)) { var card = ae.closest('.dash-card'); focusAt = { card: card ? card.id : '', idx: [].indexOf.call(ae.parentNode.children, ae) }; } } catch (e) {}
+    var fy = __msDashChosenFy(), D = __msDashData(fy), fyS = __msDashFyShort(fy), fyL = __msDashFyLong(fy);
+    // the picker
+    var sel = document.getElementById('dashFy');
+    if (sel) {
+        var list = __msDashFyList(); if (list.indexOf(fy) === -1) list.push(fy); list.sort(function (a, b) { return b - a; });
+        sel.innerHTML = list.map(function (y) { return '<option value="' + y + '"' + (y === fy ? ' selected' : '') + '>' + __msDashFyLabel(y) + (y === __msDashCurrentFy() ? ' · this year' : '') + '</option>'; }).join('');
+    }
+    __msDashSet('bsFyLabel', __msDashFyLabel(fy));
+    // the toggles mirror the shared state
+    var gstOn = (typeof showGST !== 'undefined') && !!showGST, tdsOn = (typeof showTDS !== 'undefined') && !!showTDS;
+    var ic = document.getElementById('bsGstIcon'), bt = document.getElementById('bsGstToggle'), ic2 = document.getElementById('bsTdsIcon'), bt2 = document.getElementById('bsTdsToggle');
+    if (ic) ic.className = gstOn ? 'fas fa-check-square' : 'far fa-square';
+    if (bt) bt.classList.toggle('active', gstOn);
+    if (ic2) ic2.className = tdsOn ? 'fas fa-check-square' : 'far fa-square';
+    if (bt2) bt2.classList.toggle('active', tdsOn);
+    __msDashSet('dashBasis', (gstOn ? 'with GST' : 'pre-GST') + (tdsOn ? ', TDS deducted on the sales side' : ''));
+    var S = D.sales, B = D.bills, C = D.consultants, E = D.expenses, N = D.renewals, T = D.today, A = D.attention;
+    // 1. sales invoices
+    __msDashSet('dashSalesVal', __msDashMoney(S.raised, 'AR'));
+    __msDashSet('dashSalesSub', __msDashN(S.raised.n, 'invoice raised', 'invoices raised') + ' in ' + fyS);
+    __msDashHead('dashSalesVal', S.raised.n ? function () { bsGotoTab('invoicesTab', { invFyFilter: fyS, invStatusFilter: 'RAISED' }, null, 'manager'); } : null, 'Open the invoices raised in ' + fyS);
+    var el = document.getElementById('dashSalesRows');
+    if (el) el.innerHTML =
+        __msDashRow({ label: 'Collected', n: S.collected.n, count: __msDashN(S.paidN, 'paid', 'paid') + (S.partN ? ' · ' + S.partN + ' part-paid' : ''), rec: S.collected, side: 'AR', cls: 'dash-good', go: __msDashGo('invoicesTab', { invFyFilter: fyS, invStatusFilter: 'COLLECTED' }, 'manager'), title: 'What has come in on this year\'s invoices, part payments included (the list: paid or part-paid)' })
+      + __msDashRow({ label: 'Outstanding', n: S.outstanding.n, count: __msDashN(S.outstanding.n, 'invoice', 'invoices'), rec: S.outstanding, side: 'AR', cls: 'dash-warn', go: __msDashGo('invoicesTab', { invFyFilter: fyS, invStatusFilter: 'OUTSTANDING' }, 'manager'), title: 'Issued or part-paid, still open today' })
+      + __msDashRow({ label: 'of which overdue', sub: true, n: S.overdue.n, count: __msDashN(S.overdue.n, 'invoice', 'invoices'), rec: S.overdue, side: 'AR', cls: 'dash-bad', go: __msDashGo('invoicesTab', { invFyFilter: fyS, invStatusFilter: 'OVERDUE' }, 'manager'), title: 'Past the invoice\'s due date' })
+      + __msDashRow({ label: 'To raise', n: S.toRaise.n, count: __msDashN(S.toRaise.n, 'cycle', 'cycles'), rec: S.toRaise, side: 'AR', cls: 'dash-warn', go: __msDashGo('invoicesTab', { arFyFilter: fyL, arStatusFilter: 'PENDING' }, 'ar'), title: 'Contract cycles in the year with no invoice yet (the Receivables register, on its FY basis)' })
+      + __msDashRow({ label: 'past the bill date', sub: true, n: S.pastDue.n, count: __msDashN(S.pastDue.n, 'cycle', 'cycles'), rec: S.pastDue, side: 'AR', cls: 'dash-bad', go: __msDashGo('invoicesTab', { arFyFilter: fyL, arStatusFilter: 'PENDING', arPendingUrgency: 'past' }, 'ar') });
+    // 2. OEM bills
+    __msDashSet('dashBillsVal', __msDashMoney(B.received, 'AP'));
+    __msDashSet('dashBillsSub', __msDashN(B.received.n, 'bill received', 'bills received') + ' in ' + fyS);
+    __msDashHead('dashBillsVal', B.received.n ? function () { bsGotoTab('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'ISSUED' }); } : null, 'Open the Payables register on the bills of ' + fyS);
+    el = document.getElementById('dashBillsRows');
+    if (el) el.innerHTML =
+        __msDashRow({ label: 'Paid', n: B.paid.n, count: __msDashN(B.paid.n, 'bill', 'bills'), rec: B.paid, side: 'AP', cls: 'dash-good', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'SETTLED' }) })
+      + __msDashRow({ label: 'Unpaid', n: B.unpaid.n, count: __msDashN(B.unpaid.n, 'bill', 'bills'), rec: B.unpaid, side: 'AP', cls: 'dash-warn', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'INVOICED' }), title: 'Received, not paid yet' })
+      + __msDashRow({ label: 'of which overdue', sub: true, n: B.overdue.n, count: __msDashN(B.overdue.n, 'bill', 'bills'), rec: B.overdue, side: 'AP', cls: 'dash-bad', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'OVERDUE' }), title: 'More than 30 days since the bill\'s date' })
+      + __msDashRow({ label: 'Expected', n: B.expected.n, count: __msDashN(B.expected.n, 'cycle', 'cycles'), rec: B.expected, side: 'AP', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'PENDING' }), title: 'Cycles in the year the OEM has not billed yet' })
+      + __msDashRow({ label: 'past the bill date', sub: true, n: B.pastDue.n, count: __msDashN(B.pastDue.n, 'cycle', 'cycles'), rec: B.pastDue, side: 'AP', cls: 'dash-warn', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: fyL, apStatusFilter: 'PENDING', apPendingUrgency: 'past' }) });
+    // 3. consultants
+    __msDashSet('dashConVal', __msDashMoney(C.paid, 'AP'));
+    __msDashSet('dashConSub', __msDashN(C.paid.n, 'payment', 'payments') + ' in ' + fyS + (C.tds > 0 ? ' · TDS deducted ' + bsFmtINRShort(C.tds) : ''));
+    __msDashHead('dashConVal', C.paid.n ? function () { bsGotoTab('consultantsTab', { conFyFilter: fyS, conStatusFilter: 'Paid' }); } : null, 'Open the payment register on the payments of ' + fyS);
+    el = document.getElementById('dashConRows');
+    if (el) el.innerHTML =
+        __msDashRow({ label: 'Paid', n: C.paid.n, count: __msDashN(C.paid.n, 'payment', 'payments'), rec: C.paid, side: 'AP', cls: 'dash-good', go: __msDashGo('consultantsTab', { conFyFilter: fyS, conStatusFilter: 'Paid' }), title: 'By the invoice date, as the register files them' })
+      + __msDashRow({ label: 'Pending today', n: C.pending.n, count: __msDashN(C.pending.n, 'payment', 'payments'), rec: C.pending, side: 'AP', cls: 'dash-warn', go: __msDashGo('consultantsTab', { conStatusFilter: 'Pending' }), title: 'Every payment still pending, whatever the year' });
+    // 4. expenses
+    el = document.getElementById('dashExpRows');
+    if (E.ready) {
+        __msDashSet('dashExpVal', bsFmtINRShort(E.total));
+        __msDashSet('dashExpSub', __msDashN(E.n, 'entry', 'entries') + ' under the company heads in ' + fyS + ((gstOn || tdsOn) ? ' · as paid, the toggles apart' : ''));
+        __msDashHead('dashExpVal', E.n ? function () { __msDashOpenExpenses(fy, ''); } : null, 'Open the Expenses page on ' + fyS + ' (the amounts as paid from the bank — the GST / TDS toggles do not apply)');
+        if (el) el.innerHTML = E.heads.length ? E.heads.slice(0, 4).map(function (h) {
+            return __msDashRow({ label: bsEsc(h.label), n: h.n, count: __msDashN(h.n, 'entry', 'entries'), money: bsFmtINRShort(h.total), go: '__msDashOpenExpenses(' + fy + ', \'' + bsEsc(h.id) + '\')' });
+        }).join('') + (E.heads.length > 4 ? __msDashRow({ label: 'every head', sub: true, n: 1, count: __msDashN(E.heads.length - 4, 'more head', 'more heads'), money: bsFmtINRShort(E.heads.slice(4).reduce(function (s, h) { return s + h.total; }, 0)), go: '__msDashOpenExpenses(' + fy + ', \'\')' }) : '')
+            : '<div class="dash-empty">No company expenses in ' + fyS + ' yet.</div>';
+        __msDashExpWait = 0;
+    } else {
+        __msDashSet('dashExpVal', '—');
+        __msDashSet('dashExpSub', E.state === 'unavailable' ? 'Expenses live in the Mac app' : (E.state === 'failed' ? 'The expenses could not be read' : 'Reading the expenses…'));
+        __msDashHead('dashExpVal', null);
+        if (el) el.innerHTML = '';
+        if (E.state !== 'unavailable' && E.state !== 'failed' && __msDashExpWait < 20) {   // the module reads its years a moment after the app opens
+            __msDashExpWait++;
+            setTimeout(function () { var t = document.getElementById('businessSnapshotTab'); if (t && !t.classList.contains('hidden')) renderDashboard(); }, 900);
+        }
+    }
+    // 5. renewals
+    __msDashSet('dashRenVal', String(N.ending));
+    __msDashSet('dashRenSub', __msDashN(N.ending, 'contract ends', 'contracts end') + ' in ' + fyS + (N.ending ? ' · ' + bsFmtINRShort(N.value) + ' a year' : ''));
+    __msDashHead('dashRenVal', N.ending ? function () { bsGotoTab('renewalsTab', { renStatusFilter: 'ALL', renWindowFilter: 'fy' + fy }); } : null, 'Open the Renewal Engine on the contracts ending in ' + fyS);
+    el = document.getElementById('dashRenRows');
+    if (el) el.innerHTML =
+        __msDashRow({ label: 'Confirmed', n: N.confirmed, count: __msDashN(N.confirmed, 'contract', 'contracts'), rec: { base: N.confirmedValue, gst: null }, side: 'AR', cls: 'dash-good', go: __msDashGo('renewalsTab', { renStatusFilter: 'Confirmed', renWindowFilter: 'fy' + fy }) })
+      + __msDashRow({ label: 'Lost', n: N.lost, count: __msDashN(N.lost, 'contract', 'contracts'), rec: { base: N.lostValue, gst: null }, side: 'AR', cls: 'dash-bad', go: __msDashGo('renewalsTab', { renStatusFilter: 'Lost', renWindowFilter: 'fy' + fy }) })
+      + __msDashRow({ label: 'Still open', n: N.open, count: __msDashN(N.open, 'contract', 'contracts'), rec: { base: N.openValue, gst: null }, side: 'AR', cls: 'dash-warn', go: __msDashGo('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: 'fy' + fy }), title: 'Neither confirmed nor lost yet' })
+      + __msDashRow({ label: 'ending within 30 days', sub: true, n: N.d30, count: __msDashN(N.d30, 'contract', 'contracts'), rec: { base: N.d30v, gst: null }, side: 'AR', cls: 'dash-bad', go: __msDashGo('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '30' }), title: 'From today, whatever the year picked; the Engine\'s 30-day window' })
+      + __msDashRow({ label: 'within 60 days', sub: true, n: N.d60, count: __msDashN(N.d60, 'contract', 'contracts'), rec: { base: N.d60v, gst: null }, side: 'AR', go: __msDashGo('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '60' }), title: 'From today; the Engine\'s 60-day window' })
+      + __msDashRow({ label: 'within 90 days', sub: true, n: N.d90, count: __msDashN(N.d90, 'contract', 'contracts'), rec: { base: N.d90v, gst: null }, side: 'AR', go: __msDashGo('renewalsTab', { renStatusFilter: 'ACTIVE', renWindowFilter: '90' }), title: 'From today; the Engine\'s 90-day window' });
+    // 6. today
+    __msDashSet('bsKpi_activeVal', String(T.active));
+    __msDashSet('dashTodaySub', 'active contracts · ACV ' + bsFmtINRShort(T.acv));
+    __msDashHead('bsKpi_activeVal', T.active ? function () { bsGotoTab('contractsTab', 'portfolioStatusFilter', 'ACTIVE'); } : null, 'Open the Subscription Portfolio (Active)');
+    var net = __msDashTaxed(T.arOpen, 'AR') - __msDashTaxed(T.apOpen, 'AP');
+    el = document.getElementById('dashTodayRows');
+    if (el) el.innerHTML =
+        __msDashRow({ label: 'Open receivables', n: T.arOpen.n, count: __msDashN(T.arOpen.n, 'invoice', 'invoices'), rec: T.arOpen, side: 'AR', cls: 'dash-warn', go: __msDashGo('invoicesTab', { invFyFilter: 'ALL', invStatusFilter: 'OUTSTANDING' }, 'manager'), title: 'Every open invoice in Invoices (contract or standalone), any year' })
+      + __msDashRow({ label: 'from before this FY', sub: true, id: 'bsRecCfWrap', n: T.arCf.n, count: __msDashN(T.arCf.n, 'invoice', 'invoices'), rec: T.arCf, side: 'AR', cls: 'dash-bad', go: __msDashGo('invoicesTab', { invFyFilter: 'CF', invStatusFilter: 'OUTSTANDING' }, 'manager'), title: 'Carried forward: invoiced before 1 April ' + __msDashCurrentFy() })
+      + __msDashRow({ label: 'Unpaid OEM bills', n: T.apOpen.n, count: __msDashN(T.apOpen.n, 'bill', 'bills'), rec: T.apOpen, side: 'AP', cls: 'dash-warn', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: 'ALL', apStatusFilter: 'INVOICED' }), title: 'The Payables register: received, not paid, any year' })
+      + __msDashRow({ label: 'from before this FY', sub: true, id: 'bsPayCfWrap', n: T.apCf.n, count: __msDashN(T.apCf.n, 'bill', 'bills'), rec: T.apCf, side: 'AP', cls: 'dash-bad', go: __msDashGo('purchaseInvoicesTab', { apFyFilter: 'CF', apStatusFilter: 'INVOICED' }), title: 'Carried forward: billed before 1 April ' + __msDashCurrentFy() })
+      + __msDashRow({ label: 'Net cash position', id: 'bsKpi_cash', n: (T.arOpen.n + T.apOpen.n) ? 1 : 0, count: '', money: '<span id="bsKpi_cashVal" class="' + (net > 0 ? 'bs-positive' : (net < 0 ? 'bs-negative' : '')) + '">' + bsFmtINRSigned(net) + '</span>', cls: 'dash-net', title: 'Open receivables (Invoices) less unpaid OEM bills (the ledger), as the toggles show them' });
+    // needs attention
+    var renEl = document.getElementById('bsActRenewals');
+    if (renEl) renEl.innerHTML = A.renewals.length
+        ? A.renewals.slice(0, 3).map(function (r) { return '<div class="bs-action-item" onclick="bsGotoTab(\'renewalsTab\', { renStatusFilter: \'ACTIVE\', renWindowFilter: \'30\' })"><span class="bs-action-item-lbl">' + bsEsc(r.client) + (r.product ? ' · ' + bsEsc(r.product) : '') + '</span><span class="bs-action-item-val">' + (r.days < 0 ? Math.abs(r.days) + 'd ago' : r.days + 'd') + ' · ' + bsFmtINRShort(r.value) + '</span></div>'; }).join('') + (A.renewals.length > 3 ? '<div class="bs-action-meta">+' + (A.renewals.length - 3) + ' more</div>' : '')
+        : '<div class="bs-action-empty">None due this month</div><div class="bs-action-meta">' + __msDashN(N.d90 - N.d30, 'contract', 'contracts') + ' in the 31–90 day window</div>';
+    var ovdEl = document.getElementById('bsActOverdue');
+    if (ovdEl) ovdEl.innerHTML = A.overdue.length
+        ? A.overdue.slice(0, 3).map(function (r) { return '<div class="bs-action-item" onclick="bsGotoTab(\'invoicesTab\', { invFyFilter: \'ALL\', invStatusFilter: \'OVERDUE\' }, null, \'manager\')"><span class="bs-action-item-lbl">' + bsEsc(r.client) + (r.number ? ' · ' + bsEsc(r.number) : '') + ' · ' + r.days + 'd</span><span class="bs-action-item-val">' + __msDashMoney(r, 'AR') + '</span></div>'; }).join('') + (A.overdue.length > 3 ? '<div class="bs-action-meta">+' + (A.overdue.length - 3) + ' more</div>' : '')
+        : '<div class="bs-action-empty">Nothing overdue</div><div class="bs-action-meta">' + __msDashN(S.outstanding.n, 'invoice', 'invoices') + ' of ' + fyS + ' open, within terms</div>';
+    var trEl = document.getElementById('bsActToRaise');
+    if (trEl) trEl.innerHTML = A.toRaise.length
+        ? A.toRaise.slice(0, 3).map(function (r) { return '<div class="bs-action-item" onclick="bsGotoTab(\'invoicesTab\', { arFyFilter: \'ALL\', arStatusFilter: \'PENDING\', arPendingUrgency: \'past\' }, null, \'ar\')"><span class="bs-action-item-lbl">' + bsEsc(r.client) + (r.product ? ' · ' + bsEsc(r.product) : '') + ' · ' + Math.floor((new Date().setHours(0, 0, 0, 0) - r.billDate) / 86400000) + 'd</span><span class="bs-action-item-val">' + __msDashMoney({ base: r.amount, gst: null }, 'AR') + '</span></div>'; }).join('') + (A.toRaise.length > 3 ? '<div class="bs-action-meta">+' + (A.toRaise.length - 3) + ' more</div>' : '')
+        : '<div class="bs-action-empty">Nothing past its bill date</div><div class="bs-action-meta">' + __msDashN(S.toRaise.n, 'cycle', 'cycles') + ' to raise in ' + fyS + '</div>';
+    var poEl = document.getElementById('bsActPOs');
+    if (poEl) poEl.innerHTML = A.pos.length
+        ? A.pos.slice(0, 3).map(function (p) { return '<div class="bs-action-item" onclick="bsGotoTab(\'purchaseOrdersTab\',\'poStatusFilter\',\'' + bsEsc(p.status || 'Acknowledged') + '\')"><span class="bs-action-item-lbl">' + bsEsc(p.label) + (p.oem ? ' · ' + bsEsc(getOemDisplayName(p.oem)) : '') + '</span><span class="bs-action-item-val">' + bsFmtINRShort(p.value) + '</span></div>'; }).join('') + (A.pos.length > 3 ? '<div class="bs-action-meta">+' + (A.pos.length - 3) + ' more</div>' : '')
+        : '<div class="bs-action-empty">None awaiting vendor</div><div class="bs-action-meta">' + __msDashN(A.openPOs, 'PO', 'POs') + ' in Draft / Issued</div>';
+    // the analysis section, as remembered (or as the old Financial Intelligence entry asked)
+    if (__msDashOpenMoreOnShow) { __msDashOpenMoreOnShow = false; __msDashToggleMore(true); }
+    else __msDashApplyMore(__msDashMoreOpen());
+    if (focusAt) { try { var rowsEl = document.querySelector('#' + focusAt.card + ' .dash-rows'); var again = rowsEl && rowsEl.children[focusAt.idx]; if (again && again.hasAttribute('tabindex')) again.focus(); } catch (e) {} }
+}
+function renderBusinessSnapshot() { renderDashboard(); }        // the name every caller has
+function __msDashOpenExpenses(fy, head) {
+    try { if (typeof __msExp !== 'undefined' && __msExp && __msExp.ui) { var ui = __msExp.ui; ui.fy = fy; ui.group = 'exp'; ui.head = head || ''; ui.month = ''; ui.acct = 'ALL'; ui.q = ''; ui.limit = MS_EXP_LIST_STEP; if (typeof MS_EXP_BILLS_STEP !== 'undefined') ui.billsLimit = MS_EXP_BILLS_STEP; } } catch (e) {}
+    showTab('expensesTab');
+}
+function __msDashMoreOpen() { try { return localStorage.getItem(MS_DASH_MORE_KEY) === 'open'; } catch (e) { return false; } }
+function __msDashApplyMore(open) {
+    var more = document.getElementById('dashMore'); if (!more) return;
+    var was = more.classList.contains('open');
+    more.classList.toggle('open', open);
+    var b = document.getElementById('dashMoreBtn'); if (b) { b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.innerHTML = '<i class="fas fa-chevron-' + (open ? 'up' : 'down') + '"></i> ' + (open ? 'Hide analysis' : 'More analysis'); }
+    if (open) {                                         // drawn when shown: the chart needs its width, the basis toggle its host
+        if (typeof renderFyBasisToggle === 'function') renderFyBasisToggle('fyBasisToggleDashboard');
+        if (!was && typeof growthChartInstance !== 'undefined' && growthChartInstance) { try { growthChartInstance.destroy(); } catch (e) {} growthChartInstance = null; }   // a chart drawn while hidden has no size
+        if (typeof debouncedCalcDashboard === 'function') debouncedCalcDashboard();
+    }
+}
+function __msDashToggleMore(force) {
+    var more = document.getElementById('dashMore'); if (!more) return;
+    var open = (force === true || force === false) ? force : !more.classList.contains('open');
+    try { localStorage.setItem(MS_DASH_MORE_KEY, open ? 'open' : 'closed'); } catch (e) {}
+    __msDashApplyMore(open);
+}
+// =================== /Phase 8FM — the Dashboard ===================
 
 /* ======================================================================
    End of Business Snapshot module
@@ -41278,7 +41368,7 @@ function wbTaxNote(d) {
         const parts = [];
         if (d.gstOn) parts.push('GST');
         if (d.tdsOn) parts.push('TDS');
-        return 'Figures include ' + parts.join(' + ') + ' \u2014 matching the Snapshot toggle.';
+        return 'Figures include ' + parts.join(' + ') + ' \u2014 matching the Dashboard\'s toggles.';
     }
     return 'Figures are pre-tax (GST/TDS toggles are off).';
 }
@@ -45511,7 +45601,7 @@ loadSettings(); populateFY(); updateClientDropdown(); populatePortfolioFilter();
 // Phase 8B — Business Snapshot is now the default landing tab. Dashboard data
 // is still pre-warmed via debouncedCalcDashboard() above so navigating to
 // Financial Intelligence afterwards is instant.
-try { showTab('businessSnapshotTab'); } catch (e) { console.warn('Business Snapshot landing failed:', e); }
+try { showTab('businessSnapshotTab'); } catch (e) { console.warn('Dashboard landing failed:', e); }
 
 function populateARApFilters() {
     // Bug fix #18 — AR and AP each have their own FY + Client filters now.
@@ -45675,8 +45765,8 @@ function setApAgingFilter(bucket) {
 // counted from the invoice issue date + standard payment terms (default 30
 // days). Records without an invoice are *not* aged — they appear in the
 // "Invoices to be Raised" card instead if the scheduled bill date has passed.
-const DEFAULT_PAYMENT_TERMS_DAYS = 30;
-const DEFAULT_VENDOR_PAYMENT_TERMS_DAYS = 30;
+// 8FM — DEFAULT_PAYMENT_TERMS_DAYS / DEFAULT_VENDOR_PAYMENT_TERMS_DAYS moved up beside the build stamp: the Dashboard
+// reads them at the boot-time landing, before this part of the file has run (review BUG-1).
 
 function getDaysFromDate(dateStr) {
     if (!dateStr) return null;
@@ -50521,6 +50611,7 @@ function __msExpResetFolder() {
 
 // ---- the page ----------------------------------------------------------------------
 function __msExpRefreshIfOpen() {
+    try { var _dash = document.getElementById('businessSnapshotTab'); if (_dash && !_dash.classList.contains('hidden') && typeof renderDashboard === 'function') renderDashboard(); } catch (e) {}   // 8FM — the expenses card
     var tab = document.getElementById('expensesTab');
     if (!tab || tab.classList.contains('hidden')) return;
     // not while you are typing a note or picking a head: that finishes with a redraw of its own
