@@ -833,6 +833,10 @@ h2 {
 .dash-more-hint { font-size: 11.5px; color: var(--text-subtle); line-height: 1.4; }
 .dash-more { display: none; }
 .dash-more.open { display: block; }
+.ms-inv-kpi-go { cursor: pointer; }                                                   /* 8FN — the Outstanding / Overdue cards open the list */
+.ms-inv-kpi-go:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+.ms-inv-count-note { color: var(--danger); text-decoration: none; border-bottom: 1px dotted currentColor; }
+.ms-inv-count-note:hover { text-decoration: none; border-bottom-style: solid; }
 .dash-more-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 16px; }
 /* ===== Weekly Briefing modal (Phase 8CO) ===== */
 .wb-taxnote {
@@ -10525,12 +10529,12 @@ window.__msRenderMissingOneDriveLinks = function () {
 
       <!-- KPIs -->
       <div class="proposal-kpi-grid" style="grid-template-columns: repeat(5, 1fr); margin-top:14px;">
-        <div class="proposal-kpi-card">
+        <div class="proposal-kpi-card ms-inv-kpi-go" role="button" tabindex="0" title="Every outstanding invoice, whatever the year" onclick="__msInvCardGo('OUTSTANDING')" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); __msInvCardGo('OUTSTANDING'); }">
           <div class="proposal-kpi-lbl"><i class="fas fa-rupee-sign"></i> Outstanding <span class="con-kpi-basis" id="invk_outstandingBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_outstanding" style="color:var(--warning);">₹0</div>
           <div class="proposal-kpi-sub" id="invk_outstandingSub">0 invoices</div>
         </div>
-        <div class="proposal-kpi-card">
+        <div class="proposal-kpi-card ms-inv-kpi-go" role="button" tabindex="0" title="Every overdue invoice, whatever the year" onclick="__msInvCardGo('OVERDUE')" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); __msInvCardGo('OVERDUE'); }">
           <div class="proposal-kpi-lbl"><i class="fas fa-exclamation-circle"></i> Overdue <span class="con-kpi-basis" id="invk_overdueBasis"></span></div>
           <div class="proposal-kpi-val" id="invk_overdue" style="color:var(--danger);">₹0</div>
           <div class="proposal-kpi-sub" id="invk_overdueSub">0 invoices</div>
@@ -13875,7 +13879,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FM-2026-10-27";   // 8FJ — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FN-2026-10-30";   // 8FJ — the build the schema meta and the System Controls page name
 const DEFAULT_PAYMENT_TERMS_DAYS = 30;          // 8FM — up here (they were declared after the boot-time landing on the Dashboard, which reads them)
 const DEFAULT_VENDOR_PAYMENT_TERMS_DAYS = 30;
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
@@ -20367,6 +20371,12 @@ function showTab(tab) {
             if (typeof initInvoices === 'function' && !window.__invoicesReady) {
                 initInvoices();
                 window.__invoicesReady = true;
+            }
+            // 8FN — the first visit of a session opens on the current financial year (the list used to open on every
+            // year); the boxes stay whatever you set them to after that (Payables has done this since 8FH.3)
+            if (!window.__msInvFyDefaulted) {
+                window.__msInvFyDefaulted = true;
+                try { __msInvFyDefault(); } catch (e) { console.warn('Invoices FY default:', e); }
             }
             if (typeof closeInvoiceDetail === 'function') closeInvoiceDetail();
             if (typeof renderInvoicesPage === 'function') renderInvoicesPage();
@@ -32022,6 +32032,76 @@ function renderInvoicesPage() {
 
     renderInvoicesFiltered();
 }
+// 8FN — the Invoices page opens on the current financial year the first time in a session: the invoice list's year
+// box takes this FY ("FY 26-27") when an invoice of the year exists, and the Receivables register's box the same year in
+// its own form ("2026-2027") when the box offers that year (a cycle billed in it) — each only while it still says All, and never
+// again in the session (a choice you make stays; a Dashboard click sets the boxes itself, after this). Returns what
+// was set, for the tests.
+function __msInvFyDefault() {
+    const out = { inv: null, ar: null };
+    const now = new Date();
+    const fyStart = (typeof bsGetCurrentFYRange === 'function') ? bsGetCurrentFYRange().fyStartYear : (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1);   // the one place that defines "the current FY" (review NIT-2)
+    const invSel = document.getElementById('invFyFilter');
+    if (invSel) {
+        if (typeof populateInvoicesFilters === 'function') populateInvoicesFilters();
+        const want = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`;
+        if (invSel.value === 'ALL' && Array.from(invSel.options).some(o => o.value === want)) { invSel.value = want; out.inv = want; }
+    }
+    const arSel = document.getElementById('arFyFilter');
+    if (arSel) {
+        if (typeof populateARApFilters === 'function') populateARApFilters();
+        const want = `${fyStart}-${fyStart + 1}`;
+        if (arSel.value === 'ALL' && Array.from(arSel.options).some(o => o.value === want)) { arSel.value = want; out.ar = want; }
+        // a register already drawn (the Payables page draws both) is drawn again under the year, so it never sits under one year with its box saying another (review NIT-1)
+        if (out.ar) { const b = document.getElementById('arRegisterBody'); if (b && b.children.length && typeof renderARApPage === 'function') { try { renderARApPage(); } catch (e) {} } }
+    }
+    return out;
+}
+// 8FN — does the invoice belong to the year the list's box names? 'ALL' → yes; 'CF' → before this FY; else the "FY yy-yy" label
+// by the invoice date; an invoice with no date belongs to no year (8FM — the Dashboard counts none; review NIT-3)
+function __msInvYearOk(inv, fyF) {
+    if (!fyF || fyF === 'ALL') return true;
+    if (!inv || !inv.invoiceDate) return false;
+    const d = new Date(inv.invoiceDate);
+    const fyStart = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+    if (fyF === 'CF') { const _n = new Date(), _cur = _n.getMonth() >= 3 ? _n.getFullYear() : _n.getFullYear() - 1; return fyStart < _cur; }
+    return `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}` === fyF;
+}
+// 8FN — beside the count: the overdue invoices the year box keeps out of the list, as a link that shows every overdue invoice
+// (the cards above count every year; the list under the year may show none of them — review RISK-1)
+function __msInvCountNote(filtered) {
+    const el = document.getElementById('invCount'); if (!el) return;
+    const fyF = (document.getElementById('invFyFilter') || {}).value || 'ALL';
+    if (fyF === 'ALL' || !invoices.length) return;
+    const n = invoices.filter(i => isInvoiceOverdue(i) && !__msInvYearOk(i, fyF)).length;
+    if (!n) return;
+    const a = document.createElement('a'); a.href = '#'; a.className = 'ms-inv-count-note';
+    a.textContent = ' · ' + n + ' overdue in other year' + (n === 1 ? '' : 's');
+    a.title = 'Show every overdue invoice, whatever the year';
+    a.onclick = function (e) { e.preventDefault(); __msInvCardGo('OVERDUE'); };
+    el.appendChild(a);
+}
+// 8FN — the Outstanding and Overdue cards open the list on that status across every year (the cards count every year)
+function __msInvCardGo(status) {
+    const s = document.getElementById('invSearch'); if (s) s.value = '';
+    const c = document.getElementById('invClientFilter'); if (c) c.value = 'ALL';
+    const y = document.getElementById('invFyFilter'); if (y) y.value = 'ALL';
+    const st = document.getElementById('invStatusFilter'); if (st) st.value = status;
+    renderInvoicesFiltered();
+}
+// 8FN — a saved or just-viewed invoice stays in view: when the year box would hide it, the box takes that invoice's year
+// (an invoice dated in March, raised in April; an old invoice fixed from the Files page — review RISK-2). Returns true when the box changed.
+function __msInvKeepInView(inv) {
+    const sel = document.getElementById('invFyFilter'); if (!sel || !inv) return false;
+    const fyF = sel.value || 'ALL';
+    if (fyF === 'ALL' || __msInvYearOk(inv, fyF)) return false;
+    if (!inv.invoiceDate) { sel.value = 'ALL'; return true; }
+    if (typeof populateInvoicesFilters === 'function') populateInvoicesFilters();
+    const d = new Date(inv.invoiceDate), fyStart = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+    const want = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`;
+    sel.value = Array.from(sel.options).some(o => o.value === want) ? want : 'ALL';
+    return true;
+}
 // 8FH.3 — the filter-and-draw half of the page, on its own: the search box calls it (debounced) instead of
 // renderInvoicesPage, which recomputed every invoice's derived fields and compared the whole table on each keystroke.
 function renderInvoicesFiltered() {
@@ -32030,6 +32110,7 @@ function renderInvoicesFiltered() {
     const filtered = getFilteredInvoices();
     renderInvoicesKPIs();
     __msListCount('invCount', filtered.length, invoices.length, 'invoice', 'invoices');   // 8FL
+    try { __msInvCountNote(filtered); } catch (e) {}   // 8FN — "· N overdue in other years" when the year box hides them (review RISK-1)
     if (invoicesView === 'kanban') renderInvoicesKanban(filtered);
     else renderInvoicesListView(filtered);
 }
@@ -32084,15 +32165,7 @@ function getFilteredInvoices() {
         if (statusF === 'COLLECTED' && inv.status !== 'Partially Paid' && inv.status !== 'Paid') return false;   // 8FM — money has come in on it (the Dashboard's Collected row)
         if (statusF !== 'ALL' && statusF !== 'OUTSTANDING' && statusF !== 'OVERDUE' && statusF !== 'RAISED' && statusF !== 'COLLECTED' && inv.status !== statusF) return false;
         if (clientF !== 'ALL' && inv.clientName !== clientF) return false;
-        if (fyF !== 'ALL') {
-            if (!inv.invoiceDate) return false;   // 8FM — an invoice with no date belongs to no year (the Dashboard counts none; review NIT-3)
-            const d = new Date(inv.invoiceDate);
-            const y = d.getFullYear();
-            const m = d.getMonth();
-            const fyStart = m >= 3 ? y : y - 1;
-            if (fyF === 'CF') { const _n = new Date(), _cur = _n.getMonth() >= 3 ? _n.getFullYear() : _n.getFullYear() - 1; if (fyStart >= _cur) return false; }   // 8FM — before this FY
-            else { const fy = `FY ${String(fyStart).slice(2)}-${String(fyStart + 1).slice(2)}`; if (fy !== fyF) return false; }
-        }
+        if (fyF !== 'ALL' && !__msInvYearOk(inv, fyF)) return false;   // 8FN — the year test on its own (8FM's rules: 'CF' = before this FY; no date = no year)
         if (s) {
             const hay = [inv.invoiceNumber, inv.clientName, inv.subject, inv.notes].join(' ').toLowerCase();
             if (!hay.includes(s)) return false;
@@ -32237,7 +32310,14 @@ function renderInvoicesKanban(filtered) {
     const totalAll = invoices.length;
     const hiddenCount = totalAll - filtered.length;
     let banner = '';
-    if (hiddenCount > 0 && totalAll > 0) {
+    const _fySel = document.getElementById('invFyFilter');
+    const _yearOnly = !!_fySel && (_fySel.value || 'ALL') !== 'ALL' && ((document.getElementById('invStatusFilter') || {}).value || 'ALL') === 'ALL' && ((document.getElementById('invClientFilter') || {}).value || 'ALL') === 'ALL' && !((document.getElementById('invSearch') || {}).value || '').trim();   // 8FN — only the year box narrows the board (review RISK-3)
+    if (hiddenCount > 0 && totalAll > 0 && _yearOnly) {
+        banner = `<div style="grid-column:1/-1; padding:8px 12px; background:var(--accent-tint-low); border:1px solid var(--accent-tint-mid); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
+            <span><i class="fas fa-calendar"></i> Showing <strong>${filtered.length}</strong> of <strong>${totalAll}</strong> · ${pEsc(_fySel.options[_fySel.selectedIndex] ? _fySel.options[_fySel.selectedIndex].textContent : _fySel.value)} — <strong>${hiddenCount}</strong> in other years.</span>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('invFyFilter').value = 'ALL'; renderInvoicesFiltered();" style="padding:3px 10px; font-size:11px;"><i class="fas fa-calendar-alt"></i> Every year</button>
+        </div>`;
+    } else if (hiddenCount > 0 && totalAll > 0) {
         banner = `<div style="grid-column:1/-1; padding:8px 12px; background:var(--accent-tint-low); border:1px solid var(--accent-tint-mid); border-radius:6px; font-size:11.5px; color:var(--accent-cyan); display:flex; justify-content:space-between; align-items:center;">
             <span><i class="fas fa-info-circle"></i> Showing <strong>${filtered.length}</strong> of <strong>${totalAll}</strong>. <strong>${hiddenCount}</strong> hidden by filters.</span>
             <button class="btn btn-ghost btn-sm" onclick="clearInvoicesFilters()" style="padding:3px 10px; font-size:11px;"><i class="fas fa-filter"></i> Clear Filters</button>
@@ -33403,6 +33483,7 @@ async function saveInvoiceFromForm() {
     }
     if (isNew) invoices.push(rec);
     saveInvoices();
+    try { __msInvKeepInView(rec); } catch (e) {}   // 8FN — the year box would otherwise hide what was just saved (review RISK-2)
     closeInvoiceForm();
 
     // Bug fix #40 — Removed redundant DOM manipulation and renderInvoicesPage()
@@ -33464,6 +33545,8 @@ function openInvoiceDetail(id) {
 }
 
 function closeInvoiceDetail() {
+    // 8FN — the invoice you came from stays in the list behind (review RISK-2); the page is drawn again only when the box moved
+    if (currentInvoiceDetailId) { try { if (__msInvKeepInView(invoices.find(x => x.id === currentInvoiceDetailId))) renderInvoicesFiltered(); } catch (e) {} }
     currentInvoiceDetailId = null;
     const listPage = document.getElementById('invListPage');
     const detailPage = document.getElementById('invDetailPage');
@@ -40761,8 +40844,9 @@ function bsGotoTab(tab, filterId, filterVal, subTab) {
     // or status filter), producing a wrong combination. Selects reset to 'ALL',
     // free-text search boxes reset to ''. Then the click's overrides win.
     const RESET_GROUPS = {
-        invoicesTab:         { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL',
-                               invSearch: '', invStatusFilter: 'ALL', invClientFilter: 'ALL', invFyFilter: 'ALL' },   // 8FM — the invoice list's own boxes too
+        invoicesTab:         subTab === 'ar'   // 8FN — only the sub-tab the click opens; the other keeps its year (review PARTIAL-1)
+                               ? { arSearch: '', arFyFilter: 'ALL', arClientFilter: 'ALL', arStatusFilter: 'ALL', arAgingFilter: 'ALL', arPendingUrgency: 'ALL' }
+                               : { invSearch: '', invStatusFilter: 'ALL', invClientFilter: 'ALL', invFyFilter: 'ALL' },   // 8FM — the invoice list's own boxes
         purchaseInvoicesTab: { apSearch: '', apFyFilter: 'ALL', apClientFilter: 'ALL', apOemFilter: 'ALL', apStatusFilter: 'ALL', apAgingFilter: 'ALL', apPendingUrgency: 'ALL' },
         consultantsTab:      { conSearch: '', conFyFilter: 'ALL', conConsultantFilter: 'ALL', conStatusFilter: 'ALL', conPeriodFilter: 'ALL' },   // 8FM
         // 8FH.2 — the WHOLE filter group of each page (a leftover client / OEM / window / search filter made the list a subset of the number clicked)
