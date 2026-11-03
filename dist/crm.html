@@ -13879,7 +13879,7 @@ let showTDS = false;
    — Safe, idempotent, invisible to users.
    ====================================================================== */
 const MASTERSTONE_SCHEMA_VERSION = 1;
-const MASTERSTONE_APP_BUILD = "8FO-2026-11-03";   // 8FJ — the build the schema meta and the System Controls page name
+const MASTERSTONE_APP_BUILD = "8FP-2026-11-03";   // 8FJ — the build the schema meta and the System Controls page name
 const DEFAULT_PAYMENT_TERMS_DAYS = 30;          // 8FM — up here (they were declared after the boot-time landing on the Dashboard, which reads them)
 const DEFAULT_VENDOR_PAYMENT_TERMS_DAYS = 30;
 const SCHEMA_META_KEY = 'ms_schema_meta_v1';
@@ -53162,14 +53162,17 @@ document.addEventListener('ms:init-complete', function () {
 
 // ---- the Manage modal: the recorded remittance travels with the bill's row ---------------------------
 function __msRmtRowInit(row, rec) {
-    if (!row || !rec || !(Number(rec.payFx) > 0)) return;
-    row.setAttribute('data-payfx', String(Number(rec.payFx)));
+    var stmt = /^stmt:/.test(String((rec && rec.payRef) || ''));   // 8FP — paid per the bank statement: a mark with no rate
+    if (!row || !rec || (!(Number(rec.payFx) > 0) && !stmt)) return;
+    if (Number(rec.payFx) > 0) row.setAttribute('data-payfx', String(Number(rec.payFx)));
     row.setAttribute('data-payref', String(rec.payRef || ''));
     var note = document.createElement('div');
     note.className = 'ms-rmt-rownote';
     note.style.cssText = 'font-size:11px; color:var(--text-dim); margin:3px 0 0 2px;';
-    note.innerHTML = '<i class="fas fa-globe" style="color:var(--accent-cyan); font-size:10px;"></i> Remitted at ' + __msRmtEsc(__msRmtRate4(rec.payFx)) + ' (the rupees debited ÷ the dollars, recorded from the CA pack\'s list on the Payables page) — the register and the CA export use it; the FX rate box is what you typed. '
+    if (Number(rec.payFx) > 0) note.innerHTML = '<i class="fas fa-globe" style="color:var(--accent-cyan); font-size:10px;"></i> Remitted at ' + __msRmtEsc(__msRmtRate4(rec.payFx)) + ' (the rupees debited ÷ the dollars, recorded from the CA pack\'s list on the Payables page) — the register and the CA export use it; the FX rate box is what you typed. '
         + '<a href="#" onclick="__msRmtRowClear(this); return false;" style="color:var(--text-dim);" title="Take the recorded rate off this bill when it is saved">Clear</a>';
+    else note.innerHTML = '<i class="fas fa-building-columns" style="color:var(--accent-cyan); font-size:10px;"></i> Paid per the bank statement — the date was recorded by itself from the CA pack (Tools › Import). '
+        + '<a href="#" onclick="__msRmtRowClear(this); return false;" style="color:var(--text-dim);" title="Take the mark off this bill when it is saved (the date stays)">Clear</a>';   // 8FP
     var status = row.querySelector('.ap-upload-status');
     if (status && status.parentNode === row) row.insertBefore(note, status); else row.appendChild(note);
     // the recorded rate belongs to this bill as it was: another number or another date paid is another bill
@@ -53190,8 +53193,9 @@ function __msRmtRowClear(el) {
     if (note) note.parentNode.removeChild(note);
 }
 function __msRmtRowRead(row, rec) {
-    var fx = parseFloat(row.getAttribute('data-payfx') || '');
-    if (fx > 0) { rec.payFx = fx; var ref = row.getAttribute('data-payref') || ''; if (ref) rec.payRef = ref; }
+    var fx = parseFloat(row.getAttribute('data-payfx') || ''), ref = row.getAttribute('data-payref') || '';
+    if (fx > 0) { rec.payFx = fx; if (ref) rec.payRef = ref; }
+    else if (/^stmt:/.test(ref)) rec.payRef = ref;   // 8FP — a bill paid per the bank statement keeps its mark (review BUG-1)
     return rec;
 }
 
@@ -54297,6 +54301,11 @@ window.__msFilRenderTies = __msFilRenderTies;   // the shim's __msRenderUnlinked
 //     stale (the old folder names) or points at the old personal OneDrive — never the figures.
 // Everything added is stamped with a batch; the last batch can be undone. Nothing is written until "Add the
 // selected" is clicked and the question answered.
+// 8FP (3 Nov 2026): what the engine found in the bank statements for a record the app already has is written by
+// itself when it is sure — a client's credit as the receipt on an Issued invoice (with a TDS line for what the client
+// kept back), a consultant's debit as the paid date on a Pending payment, a rupee OEM bill's debit as the bill's
+// payment date — at launch, after a new list, when this page opens; Undo and a tick box on this page (the block
+// after the Undo code).
 var MS_IMP_APP_DIR = '/_engine/app_import';
 var MS_IMP_FRESH_MS = 120000;
 var MS_IMP_BATCH_KEY = 'ms_app__import_batches_v1';
@@ -54482,6 +54491,7 @@ async function __msImpRead(force) {
         __msImp.again = false;
         __msImpRefreshIfOpen();
         if (again) __msImpRead(true);
+        else if (__msImp.idx && !__msImp.auto.launching) __msImpAutoMaybe(changed ? 'read' : 'open');   // 8FP — a list is in: record what is sure (the launch path calls it itself)
     }
 }
 function __msImpRefreshIfOpen() { if (!__msImpTabOpen()) return; try { renderImportPage(); } catch (e) { __msImpLog('WARN', 'redraw failed', { error: String((e && e.message) || e) }); } }
@@ -54494,6 +54504,7 @@ function __msImpOnTab() {
     if (!__msImp.reading && (__msImp.missing || !__msImp.at || Date.now() - __msImp.at >= MS_IMP_FRESH_MS)) __msImpRead(!!__msImp.missing);
     if (__msImp.batchesState === 'idle' || __msImp.batchesState === 'error') __msImpBatchesLoad();
     renderImportPage();
+    __msImpAutoMaybe('open');   // 8FP — record what is sure, by itself
 }
 // The files the engine listed, by absolute path (what "on the Mac" means here), and by number.
 function __msImpKnown() {
@@ -55066,10 +55077,11 @@ function renderImportPage() {
     var S = __msImp;
     var head = '<div class="dashboard-sticky-top"><div class="page-header" style="margin-bottom:0;">'   // 8FH.3 (62)
         + '<h2 style="margin:0;"><i class="fas fa-file-import" style="color:var(--accent-cyan); margin-right:8px;"></i> Import from the Masters</h2>'
-        + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+        + '<div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">'
+        + __msImpAutoBoxHtml()   // 8FP
         + '<button class="btn btn-ghost" id="msImpRefreshBtn" onclick="__msImpRead(true)"' + (S.reading ? ' disabled' : '') + ' title="Read the engine\'s list again (after a CA pack run)"><i class="fas fa-rotate' + (S.reading ? ' fa-spin' : '') + '"></i> Refresh</button>'
         + '</div></div></div>'
-        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack reads every Sales and Payments row of <b>Files › Masters</b> from FY 2021-22 and ties each to its PDF, its receipt or payment and (for OEM bills) the sale it was bought for; it reads the PO files under <b>Files › Internal POs</b> and the quotes under <b>Files › OEM Quotes</b> too. Tick what should go into the app and click <b>Add the selected</b>. Rows already in the app are shown but never changed — only their document links are filled in.</p>';
+        + '<p class="ms-imp-note" style="margin:0 0 10px;">The CA pack reads every Sales and Payments row of <b>Files › Masters</b> from FY 2021-22 and ties each to its PDF, its receipt or payment and (for OEM bills) the sale it was bought for; it reads the PO files under <b>Files › Internal POs</b> and the quotes under <b>Files › OEM Quotes</b> too. Tick what should go into the app and click <b>Add the selected</b>. Rows already in the app are shown but never changed — only their document links are filled in, and a receipt or payment the pack found in the bank statements for one of them is recorded on it by itself when it is sure (the line below says what was written; Undo takes it off).</p>';
     if (S.missing && !S.idx) {
         root.innerHTML = head + '<div class="card" style="padding:28px; text-align:center; color:var(--text-dim);">' + (__msImpTauri() ? '<i class="fas fa-circle-info"></i> The engine\'s list is not there yet. Run the CA pack once (it writes <code>_engine/app_import/index.json</code>), then click Refresh.' + (S.error ? ' ' + __msImpEsc(S.error) : '') : '<i class="fas fa-circle-info"></i> The Masters live on the Mac; open this page in the Masterstone app.') + '</div>';
         return;
@@ -55081,7 +55093,7 @@ function renderImportPage() {
     var P = __msImpPlan();
     if (!P) { root.innerHTML = head; return; }
     if (S.ui.fy === null || P.fys.indexOf(S.ui.fy) === -1) S.ui.fy = P.fys[0] || null;
-    var html = head + __msImpStatusHtml(P);
+    var html = head + __msImpStatusHtml(P) + __msImpAutoHtml();   // 8FP
     html += '<div class="ms-imp-fy">' + P.fys.map(function (fy) { var c = P.byFy[fy]; return '<div class="arap-subtab' + (fy === S.ui.fy ? ' active' : '') + '" onclick="__msImpSetFy(\'' + fy + '\')">' + __msImpFyLabel(fy) + ' <span class="n" style="font-size:10.5px; color:var(--text-dim);">' + (c.salesNew + c.billsNew + c.vendorsNew + c.posContract + c.posNew) + ' new</span></div>'; }).join('') + '</div>';
     html += '<div class="card" style="padding:10px 16px; margin-bottom:14px;"><div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">'
         + '<input type="text" id="msImpQ" value="' + __msImpEsc(S.ui.q) + '" placeholder="Search number, client, party, amount…" style="flex:1; min-width:220px; max-width:380px;" oninput="__msImpSearch(this.value)">'
@@ -55818,6 +55830,429 @@ async function __msImpUndo(batchId) {
         renderImportPage();
     }
 }
+// ---- 8FP — receipts and payments found in the statements, recorded by themselves (3 Nov 2026) --------------------
+// The engine's Import list (app_import/index.json) carries, for every Master row the app's export shows unpaid, the bank
+// line it found: a client's credit of the invoice total (or the total less the TDS the client kept back), singly or two
+// or three invoices paid with one transfer; a consultant's or vendor's debit (the total less TDS), believed only when the
+// bank line names them; a rupee OEM bill's debit. Tools › Import showed these ("bank statement" in its Receipt / Paid
+// columns) and wrote nothing. Now what is sure is written by itself, as 8FO does for the remittances: the receipt on the
+// invoice (the rupees as the bank credited them, and a "TDS" line for what the client kept back, the way the imported
+// invoices carry it — his answer A of 3 Nov 2026), a Pending consultant payment marked Paid with the paid date, Bank
+// Transfer and the bank's reference (the TDS filled in when the record had none and the shortfall is a usual rate — B),
+// a rupee OEM bill's payment date in the register when the debit is what the bill itself says (C). Runs a few seconds
+// after launch (once the Expenses module knows the CA Pack folder), after every read that brings a new list, when the
+// Import page opens and when the switch is turned on; once per list. One toast, every write in the diagnostic log, Undo
+// on the Import page (kept across a relaunch until the next run replaces it; what was undone is never written by itself
+// again until the switch is turned off and on), the tick box on the Import page turns it off. Never touched: anything he
+// dated or part-paid, a Draft or credit-noted invoice, a credit before the invoice, an unnamed bank line, a line already
+// used, figures that differ from the Master, an export invoice (8FO's FIRC) or a dollar bill (8FO's remittance).
+// (The review of 3 Nov 2026: a rupee bill's mark survives the Manage Cycle window; a bill with no GST or TDS on it takes the
+// Master's figures when the debit is the Master's total less TDS; what he took off by hand is never written again, as
+// after Undo; a receipt of the same amount on the same day on another invoice of the client is a doubt; the plan is
+// always rebuilt; the counts, the reasons for a blank date, Undo shown while the switch is off.)
+var MS_IMP_AUTO_KEY = 'ms_imp_auto_v1', MS_IMP_AUTO_UNDO_KEY = 'ms_imp_auto_undo_v1', MS_IMP_AUTO_SKIP_KEY = 'ms_imp_auto_skip_v1', MS_IMP_AUTO_DONE_KEY = 'ms_imp_auto_done_v1';
+var MS_IMP_AUTO_RECEIPT_GRACE_DAYS = 10;      // a credit this many days before the invoice's date still counts (the engine's rule)
+var MS_IMP_AUTO_PAYMENT_GRACE_DAYS = 30;      // a debit this many days before the bill's date still counts (the engine's rule)
+var MS_IMP_AUTO_ROUND_INR = 2.5;              // a receipt or payment this close to the figure expected is that figure (the bank's rounding)
+var MS_IMP_AUTO_TDS_ROUND_INR = 5;            // the client's (or his) rounding of the TDS kept back
+var MS_IMP_AUTO_TDS_RATES = [10, 2, 1, 5];    // what a client keeps back: 10 / 2 / 1 / 5 % of the taxable value (the engine's list)
+var MS_IMP_AUTO_CON_TDS_RATES = [10, 2, 1];   // what he keeps back from a consultant: 10 / 2 / 1 % of the subtotal
+__msImp.auto = { running: false, doneSig: '', last: null, waitTimer: null, launching: false, left: [] };
+function __msImpAutoOn() { try { return localStorage.getItem(MS_IMP_AUTO_KEY) !== 'off'; } catch (e) { return true; } }
+function __msImpAutoSet(on) {
+    try { localStorage.setItem(MS_IMP_AUTO_KEY, on ? 'on' : 'off'); } catch (e) {}
+    __msImpLog('INFO', 'recording by itself turned ' + (on ? 'on' : 'off'));
+    if (on) { __msImp.auto.doneSig = ''; __msImpAutoSkipClear(); __msImpAutoDoneClear(); }
+    __msImpRefreshIfOpen();
+    if (on) { if (!__msImp.idx && !__msImp.reading) __msImpRead(true); else __msImpAutoMaybe('switch'); }   // a read's end runs it
+}
+// What was undone is never written by itself again: one key per invoice, consultant payment or bill, with the bank line.
+function __msImpAutoSkipKeys() { try { var o = JSON.parse(localStorage.getItem(MS_IMP_AUTO_SKIP_KEY) || 'null'); var m = {}; ((o && Array.isArray(o.keys)) ? o.keys : []).forEach(function (k) { if (typeof k === 'string') m[k] = true; }); return m; } catch (e) { return {}; } }
+function __msImpAutoSkipAdd(keys) { try { var m = __msImpAutoSkipKeys(); keys.forEach(function (k) { m[k] = true; }); localStorage.setItem(MS_IMP_AUTO_SKIP_KEY, JSON.stringify({ keys: Object.keys(m).slice(-2000) })); } catch (e) {} }
+function __msImpAutoSkipClear() { try { localStorage.removeItem(MS_IMP_AUTO_SKIP_KEY); } catch (e) {} }
+// Everything ever written by itself, by key: a record he then took off by hand (the receipt deleted, the payment put back to
+// Pending, the bill's date cleared) is treated as undone — never written again until the switch is turned off and on.
+function __msImpAutoDoneKeys() { try { var o = JSON.parse(localStorage.getItem(MS_IMP_AUTO_DONE_KEY) || 'null'); var m = {}; ((o && Array.isArray(o.keys)) ? o.keys : []).forEach(function (k) { if (typeof k === 'string') m[k] = true; }); return m; } catch (e) { return {}; } }
+function __msImpAutoDoneAdd(keys) { try { var m = __msImpAutoDoneKeys(); keys.forEach(function (k) { m[k] = true; }); localStorage.setItem(MS_IMP_AUTO_DONE_KEY, JSON.stringify({ keys: Object.keys(m).slice(-5000) })); } catch (e) {} }
+function __msImpAutoDoneClear() { try { localStorage.removeItem(MS_IMP_AUTO_DONE_KEY); } catch (e) {} }
+function __msImpAutoBlank(v) { return v === null || v === undefined || v === ''; }
+function __msImpAutoUndoSave() { try { if (__msImp.auto.last) localStorage.setItem(MS_IMP_AUTO_UNDO_KEY, JSON.stringify(__msImp.auto.last)); else localStorage.removeItem(MS_IMP_AUTO_UNDO_KEY); } catch (e) { __msImpLog('WARN', 'the undo record could not be kept', { error: String((e && e.message) || e) }); } }
+function __msImpAutoUndoLoad() { try { var s = localStorage.getItem(MS_IMP_AUTO_UNDO_KEY); var o = s ? JSON.parse(s) : null; if (o && Array.isArray(o.items) && o.items.length) __msImp.auto.last = o; } catch (e) {} }
+function __msImpAutoSig() { return __msImp.idx ? (__msImp.idx.sig + '|' + __msImp.idx.made) : ''; }
+function __msImpAgo(iso) { return (typeof __msExpAgo === 'function') ? __msExpAgo(iso) : String(iso || ''); }
+function __msImpAutoTag(line) { return 'stmt:' + String(line || ''); }
+function __msImpAutoBank(acct) { return (typeof __msBsAcctLabel === 'function') ? __msBsAcctLabel(acct) : String(acct || ''); }
+// A store the bridge has paused this session refuses every write: nothing of that kind is recorded (and the reason says so).
+function __msImpAutoStoreOk(key) { return !(typeof window.__msBucketWritable === 'function') || !!window.__msBucketWritable(key); }
+// The Record Payment window pushes what its boxes hold onto the invoice, the Manage Cycle window saves its rows over the
+// bills, the forms save theirs: a record written while one is open would be written back over, or counted twice. Wait.
+function __msImpAutoBusy() {
+    var open = function (id) { var m = document.getElementById(id); return !!(m && m.style.display && m.style.display !== 'none'); };
+    if (open('invPaymentModal') || open('unifiedCycleModal')) return true;
+    if (__msImp.working) return true;                                             // "Add the selected" is writing
+    return ['provisionTab', 'invoiceFormTab', 'conPaymentFormTab'].some(function (id) { var el = document.getElementById(id); return !!(el && !el.classList.contains('hidden')); }) || !!window.__msInvDraftActive;
+}
+function __msImpAutoMaybe(trigger) {
+    var A = __msImp.auto;
+    if (!__msImpAutoOn() || !__msImpTauri() || !__msImp.idx || __msImp.reading || A.running) return;
+    if (typeof contracts === 'undefined' || !Array.isArray(contracts) || typeof invoices === 'undefined' || !Array.isArray(invoices)) return;
+    if (__msImpAutoBusy()) { if (!A.waitTimer) A.waitTimer = setTimeout(function () { A.waitTimer = null; __msImpAutoMaybe(trigger); }, 4000); return; }
+    __msImpAuto(trigger).catch(function (e) { A.running = false; __msImpLog('ERROR', 'recording by itself failed', { trigger: trigger, error: String((e && e.message) || e) }); });
+}
+function __msImpAutoR2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// The TDS rate (per cent) whose share of the base is the gap, within the rounding; null when none is.
+function __msImpAutoTdsRate(gap, base, rates) {
+    if (!(base > 0) || !(gap > 0)) return null;
+    for (var i = 0; i < rates.length; i++) if (Math.abs(gap - base * rates[i] / 100) <= MS_IMP_AUTO_TDS_ROUND_INR) return rates[i];
+    return null;
+}
+// The records a bank line has been written on (by a run): a line is one payment — never two records from it, unless the
+// engine says the one transfer paid them together.
+function __msImpAutoLineUsers(tag, self) {
+    var users = [];
+    (Array.isArray(invoices) ? invoices : []).forEach(function (inv) { if (inv && inv !== self && (inv.payments || []).some(function (p) { return p && p.auto === tag; })) users.push({ what: 'receipt', id: inv.id, no: String(inv.invoiceNumber || '') }); });
+    if (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments)) consultantPayments.forEach(function (p) { if (p && p !== self && p.auto === tag) users.push({ what: 'conpay', id: p.id, no: String(p.invoiceNumber || p.paymentNumber || '') }); });
+    if (Array.isArray(contracts)) contracts.forEach(function (c) { (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (y) { (y && Array.isArray(y.apInvoices) ? y.apInvoices : []).forEach(function (ap) { if (ap && ap !== self && ap.payRef === tag) users.push({ what: 'bill', id: String(ap.apId || ''), no: String(ap.invNo || '') }); }); }); });
+    return users;
+}
+// Another invoice of the same client already carrying a receipt dated on the bank line's day, of the bank's figure or this
+// invoice's total: the engine cannot reserve a net credit the app's export shows gross, so the line may be the one he
+// recorded by hand on the earlier invoice (review RISK-1) — a doubt, left for his hand.
+function __msImpAutoSameDayReceipt(inv, date, got, total) {
+    var hit = null, ck = __msImpLoose(inv.clientName);
+    (Array.isArray(invoices) ? invoices : []).forEach(function (o) {
+        if (hit || !o || o === inv || o.id === inv.id || o.status === 'Cancelled' || __msImpLoose(o.clientName) !== ck) return;
+        (o.payments || []).forEach(function (p) {
+            if (hit || !p || String(p.date || '') !== String(date || '') || /^TDS$|^FX$/.test(String(p.reference || ''))) return;
+            var a = __msImpAutoR2(p.amount);
+            if (Math.abs(a - got) <= MS_IMP_AUTO_ROUND_INR || Math.abs(a - total) <= MS_IMP_AUTO_ROUND_INR) hit = { no: String(o.invoiceNumber || '?'), amount: a };
+        });
+    });
+    return hit;
+}
+// What is sure, and what the engine found but the app must leave for his hand (with the reason). Read off the Import
+// page's own plan, so "in the app" means exactly what the page shows.
+function __msImpAutoPlan() {
+    var sure = [], left = [], skip = __msImpAutoSkipKeys(), done = __msImpAutoDoneKeys(), P = __msImpPlan();   // the plan rebuilt when anything it reads has changed (review RISK-2)
+    if (!P) return { sure: sure, left: left };
+    var OFF = 'you took it off — not recorded by itself again';
+    var okInv = __msImpAutoStoreOk('ms_invoices_v1'), okCon = __msImpAutoStoreOk('ms_consultant_payments_v1'), okCtr = __msImpAutoStoreOk('ms_pro_v210');
+    var seen = {}, claimed = {};                     // one bank line, one payment — within this plan too (the engine's "together" is the exception)
+    // --- receipts: the client's credit on an invoice in the Invoices module
+    P.sales.forEach(function (it) {
+        var r = it.r, rc = r && r.receipt;
+        if (!rc || rc.source !== 'statement' || it.state !== 'app' || !it.inv) return;
+        var inv = it.inv, tag = __msImpAutoTag(rc.line), no = String(inv.invoiceNumber || r.code || '?'), client = String(inv.clientName || r.client || ''), key = 'rcpt|' + inv.id + '|' + rc.line;
+        if (inv.status === 'Paid' || inv.status === 'Cancelled' || (inv.payments || []).some(function (p) { return p && p.auto === tag; })) return;      // paid (by this line, or by hand): nothing to do
+        var users = __msImpAutoLineUsers(tag, inv);
+        var together = (rc.together || []).map(__msImpCode), elsewhere = users.filter(function (u) { return u.what !== 'receipt' || together.indexOf(__msImpCode(u.no)) === -1; });
+        var why = '', amount = 0, tds = 0, rate = null, cl = claimed[tag];
+        if (done[key] && !skip[key]) why = OFF;                                                                     // written once, taken off by hand (review PARTIAL-2)
+        else if (elsewhere.length) why = 'the bank line is recorded on ' + elsewhere[0].no + ' already';
+        else if (cl && !(cl.kind === 'receipt' && together.indexOf(__msImpCode(cl.no)) !== -1 && cl.together.indexOf(__msImpCode(no)) !== -1)) why = 'the bank line also pays ' + cl.no;
+        else if (!rc.named || rc.warning) why = rc.warning || 'the bank line does not name the client';
+        else if (r.warnings && r.warnings.length) why = r.warnings[0];
+        else if (r.kind === 'credit_note') why = 'a credit note';
+        else if (inv.gstMode === 'export') why = 'an export invoice — the FIRC records it (Payables)';
+        else if (inv.status !== 'Issued' || (Number(inv.amountPaid) || 0) > 0 || (inv.payments || []).length) why = 'the invoice is ' + __msImpAutoStatusWord(inv) + ' — record by hand';
+        else if (it.differs) why = 'the invoice says ' + (it.differs.amount !== null ? __msImpInr(it.differs.amount) : __msImpDate(it.differs.date)) + ', the Master ' + (it.differs.amount !== null ? __msImpInr(r.total) : __msImpDate(r.date));
+        else if (!rc.date || __msImpDays(inv.invoiceDate, rc.date) === null) why = 'no date on the invoice';
+        else if (__msImpDays(inv.invoiceDate, rc.date) < -MS_IMP_AUTO_RECEIPT_GRACE_DAYS) why = 'the credit is before the invoice';
+        else {
+            var total = __msImpAutoR2(inv.grandTotal), base = __msImpAutoR2(inv.subtotal), got = __msImpAutoR2(rc.amount), gap = __msImpAutoR2(total - got);
+            var twin = __msImpAutoSameDayReceipt(inv, rc.date, got, total);                                          // the client's other invoice already carries that receipt (review RISK-1)
+            if (!(total > 0) || !(got > 0)) why = 'no value';
+            else if (twin) why = 'a receipt of ' + __msImpInr(twin.amount) + ' on ' + __msImpDate(rc.date) + ' is already on ' + twin.no;
+            else if (Math.abs(gap) <= MS_IMP_AUTO_ROUND_INR) amount = total;                                       // the bank's rounding: the receipt closes the invoice
+            else if (gap < 0) why = 'the bank credited more (' + __msImpInr(got) + ') than the invoice (' + __msImpInr(total) + ')';
+            else { rate = __msImpAutoTdsRate(gap, base, MS_IMP_AUTO_TDS_RATES); if (rate === null) why = 'the bank credited ' + __msImpInr(got) + ' against ' + __msImpInr(total) + ' — not the total less TDS at a usual rate'; else { amount = got; tds = gap; } }
+        }
+        if (!why && !okInv) why = 'the invoices store is paused this session';
+        if ((!why || why === OFF) && !cl) claimed[tag] = { kind: 'receipt', no: no, together: together };   // the line is this invoice's, written or undone
+        if (!why && skip[key]) why = 'undone by you';
+        if (why) { left.push({ kind: 'receipt', no: no, client: client, why: why, undone: /^undone by you/.test(why) || why === OFF }); return; }
+        var k = 'inv:' + inv.id; if (seen[k]) return; seen[k] = true;
+        sure.push({ kind: 'receipt', inv: inv, rc: rc, r: r, tag: tag, key: key, amount: amount, tds: tds, rate: rate, base: __msImpAutoR2(inv.subtotal), no: no, client: client });
+    });
+    // --- consultants' and vendors' invoices: the debit to them, on a Pending payment in the Consultants module
+    P.vendors.forEach(function (vt) {
+        var v = vt.v, pm = v && v.payment, pay = vt.pay;
+        if (!pm || pm.source !== 'statement' || vt.state !== 'app' || !pay) return;
+        var tag = __msImpAutoTag(pm.line), no = String(pay.invoiceNumber || v.raw_no || '?'), who = String((vt.consultant && vt.consultant.name) || v.party || ''), key = 'cpay|' + pay.id + '|' + pm.line;
+        if (pay.status === 'Paid' || pay.paidDate) return;                                                        // paid already: nothing to do
+        var users = __msImpAutoLineUsers(tag, pay), why = '', fill = null;
+        if (!skip[key] && done[key]) why = OFF;                                                                   // written once, put back to Pending by hand (review PARTIAL-2)
+        else if (users.length) why = 'the bank line is recorded on ' + users[0].no + ' already';
+        else if (claimed[tag]) why = 'the bank line also pays ' + claimed[tag].no;
+        else if (!pm.named || pm.warning) why = pm.warning || 'the bank line does not name the consultant';
+        else if (v.warnings && v.warnings.length) why = v.warnings[0];
+        else if (Math.abs(__msImpNum(pay.totalAmount) - __msImpNum(v.total)) > 1) why = 'the record says ' + __msImpInr(pay.totalAmount) + ', the Master ' + __msImpInr(v.total);
+        else if (!pm.date || __msImpDays(pay.invoiceDate, pm.date) === null) why = 'no invoice date on the record';
+        else if (__msImpDays(pay.invoiceDate, pm.date) < -MS_IMP_AUTO_PAYMENT_GRACE_DAYS) why = 'the payment is before the invoice';
+        else {
+            var total = __msImpAutoR2(pay.totalAmount), sub = __msImpAutoR2(pay.subtotal), paid = __msImpAutoR2(pm.amount);
+            var tdsRec = (pay.tdsAmount === null || pay.tdsAmount === undefined || pay.tdsAmount === '') ? null : __msImpAutoR2(pay.tdsAmount);
+            var exp = __msImpAutoR2(total - (tdsRec || 0)), gap = __msImpAutoR2(exp - paid);
+            if (!(total > 0) || !(paid > 0)) why = 'no value';
+            else if (Math.abs(gap) <= MS_IMP_AUTO_ROUND_INR) fill = null;
+            else if (tdsRec === null && __msImpAutoTdsRate(gap, sub, MS_IMP_AUTO_CON_TDS_RATES) !== null) fill = gap;      // TDS kept back, not on the record yet (his answer B)
+            else why = 'the bank paid ' + __msImpInr(paid) + '; the record expects ' + __msImpInr(exp) + (tdsRec ? ' (the total less TDS ' + __msImpInr(tdsRec) + ')' : (tdsRec === 0 ? ' (no TDS on the record)' : ''));
+        }
+        if (!why && !okCon) why = 'the consultant payments store is paused this session';
+        if (!why || why === OFF) claimed[tag] = { kind: 'conpay', no: no };
+        if (!why && skip[key]) why = 'undone by you';
+        if (why) { left.push({ kind: 'conpay', no: no, client: who, why: why, undone: /^undone by you/.test(why) || why === OFF }); return; }
+        var k = 'cpay:' + pay.id; if (seen[k]) return; seen[k] = true;
+        sure.push({ kind: 'conpay', pay: pay, pm: pm, v: v, tag: tag, key: key, fill: fill, no: no, client: who });
+    });
+    // --- rupee OEM bills: the debit to the OEM, on a bill in the Payables register (a dollar bill is the remittance's, 8FO)
+    P.bills.forEach(function (bt) {
+        var p = bt.p, pm = p && p.payment;
+        if (!pm || pm.source !== 'statement' || bt.state !== 'app' || !bt.refs.length || p.abroad) return;
+        var ref = bt.refs[0], c = contracts[ref.ci], y = c && c.billingYears && c.billingYears[ref.yi], ap = y && y.apInvoices && y.apInvoices[ref.ap];
+        if (!ap || ap.payDate) return;                                                                            // dated (by a run, or by hand): nothing to do
+        if (String(c.costCurrency || 'USD').toUpperCase() !== 'INR') return;                                      // a dollar bill: the remittance path
+        var tag = __msImpAutoTag(pm.line), no = String(ap.invNo || p.number || '?'), client = String(c.client || '');
+        var bkey = 'bill|' + (ap.apId ? String(ap.apId) : (ref.ci + '/' + ref.yi + '/' + ref.ap + '/' + __msImpBillKey(ap.invNo))) + '|' + pm.line;
+        var users = __msImpAutoLineUsers(tag, ap), why = '', fillGst = null, fillTds = null;
+        if (!skip[bkey] && done[bkey]) why = OFF;                                                                 // written once, the date cleared by hand (review PARTIAL-2)
+        else if (users.length) why = 'the bank line is recorded on ' + users[0].no + ' already';
+        else if (claimed[tag]) why = 'the bank line also pays ' + claimed[tag].no;
+        else if (!pm.named || pm.warning) why = pm.warning || 'the bank line does not name the OEM';
+        else if (p.warnings && p.warnings.length) why = p.warnings[0];
+        else if (bt.refs.length > 1) why = 'two bills carry number ' + no;
+        else if (!pm.date || __msImpDays(ap.date, pm.date) === null) why = 'no date on the bill';
+        else if (__msImpDays(ap.date, pm.date) < -MS_IMP_AUTO_PAYMENT_GRACE_DAYS) why = 'the payment is before the bill';
+        else {
+            var gBlank = __msImpAutoBlank(ap.gstAmount), tBlank = __msImpAutoBlank(ap.tdsAmount);
+            var exp = __msImpAutoR2(__msImpNum(ap.amount) + __msImpNum(ap.gstAmount) - __msImpNum(ap.tdsAmount)), paid = __msImpAutoR2(pm.amount);
+            // the bill's own figures; else, when its GST or TDS is not on it, the Master's (the engine's row: base, GST, TDS, total) when the
+            // debit is the Master's total less TDS and the figures that are on the bill agree — those get filled in (review PARTIAL-1, his answer C)
+            var mBase = __msImpNum(p.base), mGst = __msImpNum(p.gst_total), mTds = __msImpNum(p.tds), mTotal = (p.total === null || p.total === undefined) ? null : __msImpNum(p.total);
+            var masterFits = (gBlank || tBlank) && mTotal !== null && Math.abs(__msImpNum(ap.amount) - mBase) <= 1 && Math.abs(mBase + mGst - mTotal) <= 1
+                && (gBlank || Math.abs(__msImpNum(ap.gstAmount) - mGst) <= 1) && (tBlank || Math.abs(__msImpNum(ap.tdsAmount) - mTds) <= 1) && Math.abs(__msImpAutoR2(mTotal - mTds) - paid) <= MS_IMP_AUTO_ROUND_INR;
+            if (!(exp > 0) || !(paid > 0)) why = 'no value';
+            else if (Math.abs(exp - paid) <= MS_IMP_AUTO_ROUND_INR) { }
+            else if (masterFits) { if (gBlank && mGst > 0) fillGst = __msImpAutoR2(mGst); if (tBlank && mTds > 0) fillTds = __msImpAutoR2(mTds); }
+            else why = 'the bank paid ' + __msImpInr(paid) + ', the bill says ' + __msImpInr(exp) + ((gBlank && tBlank) ? ' (no GST or TDS on the bill)' : '') + ((gBlank || tBlank) && mTotal !== null ? ' — nor the Master\'s ' + __msImpInr(__msImpAutoR2(mTotal - mTds)) : '');
+        }
+        if (!why && !okCtr) why = 'the contracts store is paused this session';
+        if (!why || why === OFF) claimed[tag] = { kind: 'bill', no: no };
+        if (!why && skip[bkey]) why = 'undone by you';
+        if (why) { left.push({ kind: 'bill', no: no, client: client, why: why, undone: /^undone by you/.test(why) || why === OFF }); return; }
+        var k = 'bill:' + ref.ci + '/' + ref.yi + '/' + ref.ap; if (seen[k]) return; seen[k] = true;
+        sure.push({ kind: 'bill', ap: ap, ci: ref.ci, yi: ref.yi, ai: ref.ap, pm: pm, p: p, tag: tag, key: bkey, no: no, client: client, fillGst: fillGst, fillTds: fillTds });
+    });
+    var order = { receipt: 0, conpay: 1, bill: 2 };
+    sure.sort(function (a, b) { return (order[a.kind] - order[b.kind]) || String((a.rc || a.pm).date).localeCompare(String((b.rc || b.pm).date)) || a.no.localeCompare(b.no); });
+    return { sure: sure, left: left };
+}
+function __msImpAutoStatusWord(inv) {
+    var s = String((inv && inv.status) || '');
+    if (s === 'Credit Note Issued') return 'cancelled by a credit note';
+    if (s === 'Draft') return 'a draft';
+    if (s === 'Issued' || s === 'Partially Paid') return 'part-paid';
+    return s.toLowerCase() || 'not issued';
+}
+// The receipt on an invoice, as the Invoices page's "Record payment" writes one: the rupees as the bank credited them,
+// then a "TDS" line for what the client kept back (the way Tools › Import writes an imported invoice), so the invoice closes.
+function __msImpAutoRecordReceipt(x, at) {
+    var inv = x.inv, rc = x.rc, before = { status: inv.status, amountPaid: inv.amountPaid, paidAt: inv.paidAt || null, n: (inv.payments || []).length };
+    inv.payments = Array.isArray(inv.payments) ? inv.payments : [];
+    var together = (rc.together || []).filter(function (c) { return __msImpCode(c) !== __msImpCode(inv.invoiceNumber); });
+    var note = __msImpAutoBank(rc.acct) + ' — found in the bank statement by the CA pack' + (together.length ? ' (one transfer with ' + together.join(', ') + ')' : '') + (rc.text ? ': ' + String(rc.text).slice(0, 80) : '');
+    inv.payments.push({ date: rc.date, amount: x.amount, mode: __msImpPayMode(rc.mode), reference: '', notes: note, auto: x.tag });
+    if (x.tds > 0) inv.payments.push({ date: rc.date, amount: x.tds, mode: 'Other', reference: 'TDS', notes: 'TDS kept back by the client (' + x.rate + '% of the taxable value ' + __msImpInr(x.base) + ') — recorded by itself with the receipt', auto: x.tag });
+    inv.updatedAt = at;
+    refreshInvoiceComputedFields(inv);                     // the status, the amounts, and the contract cycle (it propagates itself)
+    return { what: 'receipt', invId: inv.id, no: x.no, client: x.client, tag: x.tag, key: x.key, before: before, after: { status: inv.status, amountPaid: inv.amountPaid, n: inv.payments.length, tagged: inv.payments.length - before.n, date: rc.date, amount: x.amount, tds: x.tds } };
+}
+function __msImpAutoRecordConPay(x, at) {
+    var pay = x.pay, pm = x.pm, before = { status: pay.status || '', paidDate: pay.paidDate || null, paymentMode: pay.paymentMode || '', paymentReference: pay.paymentReference || '', tdsAmount: (pay.tdsAmount === undefined ? null : pay.tdsAmount), notes: pay.notes || '', updatedAt: pay.updatedAt || '' };
+    pay.status = 'Paid'; pay.paidDate = pm.date; pay.paymentMode = 'Bank Transfer'; pay.paymentReference = String(pm.ref || '');
+    if (x.fill !== null && x.fill !== undefined) pay.tdsAmount = x.fill;
+    var note = 'paid per the bank statement (' + __msImpAutoBank(pm.acct) + '), found by the CA pack' + (x.fill ? '; TDS ' + __msImpInr(x.fill) + ' kept back' : '');
+    pay.notes = (pay.notes ? String(pay.notes) + ' — ' : '') + note;
+    pay.auto = x.tag; pay.updatedAt = at;
+    return { what: 'conpay', payId: pay.id, no: x.no, client: x.client, tag: x.tag, key: x.key, before: before, after: { paidDate: pm.date, ref: String(pm.ref || ''), tds: (pay.tdsAmount === undefined ? null : pay.tdsAmount), fill: x.fill, amount: __msImpAutoR2(pm.amount) } };
+}
+function __msImpAutoRecordBill(x, at) {
+    var ap = x.ap, before = { payDate: ap.payDate || '', payRef: (ap.payRef === undefined ? null : ap.payRef), apId: (ap.apId === undefined ? null : ap.apId), gstAmount: (ap.gstAmount === undefined ? null : ap.gstAmount), tdsAmount: (ap.tdsAmount === undefined ? null : ap.tdsAmount) };
+    if (!ap.apId) ap.apId = (typeof prospectNewId === 'function' ? prospectNewId('apinv') : __msImpNewId('apinv'));   // so Undo finds it wherever the contract moves
+    ap.payDate = x.pm.date; ap.payRef = x.tag;
+    if (x.fillGst !== null && x.fillGst !== undefined) ap.gstAmount = x.fillGst;                                  // the Master's figures, when the bill had none (his answer C)
+    if (x.fillTds !== null && x.fillTds !== undefined) ap.tdsAmount = x.fillTds;
+    var key2 = 'bill|' + String(ap.apId) + '|' + String(x.pm.line || '');                                        // the key the next plan builds, now that the bill has an id
+    return { what: 'bill', cIdx: x.ci, yIdx: x.yi, apIdx: x.ai, apId: String(ap.apId || ''), no: x.no, client: x.client, tag: x.tag, key: x.key, key2: key2 !== x.key ? key2 : '', before: before, after: { payDate: x.pm.date, payRef: x.tag, amount: __msImpAutoR2(x.pm.amount), gst: (x.fillGst === undefined ? null : x.fillGst), tds: (x.fillTds === undefined ? null : x.fillTds) } };
+}
+function __msImpAutoItemsText(items) {
+    var rec = items.filter(function (x) { return x.what === 'receipt'; }), con = items.filter(function (x) { return x.what === 'conpay'; }), bil = items.filter(function (x) { return x.what === 'bill'; }), bits = [];
+    var name = function (x) { return (x.client ? ((typeof getClientDisplayName === 'function') ? getClientDisplayName(x.client) : x.client) + ' ' : '') + x.no; };
+    if (rec.length) bits.push(rec.length + ' receipt' + (rec.length === 1 ? '' : 's') + ' recorded — ' + rec.slice(0, 2).map(function (x) { return name(x) + ', ' + __msImpInr(x.after.amount) + ' on ' + __msImpDate(x.after.date) + (x.after.tds ? ' (TDS ' + __msImpInr(x.after.tds) + ' kept back)' : ''); }).join('; ') + (rec.length > 2 ? ' and ' + (rec.length - 2) + ' more' : ''));
+    if (con.length) bits.push(con.length + ' consultant payment' + (con.length === 1 ? '' : 's') + ' marked paid — ' + con.slice(0, 2).map(function (x) { return name(x) + ' on ' + __msImpDate(x.after.paidDate) + (x.after.fill ? ' (TDS ' + __msImpInr(x.after.fill) + ' filled in)' : ''); }).join('; ') + (con.length > 2 ? ' and ' + (con.length - 2) + ' more' : ''));
+    if (bil.length) bits.push(bil.length + ' rupee bill' + (bil.length === 1 ? '' : 's') + ' recorded as paid — ' + bil.slice(0, 2).map(function (x) { var f = []; if (x.after.gst !== null && x.after.gst !== undefined) f.push('GST ' + __msImpInr(x.after.gst)); if (x.after.tds !== null && x.after.tds !== undefined) f.push('TDS ' + __msImpInr(x.after.tds)); return name(x) + ' on ' + __msImpDate(x.after.payDate) + (f.length ? ' (' + f.join(' and ') + ' filled in from the Master)' : ''); }).join('; ') + (bil.length > 2 ? ' and ' + (bil.length - 2) + ' more' : ''));
+    return bits.join('; ');
+}
+async function __msImpAuto(trigger) {
+    var A = __msImp.auto, sig = __msImpAutoSig();
+    if (!sig || sig === A.doneSig) return;
+    A.running = true;
+    try {
+        var PL = __msImpAutoPlan();
+        A.doneSig = sig; A.left = PL.left;
+        if (!PL.sure.length) {
+            __msImpLog('INFO', 'recording by itself: nothing sure to record', { trigger: trigger, left: A.left.length, first: A.left.length ? (A.left[0].no + ': ' + A.left[0].why).slice(0, 160) : '' });
+            __msImpRefreshIfOpen();
+            return;
+        }
+        var at = new Date().toISOString(), items = [], errs = [], which = {};
+        PL.sure.forEach(function (x) {
+            try {
+                var got = x.kind === 'receipt' ? __msImpAutoRecordReceipt(x, at) : x.kind === 'conpay' ? __msImpAutoRecordConPay(x, at) : __msImpAutoRecordBill(x, at);
+                items.push(got);
+                if (x.kind === 'receipt') { which.invoices = true; if (!__msImpAutoBlank(x.inv.linkedContractIdx)) which.contracts = true; } else if (x.kind === 'conpay') which.conPays = true; else which.contracts = true;
+                __msImpLog('INFO', x.kind === 'receipt' ? 'recorded by itself: a receipt on an invoice' : x.kind === 'conpay' ? 'recorded by itself: a consultant payment paid' : 'recorded by itself: a rupee bill paid',
+                           { trigger: trigger, no: got.no, client: got.client, date: (x.rc || x.pm).date, amount: (x.rc || x.pm).amount, tds: x.kind === 'receipt' ? x.tds : (x.kind === 'conpay' ? x.fill : null), line: (x.rc || x.pm).line, acct: (x.rc || x.pm).acct });
+            } catch (e) { errs.push(x.kind + ' ' + x.no + ': ' + String((e && e.message) || e)); }
+        });
+        if (which.invoices) { try { _reconcileSharedInvoicePaidDates(); } catch (e) {} }
+        errs = errs.concat(__msImpSaveAll(which));
+        if (items.length) { A.last = { at: at, trigger: trigger, sig: sig, items: items }; __msImpAutoUndoSave(); __msImpAutoDoneAdd(items.map(function (x) { return x.key; }).concat(items.map(function (x) { return x.key2; })).filter(Boolean)); }
+        var nr = items.filter(function (x) { return x.what === 'receipt'; }).length, nc = items.filter(function (x) { return x.what === 'conpay'; }).length, nb = items.length - nr - nc;
+        __msImpLog(errs.length ? 'WARN' : 'INFO', 'recording by itself: done', { trigger: trigger, receipts: nr, consultantPayments: nc, bills: nb, left: A.left.length, failed: errs.length, first: errs.length ? errs[0].slice(0, 160) : '' });
+        __msImpAutoRedraw(nr, nc, nb);
+        if (items.length) {
+            var nw = A.left.filter(function (x) { return !x.undone; }).length;
+            var html = '<i class="fas fa-building-columns" style="color:var(--accent-cyan);"></i> <strong>Bank statements:</strong> ' + __msImpEsc(__msImpAutoItemsText(items)) + (nw ? ' · ' + nw + ' wait' + (nw === 1 ? 's' : '') + ' for your hand' : '') + (errs.length ? ' · ' + errs.length + ' could not be saved (see the diagnostic log)' : '') + '. <a href="javascript:void(0)" onclick="__msImpAutoUndo(); return false;">Undo</a> · <a href="javascript:void(0)" onclick="showTab(\'importTab\'); return false;">Open Import</a>';
+            __msImpAutoToastWhenFree(html, 0);
+        }
+    } finally { A.running = false; }
+}
+// Another module's launch message may be up (the Files module's, the remittances'): let it be read first, then show ours —
+// looked at every second, after a moment's pause so a message the other module is about to show is seen first.
+function __msImpAutoToastWhenFree(html, tries) {
+    if (tries > 0 && (!document.getElementById('prospectToastEl') || tries > 60)) { __msImpToast(html, 10000); return; }
+    setTimeout(function () { __msImpAutoToastWhenFree(html, tries + 1); }, 1000);
+}
+// What is open is drawn again: the Import page, the Invoices page or the open invoice, the Consultants register, the
+// Payables page, the contracts, the Dashboard.
+function __msImpAutoRedraw(nr, nc, nb) {
+    var shown = function (id) { var el = document.getElementById(id); return !!(el && !el.classList.contains('hidden')); };
+    __msImp.plan = null;
+    try { __msImpRefreshIfOpen(); } catch (e) {}
+    if (nr) {
+        try { if (shown('invoicesTab') && typeof renderInvoicesPage === 'function') renderInvoicesPage(); } catch (e) {}
+        try { if (typeof currentInvoiceDetailId !== 'undefined' && currentInvoiceDetailId && typeof renderInvoiceDetail === 'function') { var di = invoices.find(function (x) { return x.id === currentInvoiceDetailId; }); if (di) renderInvoiceDetail(di); } } catch (e) {}
+    }
+    try { if (nc && shown('consultantsTab') && typeof renderConsultantPayments === 'function') renderConsultantPayments(); } catch (e) {}
+    try { if ((nb || nr) && shown('purchaseInvoicesTab') && typeof renderARApPage === 'function') renderARApPage(); } catch (e) {}
+    try { if ((nb || nr) && shown('contractsTab') && typeof renderContracts === 'function') renderContracts(); } catch (e) {}
+    try { if (shown('businessSnapshotTab') && typeof renderBusinessSnapshot === 'function') renderBusinessSnapshot(); } catch (e) {}
+    try { if (typeof debouncedCalcDashboard === 'function') debouncedCalcDashboard(); } catch (e) {}
+}
+// Undo: the receipts come off the invoices, the consultant payments go back to Pending with what they had, the bills lose
+// their payment date — through the same records; a record changed since (or not found) is left as it is and said so.
+// What was undone is never written by itself again, until the switch is turned off and on.
+async function __msImpAutoUndo() {
+    var A = __msImp.auto, last = A.last;
+    if (!last || !last.items.length) return;
+    if (A.running) { __msImpToast('A run is in progress — try again in a moment.', 3500); return; }
+    var nr = last.items.filter(function (x) { return x.what === 'receipt'; }).length, nc = last.items.filter(function (x) { return x.what === 'conpay'; }).length, nb = last.items.length - nr - nc;
+    var what = [nr ? nr + ' invoice' + (nr === 1 ? '' : 's') + ' back to Issued' : '', nc ? nc + ' consultant payment' + (nc === 1 ? '' : 's') + ' back to Pending' : '', nb ? nb + ' bill' + (nb === 1 ? '' : 's') + ' back to unpaid' : ''].filter(Boolean).join(', ');
+    var yes = true;
+    if (typeof __msAsk === 'function') yes = await __msAsk('Undo what was recorded by itself from the bank statements ' + __msImpAgo(last.at) + '?\n\n' + what + ': the receipts the invoices got are taken off; the consultant payments go back to Pending with what they had; the bills lose the payment date they got. A record you have changed since is left as it is.\n\nWhat is undone is not recorded by itself again until you switch recording by itself off and on (on the Import page).', { ok: 'Undo', cancel: 'Keep' });
+    if (!yes) return;
+    if (A.last !== last) { __msImpToast('A newer run has replaced that record — undo the newer one from the Import page.', 5000); return; }
+    A.running = true;
+    var n = 0, kept = [], missing = [], undone = [], which = {};
+    try {
+        last.items.slice().reverse().forEach(function (x) {
+            try {
+                if (x.what === 'receipt') {
+                    var inv = (Array.isArray(invoices) ? invoices : []).filter(function (i) { return i && i.id === x.invId; })[0];
+                    if (!inv) { missing.push(x.no); return; }
+                    var mine = (inv.payments || []).filter(function (p) { return p && p.auto === x.tag; });
+                    if (!mine.length || (inv.payments || []).length !== x.after.n || (x.after.tagged && mine.length !== x.after.tagged) || inv.status !== x.after.status || Math.abs((Number(inv.amountPaid) || 0) - (Number(x.after.amountPaid) || 0)) > 0.005) { kept.push(x.no); return; }
+                    inv.payments = inv.payments.filter(function (p) { return !(p && p.auto === x.tag); });
+                    inv.updatedAt = new Date().toISOString();
+                    refreshInvoiceComputedFields(inv);
+                    which.invoices = true; which.contracts = true; n++; if (x.key) undone.push(x.key);
+                } else if (x.what === 'conpay') {
+                    var pay = (typeof consultantPayments !== 'undefined' && Array.isArray(consultantPayments) ? consultantPayments : []).filter(function (p) { return p && p.id === x.payId; })[0];
+                    if (!pay) { missing.push(x.no); return; }
+                    var tdsNow = (pay.tdsAmount === undefined ? null : pay.tdsAmount), tdsAfter = x.after.tds;
+                    if (pay.auto !== x.tag || pay.status !== 'Paid' || String(pay.paidDate || '') !== String(x.after.paidDate || '') || String(pay.paymentReference || '') !== String(x.after.ref || '') || !((tdsNow === null && tdsAfter === null) || Math.abs(Number(tdsNow) - Number(tdsAfter)) < 0.005)) { kept.push(x.no); return; }
+                    pay.status = x.before.status || 'Pending'; pay.paidDate = x.before.paidDate || null; pay.paymentMode = x.before.paymentMode || ''; pay.paymentReference = x.before.paymentReference || '';
+                    pay.tdsAmount = x.before.tdsAmount; pay.notes = x.before.notes || ''; pay.updatedAt = new Date().toISOString();
+                    delete pay.auto;
+                    which.conPays = true; n++; if (x.key) undone.push(x.key);
+                } else if (x.what === 'bill') {
+                    var hit = null;
+                    (Array.isArray(contracts) ? contracts : []).forEach(function (c) { (c && Array.isArray(c.billingYears) ? c.billingYears : []).forEach(function (y) { (y && Array.isArray(y.apInvoices) ? y.apInvoices : []).forEach(function (ap) { if (!hit && ap && x.apId && String(ap.apId || '') === x.apId) hit = ap; }); }); });
+                    if (!hit) { var c0 = contracts[x.cIdx], y0 = c0 && c0.billingYears && c0.billingYears[x.yIdx], i0 = y0 && y0.apInvoices && y0.apInvoices[x.apIdx]; if (i0 && String(i0.invNo || '') === x.no) hit = i0; }
+                    if (!hit) { missing.push(x.no); return; }
+                    var gNow = (hit.gstAmount === undefined ? null : hit.gstAmount), tNow = (hit.tdsAmount === undefined ? null : hit.tdsAmount);
+                    var sameFig = function (now, aft) { return aft === null || aft === undefined || Math.abs(__msImpNum(now) - __msImpNum(aft)) < 0.005; };
+                    if (String(hit.payDate || '') !== String(x.after.payDate || '') || String(hit.payRef || '') !== String(x.after.payRef || '') || !sameFig(gNow, x.after.gst) || !sameFig(tNow, x.after.tds)) { kept.push(x.no); return; }
+                    hit.payDate = x.before.payDate || '';
+                    if (x.before.payRef === null || x.before.payRef === undefined) delete hit.payRef; else hit.payRef = x.before.payRef;
+                    if (x.after.gst !== null && x.after.gst !== undefined) { if (x.before.gstAmount === null || x.before.gstAmount === undefined) delete hit.gstAmount; else hit.gstAmount = x.before.gstAmount; }
+                    if (x.after.tds !== null && x.after.tds !== undefined) { if (x.before.tdsAmount === null || x.before.tdsAmount === undefined) delete hit.tdsAmount; else hit.tdsAmount = x.before.tdsAmount; }
+                    if (x.before.apId === null || x.before.apId === undefined) delete hit.apId; else if (x.before.apId === '') hit.apId = '';
+                    which.contracts = true; n++; if (x.key) undone.push(x.key); if (x.key2) undone.push(x.key2);
+                }
+            } catch (e) { kept.push(x.no + ' (' + String((e && e.message) || e) + ')'); }
+        });
+        if (which.invoices) { try { _reconcileSharedInvoicePaidDates(); } catch (e) {} }
+        var errs = __msImpSaveAll(which);
+        if (undone.length) __msImpAutoSkipAdd(undone);
+        A.last = null; __msImpAutoUndoSave();
+        __msImpLog(errs.length ? 'WARN' : 'INFO', 'recording by itself: undone', { undone: n, kept: kept.length, notFound: missing.length, failed: errs.length, first: kept.length ? kept[0].slice(0, 120) : (missing.length ? missing[0].slice(0, 120) : (errs.length ? errs[0].slice(0, 120) : '')) });
+        A.doneSig = '';
+        __msImpAutoRedraw(nr, nc, nb);
+        var tail = [];
+        if (kept.length) tail.push(kept.length + ' left as ' + (kept.length === 1 ? 'it is' : 'they are') + ' (changed since: ' + __msImpEsc(kept.slice(0, 3).join(', ')) + (kept.length > 3 ? '…' : '') + ')');
+        if (missing.length) tail.push(missing.length + ' not found any more (' + __msImpEsc(missing.slice(0, 3).join(', ')) + (missing.length > 3 ? '…' : '') + ')');
+        if (errs.length) tail.push(errs.length + ' could not be saved (see the diagnostic log)');
+        __msImpToast('<i class="fas fa-rotate-left"></i> Undone: ' + n + ' record' + (n === 1 ? '' : 's') + ' back as ' + (n === 1 ? 'it was' : 'they were') + (tail.length ? ' — ' + tail.join('; ') : '') + '.', 6000);
+    } finally { A.running = false; }
+    __msImpAutoMaybe('undo');
+}
+// The line under the Import page's status: what was recorded by itself (and Undo), what waits for his hand.
+function __msImpAutoHtml() {
+    var A = __msImp.auto, parts = [];
+    if (!__msImpAutoOn()) parts.push('Recording by itself is off — a receipt or payment the pack finds in the statements is shown here and written by you.');
+    if (A.last && A.last.items.length) parts.push('Recorded by itself ' + __msImpEsc(__msImpAgo(A.last.at)) + (A.last.trigger === 'launch' ? ' at launch' : '') + ': ' + __msImpEsc(__msImpAutoItemsText(A.last.items)) + '. <a href="javascript:void(0)" onclick="__msImpAutoUndo(); return false;">Undo</a>');
+    if (__msImpAutoOn() && A.left.length) {
+        var wait = A.left.filter(function (x) { return !x.undone; }), und = A.left.filter(function (x) { return x.undone; });
+        if (wait.length) parts.push('<span title="' + __msImpEsc(wait.map(function (x) { return x.no + ': ' + x.why; }).join('\n')) + '">' + wait.length + ' found in the statements wait' + (wait.length === 1 ? 's' : '') + ' for your hand: ' + __msImpEsc(wait.slice(0, 3).map(function (x) { return x.no + ' (' + x.why + ')'; }).join('; ')) + (wait.length > 3 ? ' …' : '') + '</span>');
+        if (und.length) parts.push('<span title="' + __msImpEsc(und.map(function (x) { return x.no + (/^you took/.test(x.why) ? ' (taken off by hand)' : ''); }).join('\n')) + '">' + und.length + ' you undid or took off — not recorded by itself again (switching off and on forgets this)</span>');
+    }
+    return parts.length ? '<div id="msImpAuto" class="ms-imp-note" style="margin:-2px 0 8px 0; font-size:11.5px; line-height:1.5;">' + parts.join('<br>') + '</div>' : '';
+}
+function __msImpAutoBoxHtml() {
+    return '<label style="display:inline-flex; align-items:center; gap:6px; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); cursor:pointer; user-select:none;" title="A receipt, a consultant payment or a rupee bill the CA pack found in the bank statements, when it is sure, is written into the app by itself — when the app starts, after each pack run and when this page opens. Untick to stop that: what the pack found is then only shown here.">'
+        + '<input type="checkbox" id="msImpAutoBox"' + (__msImpAutoOn() ? ' checked' : '') + ' onchange="__msImpAutoSet(this.checked)" style="margin:0;"> Record what is sure by itself</label>';
+}
+// At launch: once the app has initialised and the Expenses module knows the CA Pack folder, read the list and record what is sure.
+__msImpAutoUndoLoad();
+async function __msImpAutoAtLaunch() {
+    if (!__msImpAutoOn() || !__msImpTauri()) return;
+    for (var i = 0; i < 120; i++) {
+        var st = (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : 'unavailable';
+        if (st !== 'idle' && st !== 'loading' && st !== 'restoring') break;
+        await new Promise(function (res) { setTimeout(res, 500); });
+    }
+    var est = (typeof __msExp !== 'undefined' && __msExp) ? __msExp.state : 'unavailable';
+    if (est !== 'ready' && est !== 'restored') { __msImpLog('INFO', 'launch recording skipped: the Expenses module is ' + est); return; }
+    __msImp.auto.launching = true;
+    try { if (!__msImp.idx && !__msImp.reading) await __msImpRead(false); } finally { __msImp.auto.launching = false; }
+    __msImpAutoMaybe('launch');
+}
+document.addEventListener('ms:init-complete', function () {
+    setTimeout(function () { __msImpAutoAtLaunch().catch(function (e) { __msImpLog('WARN', 'launch recording failed', { error: String((e && e.message) || e) }); }); }, window.__msImpAutoLaunchMs || 8000);
+});
+// ---- /8FP ------------------------------------------------------------------------------------------------------
 // =================== /Phase 8FD — Import from the Masters (Tools › Import) ===================
 
 // =================== Phase 8FF — Purchase orders from the files (Tools › Import) (11 Oct 2026) ===================
